@@ -1,0 +1,34 @@
+import { Router } from 'express';
+import { ChatController } from '../controllers/chat.controller';
+import { VoiceController } from '../controllers/voice.controller';
+import { ConversationController } from '../controllers/conversation.controller';
+import { MemoryController } from '../controllers/memory.controller';
+import { BrainController } from '../controllers/brain.controller';
+import { HealthController } from '../controllers/health.controller';
+
+const router = Router();
+
+// Chat & Voice
+router.post('/chat', ChatController.sendMessage);
+router.post('/voice', VoiceController.handleVoice);
+
+// Conversations
+router.get('/conversations', ConversationController.list);
+router.post('/conversations', ConversationController.create);
+router.get('/conversations/:id', ConversationController.getById);
+router.get('/conversations/:id/messages', ConversationController.getMessages);
+router.delete('/conversations/:id', ConversationController.delete);
+
+// Memories
+router.get('/memories', MemoryController.list);
+router.post('/memories', MemoryController.create);
+router.delete('/memories/:id', MemoryController.delete);
+
+// AI Brain & Profile
+router.get('/ai/brain-profile', BrainController.getProfile);
+router.post('/ai/brain-profile', BrainController.updateProfile);
+
+// Health Check
+router.get('/health', HealthController.getHealth);
+
+export default router;

@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: jexa-ai-companion
+    env: node
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TEXT_AI_PROVIDER
+        value: development_mock
+      - key: VOICE_AI_PROVIDER
+        value: development_mock
+      - key: TEXT_AI_API_KEY
+        sync: false
+      - key: VOICE_AI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
