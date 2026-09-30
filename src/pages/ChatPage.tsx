@@ -38,6 +38,7 @@ export const ChatPage: React.FC = () => {
     startNewChat,
     deleteConversation,
     sendMessage,
+    refreshMessages,
   } = useChat();
 
   // Pinned Conversation IDs
@@ -226,8 +227,16 @@ export const ChatPage: React.FC = () => {
     },
   ]);
 
-  // Live Voice Mode hook
-  const liveVoice = useLiveVoice(() => {});
+  // Live Voice Mode hook with real-time audio, speech recognition, and conversation sync
+  const liveVoice = useLiveVoice({
+    conversationId: currentConversationId,
+    onVoiceReplyReceived: () => {
+      refreshMessages();
+    },
+    onUserSpoke: () => {
+      refreshMessages();
+    },
+  });
 
   // Pin / Unpin Conversation Toggle
   const handleTogglePin = (id?: string) => {
@@ -508,12 +517,16 @@ export const ChatPage: React.FC = () => {
         isOpen={liveVoice.isOpen}
         onClose={liveVoice.closeLiveMode}
         status={liveVoice.status}
-        frequencies={liveVoice.frequencies}
-        aiSpokenText={liveVoice.aiSpokenText}
+        volume={liveVoice.volume}
+        frequencyData={liveVoice.frequencyData}
+        aiSpeakingPower={liveVoice.aiSpeakingPower}
         liveTranscript={liveVoice.liveTranscript}
+        lastAiResponse={liveVoice.lastAiResponse}
+        errorMessage={liveVoice.errorMessage}
         isMuted={liveVoice.isMuted}
         onToggleMute={liveVoice.toggleMute}
-        onSubmitSpokenQuery={(query) => liveVoice.submitSpokenQuery(query)}
+        onInterrupt={liveVoice.interruptAiSpeech}
+        onRetry={liveVoice.retryConnection}
       />
     </div>
   );

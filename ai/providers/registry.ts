@@ -2,6 +2,7 @@ import { ITextAIProvider } from './text-provider.interface';
 import { IVoiceAIProvider } from './voice-provider.interface';
 import { DevelopmentTextAIProvider } from './text-development.provider';
 import { DevelopmentVoiceAIProvider } from './voice-development.provider';
+import { GeminiTextAIProvider } from './gemini.provider';
 import { loadAIProvidersConfig, AIProvidersConfig } from './config';
 import { ProviderStatus } from '../../shared/types/provider';
 
@@ -13,7 +14,14 @@ export class AIProviderRegistry {
 
   private constructor() {
     this.config = loadAIProvidersConfig();
-    this.textProvider = new DevelopmentTextAIProvider();
+    const gemini = new GeminiTextAIProvider();
+    if (gemini.isConfigured) {
+      this.textProvider = gemini;
+      console.log('[AIProviderRegistry] Connected to Gemini AI Provider (gemini-3.8-flash).');
+    } else {
+      this.textProvider = new DevelopmentTextAIProvider();
+      console.log('[AIProviderRegistry] Operating with Development Text AI Provider.');
+    }
     this.voiceProvider = new DevelopmentVoiceAIProvider();
   }
 

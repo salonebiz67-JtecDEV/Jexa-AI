@@ -57,6 +57,16 @@ export function useChat() {
     };
   }, [currentConversationId]);
 
+  const refreshMessages = useCallback(async () => {
+    if (!currentConversationId) return;
+    try {
+      const msgs = await ApiClient.getMessages(currentConversationId);
+      setMessages(msgs);
+    } catch (err) {
+      console.error('[useChat] Error refreshing messages:', err);
+    }
+  }, [currentConversationId]);
+
   const selectConversation = useCallback((id: string) => {
     if (typeof id === 'string') {
       setCurrentConversationId(id);
@@ -170,5 +180,6 @@ export function useChat() {
     deleteConversation,
     sendMessage,
     refreshConversations,
+    refreshMessages,
   };
 }

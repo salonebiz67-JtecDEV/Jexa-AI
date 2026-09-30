@@ -45,7 +45,7 @@ export class ChatService {
       memories: relevantMemories,
       recentMessages,
       userContext: payload.userContext,
-      isVoiceMode: false,
+      isVoiceMode: Boolean(payload.isVoiceMode),
     });
 
     // 6. Execute Text AI Provider via Registry

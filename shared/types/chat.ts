@@ -31,6 +31,7 @@ export interface SendMessagePayload {
   message: string;
   stream?: boolean;
   personaId?: string;
+  isVoiceMode?: boolean;
   userContext?: {
     userName?: string;
     timezone?: string;

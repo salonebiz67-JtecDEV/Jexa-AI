@@ -40,6 +40,7 @@ export const ApiClient = {
       conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
       personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
       stream: Boolean(payload?.stream),
+      isVoiceMode: Boolean(payload?.isVoiceMode),
       userContext: payload?.userContext,
     };
     return fetchJson<ChatResponsePayload>(`${API_BASE}/chat`, {
