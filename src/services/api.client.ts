@@ -13,20 +13,41 @@ import {
   HealthCheckResponse,
 } from '../../shared/types';
 
-const API_BASE = '/api';
+// =========================================================================
+// Centralized API Configuration for GitHub Pages & Render Deployment
+// =========================================================================
+// - In local dev / monolithic mode: defaults to '/api' (proxied by Vite/Express)
+// - In GitHub Pages production: points to Render backend via VITE_API_BASE_URL
+//   (e.g., VITE_API_BASE_URL=https://jexa-backend.onrender.com)
+const RAW_BASE = (import.meta.env.VITE_API_BASE_URL || '').trim();
+export const API_BASE = RAW_BASE ? `${RAW_BASE.replace(/\/+$/, '')}/api` : '/api';
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options?.headers || {}),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options?.headers || {}),
+      },
+    });
+  } catch (netErr: any) {
+    console.error(`[ApiClient] Network failure requesting ${url}:`, netErr);
+    throw new Error(
+      `Unable to reach the JEXA backend at ${url}. If using Render, please verify the backend service is running and VITE_API_BASE_URL is set in your environment.`
+    );
+  }
 
-  const body: ApiResponse<T> = await response.json();
+  let body: any;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error(`Server returned an invalid response (${response.status} ${response.statusText}).`);
+  }
+
   if (!response.ok || body.success === false) {
-    throw new Error(body.error || `HTTP error ${response.status}: ${response.statusText}`);
+    throw new Error(body.error || `HTTP ${response.status}: ${response.statusText}`);
   }
 
   return (body.data !== undefined ? body.data : (body as unknown as T)) as T;
@@ -119,7 +140,6 @@ export const ApiClient = {
 
   // Health
   async getHealth(): Promise<HealthCheckResponse> {
-    const res = await fetch(`${API_BASE}/health`);
-    return res.json();
+    return fetchJson<HealthCheckResponse>(`${API_BASE}/health`);
   },
 };

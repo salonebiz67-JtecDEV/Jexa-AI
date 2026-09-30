@@ -16,6 +16,10 @@ import { SettingsDialog } from '../components/dialogs/SettingsDialog';
 import { useChat } from '../hooks/useChat';
 import { useLiveVoice } from '../hooks/useLiveVoice';
 import { Project, ImageItem, ScheduleItem, PluginItem, RemoteDevice } from '../../shared/types';
+import cyberLandscapeImg from '../assets/images/image_cyber_landscape_1790783143139.jpg';
+import abstractNeuralImg from '../assets/images/image_abstract_neural_1790783155459.jpg';
+import creativeWorkspaceImg from '../assets/images/image_creative_workspace_1790783168148.jpg';
+import geometricSculptureImg from '../assets/images/image_geometric_sculpture_1790783179914.jpg';
 
 export const ChatPage: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -108,28 +112,28 @@ export const ChatPage: React.FC = () => {
   const [images, setImages] = useState<ImageItem[]>([
     {
       id: 'img-1',
-      url: '/src/assets/images/image_cyber_landscape_1790783143139.jpg',
+      url: cyberLandscapeImg,
       prompt: 'Minimalist architectural pavilion under twilight sky',
       createdAt: new Date(Date.now() - 3600000).toISOString(),
       aspectRatio: '16:9',
     },
     {
       id: 'img-2',
-      url: '/src/assets/images/image_abstract_neural_1790783155459.jpg',
+      url: abstractNeuralImg,
       prompt: 'Minimalist luminous glass sphere with emerald refraction',
       createdAt: new Date(Date.now() - 7200000).toISOString(),
       aspectRatio: '1:1',
     },
     {
       id: 'img-3',
-      url: '/src/assets/images/image_creative_workspace_1790783168148.jpg',
+      url: creativeWorkspaceImg,
       prompt: 'Designer desk workspace with notebook and morning illumination',
       createdAt: new Date(Date.now() - 14400000).toISOString(),
       aspectRatio: '4:3',
     },
     {
       id: 'img-4',
-      url: '/src/assets/images/image_geometric_sculpture_1790783179914.jpg',
+      url: geometricSculptureImg,
       prompt: 'Modern matte black geometric monolithic sculpture on raw dark stone',
       createdAt: new Date(Date.now() - 28800000).toISOString(),
       aspectRatio: '3:4',
