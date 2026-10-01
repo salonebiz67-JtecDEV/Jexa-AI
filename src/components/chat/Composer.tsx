@@ -138,7 +138,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const canSend = (inputText.trim().length > 0 || attachments.length > 0) && !disabled;
 
   return (
-    <div className="p-2 sm:p-4 max-w-3xl mx-auto w-full">
+    <div className="p-2 sm:p-4 max-w-3xl lg:max-w-4xl mx-auto w-full pb-[max(0.5rem,env(safe-area-inset-bottom))]">
       {/* Hidden File Input */}
       <input
         ref={fileInputRef}
@@ -183,7 +183,7 @@ export const Composer: React.FC<ComposerProps> = ({
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Message JEXA..."
-          className="w-full bg-transparent px-3.5 pt-3 pb-1 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none leading-relaxed min-h-[44px]"
+          className="w-full bg-transparent px-3.5 pt-3 pb-1 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none leading-relaxed min-h-[44px]"
         />
 
         {/* Bottom Action Row */}

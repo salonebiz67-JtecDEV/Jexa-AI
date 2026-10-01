@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { ArrowLeft, X, Check } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ArrowLeft, X, Check, Bell, BellOff, Download, Smartphone } from 'lucide-react';
+import { usePWAInstall } from '../../hooks/usePWAInstall';
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -18,6 +19,27 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [soundEffects, setSoundEffects] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
+  // Real Notification Support
+  const [notificationStatus, setNotificationStatus] = useState<NotificationPermission>('default');
+
+  const { isInstallable, isInstalled, install } = usePWAInstall();
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      setNotificationStatus(Notification.permission);
+    }
+  }, [isOpen]);
+
+  const handleToggleNotifications = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    try {
+      const result = await Notification.requestPermission();
+      setNotificationStatus(result);
+    } catch (e) {
+      console.warn('[Settings] Notification permission request error:', e);
+    }
+  };
+
   if (!isOpen) return null;
 
   const handleSave = () => {
@@ -29,39 +51,41 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md">
-      <div className="relative w-full max-w-md bg-[#0f1422] border border-white/[0.08] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
-        {/* Header with Back Button */}
-        <div className="flex items-center justify-between px-4 py-3.5 border-b border-white/[0.06] bg-[#0b0f19]">
-          <button
-            onClick={onClose}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.06] transition-colors"
-            aria-label="Back"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Back</span>
-          </button>
-          <h2 className="text-sm font-semibold text-white">Settings</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md pt-safe pb-safe">
+      <div className="relative w-full max-w-md bg-[#0f1422] border border-white/[0.08] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        {/* Header with Back button */}
+        <div className="flex items-center justify-between px-3.5 py-3 border-b border-white/[0.06] bg-[#0b0f19]">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.06] transition-colors"
+              aria-label="Back to chat"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back</span>
+            </button>
+            <div className="h-4 w-px bg-white/[0.08]" />
+            <h2 className="font-semibold text-sm text-white">Settings</h2>
+          </div>
           <button
             onClick={onClose}
             className="p-1 text-slate-400 hover:text-white rounded-lg transition-colors"
-            aria-label="Close"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-5 space-y-5 overflow-y-auto max-h-[70vh] text-xs">
-          {/* Appearance */}
+        {/* Settings Body */}
+        <div className="p-4 sm:p-5 overflow-y-auto space-y-5 flex-1">
+          {/* Theme Palette */}
           <div className="space-y-2">
             <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
-              Theme
+              Interface Theme
             </label>
             <div className="grid grid-cols-3 gap-2">
               {[
-                { id: 'dark', label: 'Dark', bg: 'bg-[#090d16]' },
-                { id: 'midnight', label: 'Midnight', bg: 'bg-[#070b14]' },
+                { id: 'dark', label: 'Dark Slate', bg: 'bg-[#07090e]' },
+                { id: 'midnight', label: 'Midnight', bg: 'bg-[#090d16]' },
                 { id: 'obsidian', label: 'Obsidian', bg: 'bg-[#04060a]' },
               ].map((item) => (
                 <button
@@ -104,6 +128,76 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   <div className="text-[10px] text-slate-400">{v.desc}</div>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Progressive Web App (PWA) Section */}
+          <div className="space-y-2 pt-3 border-t border-white/[0.06]">
+            <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+              Application & Installation
+            </label>
+            <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+                  <Smartphone className="w-4 h-4" />
+                </div>
+                <div className="truncate">
+                  <div className="text-xs font-medium text-white truncate">PWA Standalone Mode</div>
+                  <div className="text-[10px] text-slate-400 truncate">
+                    {isInstalled ? 'Installed as native application' : 'Install JEXA on home screen'}
+                  </div>
+                </div>
+              </div>
+
+              {isInstalled ? (
+                <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-medium shrink-0">
+                  Installed
+                </span>
+              ) : isInstallable ? (
+                <button
+                  onClick={install}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Install</span>
+                </button>
+              ) : (
+                <span className="text-[10px] text-slate-500 shrink-0">Browser mode</span>
+              )}
+            </div>
+          </div>
+
+          {/* Notifications Permission */}
+          <div className="space-y-2 pt-3 border-t border-white/[0.06]">
+            <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+              System Notifications
+            </label>
+            <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06]">
+              <div className="flex items-center gap-2">
+                {notificationStatus === 'granted' ? (
+                  <Bell className="w-4 h-4 text-emerald-400 shrink-0" />
+                ) : (
+                  <BellOff className="w-4 h-4 text-slate-500 shrink-0" />
+                )}
+                <div>
+                  <div className="text-xs font-medium text-white">Browser Notifications</div>
+                  <div className="text-[10px] text-slate-400">
+                    Status: {notificationStatus === 'granted' ? 'Allowed' : notificationStatus === 'denied' ? 'Blocked' : 'Not Enabled'}
+                  </div>
+                </div>
+              </div>
+
+              {notificationStatus === 'default' && (
+                <button
+                  onClick={handleToggleNotifications}
+                  className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-xs font-medium text-slate-200 transition-colors"
+                >
+                  Enable
+                </button>
+              )}
+              {notificationStatus === 'granted' && (
+                <span className="text-emerald-400 text-xs font-medium">Active</span>
+              )}
             </div>
           </div>
 
@@ -173,10 +267,16 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           </button>
           <button
             onClick={handleSave}
-            className="px-3.5 py-1.5 rounded-lg bg-emerald-500 text-slate-950 font-semibold text-xs hover:bg-emerald-400 transition-colors flex items-center gap-1.5"
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors"
           >
-            {savedSuccess ? <Check className="w-3.5 h-3.5" /> : null}
-            <span>{savedSuccess ? 'Saved' : 'Save'}</span>
+            {savedSuccess ? (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                <span>Saved</span>
+              </>
+            ) : (
+              <span>Save Changes</span>
+            )}
           </button>
         </div>
       </div>

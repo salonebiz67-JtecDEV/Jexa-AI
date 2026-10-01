@@ -13,6 +13,8 @@ import { LiveVoiceModal } from '../components/voice/LiveVoiceModal';
 import { SearchDialog } from '../components/dialogs/SearchDialog';
 import { ShareDialog } from '../components/dialogs/ShareDialog';
 import { SettingsDialog } from '../components/dialogs/SettingsDialog';
+import { PWAInstallBanner } from '../components/common/PWAInstallBanner';
+import { OfflineIndicator } from '../components/common/OfflineIndicator';
 import { useChat } from '../hooks/useChat';
 import { useLiveVoice } from '../hooks/useLiveVoice';
 import { Project, ImageItem, ScheduleItem, PluginItem, RemoteDevice } from '../../shared/types';
@@ -383,7 +385,7 @@ export const ChatPage: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#07090e] text-slate-100 font-sans antialiased">
+    <div className="flex h-screen h-[100dvh] w-screen overflow-hidden bg-[#07090e] text-slate-100 font-sans antialiased">
       {/* ONE Clean Navigation Sidebar (Collapsible on Desktop, Slide Drawer on Mobile) */}
       <Sidebar
         isOpen={sidebarOpen}
@@ -436,6 +438,9 @@ export const ChatPage: React.FC = () => {
                 }
               }}
             />
+
+            {/* Subtle PWA In-App Install Banner (Dismissible, only active if installable) */}
+            <PWAInstallBanner />
 
             {/* Main Conversation Feed */}
             <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
@@ -555,6 +560,9 @@ export const ChatPage: React.FC = () => {
         onInterrupt={liveVoice.interruptAiSpeech}
         onRetry={liveVoice.retryConnection}
       />
+
+      {/* Real-time Network Connectivity Indicator */}
+      <OfflineIndicator />
     </div>
   );
 };

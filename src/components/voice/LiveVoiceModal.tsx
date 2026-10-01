@@ -86,7 +86,7 @@ export const LiveVoiceModal: React.FC<LiveVoiceModalProps> = ({
         <div className="absolute inset-0 bg-radial from-emerald-950/15 via-transparent to-transparent pointer-events-none" />
 
         {/* Minimal Header */}
-        <header className="relative z-10 flex items-center justify-between px-5 py-4 border-b border-white/[0.04] shrink-0">
+        <header className="relative z-10 flex items-center justify-between px-5 py-3 sm:py-4 border-b border-white/[0.04] shrink-0 pt-safe pl-safe pr-safe">
           <div className="flex items-center gap-2">
             <span
               className={`w-2 h-2 rounded-full transition-colors ${
@@ -181,7 +181,7 @@ export const LiveVoiceModal: React.FC<LiveVoiceModalProps> = ({
         </main>
 
         {/* Minimal Bottom Action Bar */}
-        <footer className="relative z-10 border-t border-white/[0.06] bg-[#07090e]/95 backdrop-blur-md px-6 py-4 shrink-0">
+        <footer className="relative z-10 border-t border-white/[0.06] bg-[#07090e]/95 backdrop-blur-md px-6 py-3 sm:py-4 shrink-0 pb-safe pl-safe pr-safe">
           <div className="max-w-md mx-auto flex items-center justify-around gap-6">
             {/* Mute Button */}
             <button

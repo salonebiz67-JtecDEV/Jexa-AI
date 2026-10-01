@@ -56,10 +56,10 @@ jobs:
           fi
           npm run build
 
-      - name: Verify build artifacts
+      - name: Verify build artifacts & PWA compliance
         run: |
           echo "========================================="
-          echo " Verifying Production Build Output"
+          echo " Verifying Production Build Output & PWA"
           echo "========================================="
 
           if [ ! -d "dist" ]; then
@@ -82,16 +82,45 @@ jobs:
             exit 1
           fi
 
-          # Ensure 404.html fallback exists for GitHub Pages SPA client routing
+          # 1. PWA Web App Manifest Verification
+          if [ ! -f "dist/manifest.webmanifest" ] && [ ! -f "dist/manifest.json" ]; then
+            echo "::error::PWA verification failed: Web App Manifest is missing from dist."
+            exit 1
+          fi
+
+          # 2. Service Worker Verification
+          if [ ! -f "dist/sw.js" ]; then
+            echo "::error::PWA verification failed: Service Worker (dist/sw.js) is missing."
+            exit 1
+          fi
+
+          # 3. PWA Icons Verification
+          for icon in pwa-192x192.png pwa-512x512.png pwa-maskable-512x512.png apple-touch-icon.png; do
+            if [ ! -f "dist/$icon" ]; then
+              echo "::error::PWA verification failed: Required icon dist/$icon is missing."
+              exit 1
+            fi
+          done
+
+          # 4. Ensure 404.html fallback exists for GitHub Pages SPA client routing
           if [ ! -f "dist/404.html" ]; then
             echo "Generating dist/404.html SPA fallback from index.html..."
             cp dist/index.html dist/404.html
           fi
 
+          # 5. Sanity check: Ensure no localhost URLs remain in production HTML
+          if grep -q "http://localhost:" dist/index.html; then
+            echo "::error::Production HTML contains hardcoded localhost URLs."
+            exit 1
+          fi
+
           echo "✓ dist/index.html verified ($(wc -c < dist/index.html) bytes)"
           echo "✓ dist/404.html verified"
+          echo "✓ dist/manifest.webmanifest verified"
+          echo "✓ dist/sw.js verified ($(wc -c < dist/sw.js) bytes)"
+          echo "✓ PWA icons verified (192, 512, maskable, apple-touch)"
           echo "✓ dist/assets verified ($(ls dist/assets | wc -l) files generated)"
-          echo "Build validation passed successfully!"
+          echo "All production build & PWA verifications passed successfully!"
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3

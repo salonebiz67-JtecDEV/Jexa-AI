@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="128" fill="#07090e"/>
+  <circle cx="256" cy="256" r="190" stroke="rgba(16, 185, 129, 0.25)" stroke-width="3"/>
+  <circle cx="256" cy="256" r="140" stroke="rgba(52, 211, 153, 0.4)" stroke-width="2"/>
+  <path d="M256 96 L320 256 L256 416 L192 256 Z" fill="url(#jexaGrad)"/>
+  <circle cx="256" cy="256" r="32" fill="#ffffff" filter="drop-shadow(0 0 16px rgba(52, 211, 153, 0.9))"/>
+  <defs>
+    <linearGradient id="jexaGrad" x1="192" y1="96" x2="320" y2="416" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#34d399"/>
+      <stop offset="0.5" stop-color="#10b981"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+</svg>

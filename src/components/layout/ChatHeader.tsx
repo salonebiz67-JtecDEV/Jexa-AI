@@ -54,7 +54,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const displayTitle = activeConversation?.title || 'JEXA';
 
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between h-14 px-3 sm:px-4 bg-[#080b12]/95 backdrop-blur-md border-b border-white/[0.06] shrink-0">
+    <header className="sticky top-0 z-30 flex items-center justify-between min-h-[56px] px-3 sm:px-4 bg-[#080b12]/95 backdrop-blur-md border-b border-white/[0.06] shrink-0 pt-safe">
       {/* Left: Hamburger Menu Button */}
       <button
         onClick={onToggleSidebar}
