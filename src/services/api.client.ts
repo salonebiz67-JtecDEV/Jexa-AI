@@ -23,6 +23,14 @@ const RAW_BASE = (import.meta.env.VITE_API_BASE_URL || '').trim();
 export const API_BASE = RAW_BASE ? `${RAW_BASE.replace(/\/+$/, '')}/api` : '/api';
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+  // If running in production on GitHub Pages without VITE_API_BASE_URL set, fail visibly with actionable guidance
+  const isGitHubPages = typeof window !== 'undefined' && window.location.hostname.includes('github.io');
+  if (isGitHubPages && !RAW_BASE && url.startsWith('/api')) {
+    throw new Error(
+      'JEXA Backend URL is not configured. Please set the VITE_API_BASE_URL repository variable in GitHub Settings -> Secrets and variables -> Actions to your Render service URL (e.g. https://your-service.onrender.com).'
+    );
+  }
+
   let response: Response;
   try {
     response = await fetch(url, {

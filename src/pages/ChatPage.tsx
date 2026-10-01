@@ -21,15 +21,28 @@ import abstractNeuralImg from '../assets/images/image_abstract_neural_1790783155
 import creativeWorkspaceImg from '../assets/images/image_creative_workspace_1790783168148.jpg';
 import geometricSculptureImg from '../assets/images/image_geometric_sculpture_1790783179914.jpg';
 
+const getInitialTab = (): ActiveNavTab => {
+  if (typeof window === 'undefined') return 'chat';
+  const path = window.location.pathname.toLowerCase();
+  if (path.endsWith('/projects') || path.endsWith('/projects/')) return 'projects';
+  if (path.endsWith('/images') || path.endsWith('/images/')) return 'images';
+  if (path.endsWith('/remote') || path.endsWith('/remote/')) return 'remote';
+  if (path.endsWith('/schedule') || path.endsWith('/schedule/')) return 'schedule';
+  if (path.endsWith('/plugins') || path.endsWith('/plugins/')) return 'plugins';
+  return 'chat';
+};
+
 export const ChatPage: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<ActiveNavTab>('chat');
+  const [activeTab, setActiveTab] = useState<ActiveNavTab>(getInitialTab);
   const [currentArtifact, setCurrentArtifact] = useState<ArtifactData | null>(null);
 
   // Dialogs
   const [searchOpen, setSearchOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(() => {
+    return typeof window !== 'undefined' && window.location.pathname.toLowerCase().endsWith('/settings');
+  });
 
   // Chat State
   const {
@@ -58,7 +71,13 @@ export const ChatPage: React.FC = () => {
         setActiveTab(e.state.tab);
         setCurrentArtifact(null);
       } else {
-        setActiveTab('chat');
+        const path = window.location.pathname.toLowerCase();
+        if (path.endsWith('/projects')) setActiveTab('projects');
+        else if (path.endsWith('/images')) setActiveTab('images');
+        else if (path.endsWith('/remote')) setActiveTab('remote');
+        else if (path.endsWith('/schedule')) setActiveTab('schedule');
+        else if (path.endsWith('/plugins')) setActiveTab('plugins');
+        else setActiveTab('chat');
         setCurrentArtifact(null);
       }
     };
@@ -68,7 +87,9 @@ export const ChatPage: React.FC = () => {
 
   const navigateToTab = useCallback((tab: ActiveNavTab) => {
     if (tab !== activeTab) {
-      window.history.pushState({ tab }, '');
+      const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+      const targetPath = tab === 'chat' ? (base || '/') : `${base}/${tab}`;
+      window.history.pushState({ tab }, '', targetPath);
       setActiveTab(tab);
       setCurrentArtifact(null);
     }
@@ -83,6 +104,8 @@ export const ChatPage: React.FC = () => {
       if (window.history.state?.tab) {
         window.history.back();
       } else {
+        const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+        window.history.pushState({ tab: 'chat' }, '', base || '/');
         setActiveTab('chat');
       }
     }
