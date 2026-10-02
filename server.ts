@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
 import dotenv from 'dotenv';
 import apiRoutes from './backend/src/routes/api.routes';
 import { errorHandler } from './backend/src/middleware/error.middleware';
@@ -19,22 +20,53 @@ const app = express();
 const PORT = Number(process.env.PORT) || (process.env.NODE_ENV === 'production' ? 10000 : 3000);
 const isProd = process.env.NODE_ENV === 'production';
 
-// Cross-Origin Resource Sharing & Request Body Parsing
+// Production CORS Configuration: Allows GitHub Pages (*.github.io), custom FRONTEND_URL, and local dev
+const customFrontendUrl = (process.env.FRONTEND_URL || process.env.CORS_ORIGIN || '').replace(/\/+$/, '');
+
 app.use(cors({
-  origin: '*',
+  origin: (origin, callback) => {
+    // Allow non-browser requests (health checks, server-to-server, curl, tools)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // In development or preview environments, allow local development and cloud run previews
+    if (!isProd || origin.includes('localhost') || origin.includes('127.0.0.1') || origin.endsWith('.run.app')) {
+      return callback(null, true);
+    }
+
+    // Allow any GitHub Pages domain (e.g., https://username.github.io or https://org.github.io)
+    if (/^https:\/\/[a-zA-Z0-9-]+\.github\.io(?::\d+)?$/.test(origin)) {
+      return callback(null, true);
+    }
+
+    // Allow explicitly configured frontend domain
+    if (customFrontendUrl && (origin === customFrontendUrl || origin.startsWith(customFrontendUrl))) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Origin '${origin}' not allowed by CORS.`));
+  },
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Health Check Endpoint (Render & Monitoring) - Never exposes secrets
+// Root endpoint: Returns backend service status (API-first architecture for Render + GitHub Pages)
+app.get('/', (_req, res) => {
+  res.status(200).json({
+    name: 'JEXA API',
+    status: 'online',
+  });
+});
+
+// Health check endpoint (Render health monitoring) - Never exposes credentials or secrets
 app.get('/health', (_req, res) => {
   res.status(200).json({
     status: 'ok',
-    service: 'jexa-backend',
-    version: '1.0.0',
-    timestamp: new Date().toISOString(),
   });
 });
 
@@ -61,13 +93,9 @@ async function startServer() {
       console.error('[Server] Failed to load Vite middleware:', viteError);
     }
   } else {
-    // Production mode (Render / Container deployment)
-    const distPath = path.resolve(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(distPath, 'index.html'));
-    });
-    console.log(`[Server] Production static files served from: ${distPath}`);
+    // Production mode on Render:
+    // Pure API-first architecture. The frontend is hosted on GitHub Pages.
+    console.log('[Server] Render API-first architecture active. Frontend served by GitHub Pages.');
   }
 
   // Central error handling middleware
