@@ -1,15 +1,22 @@
 import express from 'express';
 import cors from 'cors';
-import path from 'path';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import dotenv from 'dotenv';
 import apiRoutes from './backend/src/routes/api.routes';
 import { errorHandler } from './backend/src/middleware/error.middleware';
+import { isSupabaseConfigured } from './backend/src/database/supabase';
 
 // Load environment variables
 dotenv.config();
 
+// ESM-compatible path resolution
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const app = express();
-const PORT = parseInt(process.env.PORT || '3000', 10);
+// Default to 10000 on Render/production, or 3000 in local dev environment
+const PORT = Number(process.env.PORT) || (process.env.NODE_ENV === 'production' ? 10000 : 3000);
 const isProd = process.env.NODE_ENV === 'production';
 
 // Cross-Origin Resource Sharing & Request Body Parsing
@@ -21,7 +28,7 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Health Check Endpoint (Render & Monitoring)
+// Health Check Endpoint (Render & Monitoring) - Never exposes secrets
 app.get('/health', (_req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -70,9 +77,18 @@ async function startServer() {
     console.log(`=========================================`);
     console.log(` JEXA AI Companion Server Online`);
     console.log(` Powered by JOHNEY TEC`);
+    console.log(`[Server] Listening on 0.0.0.0:${PORT}`);
     console.log(` Port: ${PORT}`);
     console.log(` Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(` URL: http://0.0.0.0:${PORT}`);
+    if (isSupabaseConfigured) {
+      console.log(`[Database] Supabase connected`);
+    } else if (isProd) {
+      console.error(`[Database] CONFIGURATION ERROR: Supabase credentials missing in production environment.`);
+    } else {
+      console.log(`[Database] Operating in memory-buffered development mode.`);
+    }
+    console.log(`[Server] Ready`);
     console.log(`=========================================`);
   });
 
