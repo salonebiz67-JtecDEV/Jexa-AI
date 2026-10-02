@@ -24,6 +24,8 @@ export interface Conversation {
   previewMessage?: string;
   messageCount?: number;
   personaId?: string;
+  pinned?: boolean;
+  metadata?: Record<string, any>;
 }
 
 export interface SendMessagePayload {

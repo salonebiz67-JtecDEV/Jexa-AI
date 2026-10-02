@@ -1,5 +1,5 @@
 export type TextProviderType = 'development_mock' | 'openai' | 'anthropic' | 'gemini' | 'custom_http';
-export type VoiceProviderType = 'development_mock' | 'elevenlabs' | 'openai_voice' | 'browser_speech' | 'custom_tts';
+export type VoiceProviderType = 'development_mock' | 'elevenlabs' | 'openai_voice' | 'browser_speech' | 'custom_tts' | 'gemini';
 
 export interface ProviderStatus {
   textProvider: {
@@ -8,7 +8,7 @@ export interface ProviderStatus {
     hasApiKey: boolean;
     model: string;
     status: 'ready' | 'missing_key' | 'fallback_active';
-    description: string;
+    description?: string;
   };
   voiceProvider: {
     type: VoiceProviderType;
@@ -16,13 +16,14 @@ export interface ProviderStatus {
     hasApiKey: boolean;
     model: string;
     status: 'ready' | 'missing_key' | 'fallback_active';
-    description: string;
+    description?: string;
   };
   database: {
     type: 'supabase' | 'in_memory_fallback';
     isConfigured: boolean;
     status: 'connected' | 'unconfigured_fallback';
   };
+  isProductionReady?: boolean;
 }
 
 export interface VoiceSynthesisRequest {

@@ -1,8 +1,7 @@
 import { ITextAIProvider } from './text-provider.interface';
 import { IVoiceAIProvider } from './voice-provider.interface';
-import { DevelopmentTextAIProvider } from './text-development.provider';
-import { DevelopmentVoiceAIProvider } from './voice-development.provider';
 import { GeminiTextAIProvider } from './gemini.provider';
+import { GeminiVoiceAIProvider } from './gemini-voice.provider';
 import { loadAIProvidersConfig, AIProvidersConfig } from './config';
 import { ProviderStatus } from '../../shared/types/provider';
 
@@ -14,15 +13,20 @@ export class AIProviderRegistry {
 
   private constructor() {
     this.config = loadAIProvidersConfig();
-    const gemini = new GeminiTextAIProvider();
-    if (gemini.isConfigured) {
-      this.textProvider = gemini;
-      console.log('[AIProviderRegistry] Connected to Gemini AI Provider (gemini-3.8-flash).');
+    this.textProvider = new GeminiTextAIProvider();
+    this.voiceProvider = new GeminiVoiceAIProvider();
+
+    if (this.textProvider.isConfigured) {
+      console.log('[AIProviderRegistry] Connected to real Gemini Text Provider (gemini-3.8-flash).');
     } else {
-      this.textProvider = new DevelopmentTextAIProvider();
-      console.log('[AIProviderRegistry] Operating with Development Text AI Provider.');
+      console.warn('[AIProviderRegistry] GEMINI_API_KEY not configured. Real errors will be returned on chat requests.');
     }
-    this.voiceProvider = new DevelopmentVoiceAIProvider();
+
+    if (this.voiceProvider.isConfigured) {
+      console.log('[AIProviderRegistry] Connected to real Gemini Voice Provider (gemini-3.8-flash-lite-tts).');
+    } else {
+      console.warn('[AIProviderRegistry] Voice API not configured. Real errors will be returned on voice requests.');
+    }
   }
 
   public static getInstance(): AIProviderRegistry {
@@ -49,8 +53,8 @@ export class AIProviderRegistry {
   }
 
   public getStatus(hasSupabase: boolean): ProviderStatus {
-    const hasTextKey = Boolean(this.config.text.apiKey);
-    const hasVoiceKey = Boolean(this.config.voice.apiKey);
+    const hasTextKey = this.textProvider.isConfigured;
+    const hasVoiceKey = this.voiceProvider.isConfigured;
 
     return {
       textProvider: {
@@ -59,9 +63,7 @@ export class AIProviderRegistry {
         hasApiKey: hasTextKey,
         model: this.textProvider.modelName,
         status: hasTextKey ? 'ready' : 'fallback_active',
-        description: hasTextKey
-          ? `Connected to ${this.textProvider.providerType}`
-          : 'Operating in Development Mock mode. Add TEXT_AI_API_KEY to activate production model.',
+        description: hasTextKey ? 'Active primary provider' : 'Fallback provider active',
       },
       voiceProvider: {
         type: this.voiceProvider.providerType,
@@ -69,15 +71,14 @@ export class AIProviderRegistry {
         hasApiKey: hasVoiceKey,
         model: this.voiceProvider.modelName,
         status: hasVoiceKey ? 'ready' : 'fallback_active',
-        description: hasVoiceKey
-          ? `Connected to ${this.voiceProvider.providerType}`
-          : 'Operating in Development Mock mode. Add VOICE_AI_API_KEY to activate production voice model.',
+        description: hasVoiceKey ? 'Active voice engine' : 'Fallback voice engine',
       },
       database: {
         type: hasSupabase ? 'supabase' : 'in_memory_fallback',
         isConfigured: hasSupabase,
         status: hasSupabase ? 'connected' : 'unconfigured_fallback',
       },
+      isProductionReady: hasTextKey && hasVoiceKey && hasSupabase,
     };
   }
 }

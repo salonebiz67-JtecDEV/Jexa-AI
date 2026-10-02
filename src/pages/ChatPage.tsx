@@ -56,12 +56,11 @@ export const ChatPage: React.FC = () => {
     selectConversation,
     startNewChat,
     deleteConversation,
+    togglePinConversation,
+    renameConversation,
     sendMessage,
     refreshMessages,
   } = useChat();
-
-  // Pinned Conversation IDs
-  const [pinnedIds, setPinnedIds] = useState<string[]>(['conv-welcome']);
 
   const activeConversation =
     conversations.find((c) => c.id === currentConversationId) || null;
@@ -267,22 +266,6 @@ export const ChatPage: React.FC = () => {
     },
   });
 
-  // Pin / Unpin Conversation Toggle
-  const handleTogglePin = (id?: string) => {
-    const targetId = id || currentConversationId;
-    if (!targetId) return;
-
-    setPinnedIds((prev) =>
-      prev.includes(targetId) ? prev.filter((p) => p !== targetId) : [...prev, targetId]
-    );
-  };
-
-  // Rename Conversation
-  const handleRenameConversation = (newTitle: string) => {
-    if (activeConversation) {
-      activeConversation.title = newTitle;
-    }
-  };
 
   // Add Conversation to Project
   const handleAddConversationToProject = (projectId: string, conversationId: string) => {
@@ -384,6 +367,26 @@ export const ChatPage: React.FC = () => {
     setSettingsOpen(false);
   };
 
+  const handleTogglePin = useCallback(
+    (id?: string) => {
+      const targetId = id || currentConversationId;
+      if (!targetId) return;
+      const conv = conversations.find((c) => c.id === targetId);
+      const isPinned = Boolean(conv?.pinned);
+      togglePinConversation(targetId, !isPinned);
+    },
+    [currentConversationId, conversations, togglePinConversation]
+  );
+
+  const handleRenameConversation = useCallback(
+    (newTitle: string, id?: string) => {
+      const targetId = id || currentConversationId;
+      if (!targetId || !newTitle.trim()) return;
+      renameConversation(targetId, newTitle.trim());
+    },
+    [currentConversationId, renameConversation]
+  );
+
   return (
     <div className="flex h-screen h-[100dvh] w-screen overflow-hidden bg-[#07090e] text-slate-100 font-sans antialiased">
       {/* ONE Clean Navigation Sidebar (Collapsible on Desktop, Slide Drawer on Mobile) */}
@@ -394,7 +397,7 @@ export const ChatPage: React.FC = () => {
         onSelectTab={navigateToTab}
         conversations={conversations}
         activeConversationId={currentConversationId}
-        pinnedIds={pinnedIds}
+        pinnedIds={conversations.filter((c) => c.pinned).map((c) => c.id)}
         onSelectConversation={(id) => {
           selectConversation(id);
           setActiveTab('chat');
@@ -406,7 +409,9 @@ export const ChatPage: React.FC = () => {
           setCurrentArtifact(null);
         }}
         onDeleteConversation={deleteConversation}
-        onTogglePin={handleTogglePin}
+        onTogglePin={(id) => handleTogglePin(id)}
+        onRenameConversation={(id, newTitle) => handleRenameConversation(newTitle, id)}
+        onShareConversation={() => setShareOpen(true)}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
       />
@@ -429,9 +434,9 @@ export const ChatPage: React.FC = () => {
               onOpenShare={() => setShareOpen(true)}
               onNewChat={() => startNewChat()}
               activeConversation={activeConversation}
-              isPinned={Boolean(currentConversationId && pinnedIds.includes(currentConversationId))}
+              isPinned={Boolean(activeConversation?.pinned)}
               onTogglePin={() => handleTogglePin()}
-              onRenameConversation={handleRenameConversation}
+              onRenameConversation={(newTitle) => handleRenameConversation(newTitle)}
               onDeleteConversation={() => {
                 if (currentConversationId) {
                   deleteConversation(currentConversationId);

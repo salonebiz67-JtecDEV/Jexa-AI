@@ -87,6 +87,42 @@ export function useChat() {
     }
   }, []);
 
+  const togglePinConversation = useCallback(
+    async (id: string, pinned: boolean) => {
+      if (typeof id !== 'string') return;
+      try {
+        const updated = await ApiClient.togglePinConversation(id, pinned);
+        setConversations((prev) => {
+          const next = prev.map((c) => (c.id === id ? { ...c, pinned: updated.pinned } : c));
+          return next.sort((a, b) => {
+            if (Boolean(b.pinned) !== Boolean(a.pinned)) {
+              return b.pinned ? 1 : -1;
+            }
+            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+          });
+        });
+      } catch (err: any) {
+        console.error('[useChat] Failed to toggle pin:', err);
+      }
+    },
+    []
+  );
+
+  const renameConversation = useCallback(
+    async (id: string, newTitle: string) => {
+      if (typeof id !== 'string' || !newTitle.trim()) return;
+      try {
+        const updated = await ApiClient.renameConversation(id, newTitle.trim());
+        setConversations((prev) =>
+          prev.map((c) => (c.id === id ? { ...c, title: updated.title } : c))
+        );
+      } catch (err: any) {
+        console.error('[useChat] Failed to rename conversation:', err);
+      }
+    },
+    []
+  );
+
   const deleteConversation = useCallback(
     async (id: string) => {
       if (typeof id !== 'string') return;
@@ -178,6 +214,8 @@ export function useChat() {
     selectConversation,
     startNewChat,
     deleteConversation,
+    togglePinConversation,
+    renameConversation,
     sendMessage,
     refreshConversations,
     refreshMessages,

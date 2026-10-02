@@ -16,6 +16,8 @@ router.post('/voice', VoiceController.handleVoice);
 router.get('/conversations', ConversationController.list);
 router.post('/conversations', ConversationController.create);
 router.get('/conversations/:id', ConversationController.getById);
+router.patch('/conversations/:id', ConversationController.update);
+router.patch('/conversations/:id/pin', ConversationController.togglePin);
 router.get('/conversations/:id/messages', ConversationController.getMessages);
 router.delete('/conversations/:id', ConversationController.delete);
 

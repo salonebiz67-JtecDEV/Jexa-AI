@@ -1,7 +1,8 @@
 import { VoiceProviderType, VoiceSynthesisRequest, VoiceSynthesisResponse } from '../../shared/types/provider';
 
 export interface AudioTranscriptionRequest {
-  audioBuffer: Buffer | ArrayBuffer;
+  audioBuffer?: Buffer | ArrayBuffer;
+  audioData?: string;
   mimeType: string;
   language?: string;
 }

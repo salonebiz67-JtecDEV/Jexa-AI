@@ -47,6 +47,52 @@ export class ConversationController {
     }
   }
 
+  public static async update(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { title, pinned, personaId } = req.body || {};
+      const updated = await DatabaseService.updateConversation(id, {
+        ...(title !== undefined ? { title: String(title).trim() } : {}),
+        ...(pinned !== undefined ? { pinned: Boolean(pinned) } : {}),
+        ...(personaId !== undefined ? { personaId: String(personaId) } : {}),
+      });
+
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Conversation not found' });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: updated,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
+  public static async togglePin(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { pinned } = req.body || {};
+      const updated = await DatabaseService.togglePinConversation(id, Boolean(pinned));
+
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Conversation not found' });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: updated,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
   public static async getMessages(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;

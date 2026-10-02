@@ -23,10 +23,13 @@ CREATE TABLE IF NOT EXISTS public.conversations (
     title TEXT NOT NULL DEFAULT 'New Conversation',
     preview_message TEXT,
     persona_id TEXT DEFAULT 'empathetic_companion',
+    pinned BOOLEAN DEFAULT false,
     message_count INT DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_conversations_pinned_updated ON public.conversations (pinned DESC, updated_at DESC);
 
 -- 3. MESSAGES TABLE
 CREATE TABLE IF NOT EXISTS public.messages (

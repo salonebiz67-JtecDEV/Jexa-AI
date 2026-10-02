@@ -37,6 +37,7 @@ export function useLiveVoice({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
 
   // Speech Recognition & Silence Detection Refs
   const recognitionRef = useRef<any>(null);
@@ -79,6 +80,11 @@ export function useLiveVoice({
       recognitionRef.current = null;
     }
 
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      audioElementRef.current = null;
+    }
+
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
@@ -102,6 +108,11 @@ export function useLiveVoice({
   // Interruption logic: Stop TTS and immediately return to listening
   const interruptAiSpeech = useCallback(() => {
     if (statusRef.current === 'speaking') {
+      if (audioElementRef.current) {
+        audioElementRef.current.pause();
+        audioElementRef.current.currentTime = 0;
+        audioElementRef.current = null;
+      }
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
       }

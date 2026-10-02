@@ -108,6 +108,20 @@ export const ApiClient = {
     return fetchJson<ChatMessage[]>(`${API_BASE}/conversations/${conversationId}/messages`);
   },
 
+  async renameConversation(id: string, title: string): Promise<Conversation> {
+    return fetchJson<Conversation>(`${API_BASE}/conversations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    });
+  },
+
+  async togglePinConversation(id: string, pinned: boolean): Promise<Conversation> {
+    return fetchJson<Conversation>(`${API_BASE}/conversations/${id}/pin`, {
+      method: 'PATCH',
+      body: JSON.stringify({ pinned }),
+    });
+  },
+
   async deleteConversation(id: string): Promise<boolean> {
     const res = await fetchJson<{ id: string; deleted: boolean }>(`${API_BASE}/conversations/${id}`, {
       method: 'DELETE',

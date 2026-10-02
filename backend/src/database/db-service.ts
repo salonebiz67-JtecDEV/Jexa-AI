@@ -115,6 +115,7 @@ export class DatabaseService {
       const { data, error } = await client
         .from('conversations')
         .select('*')
+        .order('pinned', { ascending: false })
         .order('updated_at', { ascending: false });
 
       if (!error && data) {
@@ -126,13 +127,17 @@ export class DatabaseService {
           previewMessage: d.preview_message,
           messageCount: d.message_count,
           personaId: d.persona_id,
+          pinned: Boolean(d.pinned),
         }));
       }
     }
 
-    return Array.from(memoryStore.conversations.values()).sort(
-      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    );
+    return Array.from(memoryStore.conversations.values()).sort((a, b) => {
+      if (Boolean(b.pinned) !== Boolean(a.pinned)) {
+        return b.pinned ? 1 : -1;
+      }
+      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    });
   }
 
   public static async getConversation(id: string): Promise<Conversation | null> {
@@ -148,6 +153,7 @@ export class DatabaseService {
           previewMessage: data.preview_message,
           messageCount: data.message_count,
           personaId: data.persona_id,
+          pinned: Boolean(data.pinned),
         };
       }
     }
@@ -164,6 +170,7 @@ export class DatabaseService {
       previewMessage: '',
       messageCount: 0,
       personaId: personaId || 'empathetic_companion',
+      pinned: false,
     };
 
     const client = getSupabaseClient();
@@ -174,12 +181,21 @@ export class DatabaseService {
         created_at: newConv.createdAt,
         updated_at: newConv.updatedAt,
         persona_id: newConv.personaId,
+        pinned: false,
       });
     }
 
     memoryStore.conversations.set(id, newConv);
     memoryStore.messages.set(id, []);
     return newConv;
+  }
+
+  public static async togglePinConversation(id: string, pinned: boolean): Promise<Conversation | null> {
+    return this.updateConversation(id, { pinned });
+  }
+
+  public static async renameConversation(id: string, newTitle: string): Promise<Conversation | null> {
+    return this.updateConversation(id, { title: newTitle.trim() });
   }
 
   public static async updateConversation(
@@ -189,7 +205,7 @@ export class DatabaseService {
     const existing = await this.getConversation(id);
     if (!existing) return null;
 
-    const updated = {
+    const updated: Conversation = {
       ...existing,
       ...updates,
       updatedAt: new Date().toISOString(),
@@ -203,6 +219,7 @@ export class DatabaseService {
           title: updated.title,
           preview_message: updated.previewMessage,
           message_count: updated.messageCount,
+          pinned: updated.pinned ?? false,
           updated_at: updated.updatedAt,
         })
         .eq('id', id);
@@ -215,6 +232,8 @@ export class DatabaseService {
   public static async deleteConversation(id: string): Promise<boolean> {
     const client = getSupabaseClient();
     if (client) {
+      // Delete associated messages first then conversation
+      await client.from('messages').delete().eq('conversation_id', id);
       await client.from('conversations').delete().eq('id', id);
     }
     memoryStore.conversations.delete(id);

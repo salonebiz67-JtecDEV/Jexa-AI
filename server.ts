@@ -15,11 +15,21 @@ const isProd = process.env.NODE_ENV === 'production';
 // Cross-Origin Resource Sharing & Request Body Parsing
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Health Check Endpoint (Render & Monitoring)
+app.get('/health', (_req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'jexa-backend',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+  });
+});
 
 // Mount REST API endpoints
 app.use('/api', apiRoutes);
@@ -30,11 +40,11 @@ async function startServer() {
     // Development mode: Mount Vite middleware for fast live preview
     try {
       const { createServer: createViteServer } = await import('vite');
+      const isHmrDisabled = process.env.DISABLE_HMR === 'true';
       const vite = await createViteServer({
         server: {
           middlewareMode: true,
-          watch: process.env.DISABLE_HMR === 'true' ? null : {},
-          hmr: process.env.DISABLE_HMR !== 'true',
+          hmr: isHmrDisabled ? false : undefined,
         },
         appType: 'spa',
       });
