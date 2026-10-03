@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, MicOff, X, AlertCircle, RefreshCw } from 'lucide-react';
-import { LiveVoiceStatus } from '../../hooks/useLiveVoice';
+import { Mic, MicOff, X, AlertCircle, RefreshCw, Terminal } from 'lucide-react';
+import { LiveVoiceStatus, LiveVoiceDebugStats } from '../../hooks/useLiveVoice';
 import { VoiceOrbCanvas } from './VoiceOrbCanvas';
 
 interface LiveVoiceModalProps {
@@ -18,6 +18,7 @@ interface LiveVoiceModalProps {
   onToggleMute: () => void;
   onInterrupt?: () => void;
   onRetry?: () => void;
+  debugStats?: LiveVoiceDebugStats;
 }
 
 export const LiveVoiceModal: React.FC<LiveVoiceModalProps> = ({
@@ -34,7 +35,10 @@ export const LiveVoiceModal: React.FC<LiveVoiceModalProps> = ({
   onToggleMute,
   onInterrupt,
   onRetry,
+  debugStats,
 }) => {
+  const [showDebugHud, setShowDebugHud] = React.useState(false);
+
   if (!isOpen) return null;
 
   const getStatusText = () => {
@@ -104,15 +108,59 @@ export const LiveVoiceModal: React.FC<LiveVoiceModalProps> = ({
             </span>
           </div>
 
-          <button
-            onClick={onClose}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full text-slate-400 hover:text-white hover:bg-white/[0.06] transition-colors"
-            aria-label="Exit Live mode"
-            title="Exit Live mode"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowDebugHud((prev) => !prev)}
+              className={`min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full transition-colors ${
+                showDebugHud
+                  ? 'text-emerald-400 bg-emerald-500/15 border border-emerald-500/30'
+                  : 'text-slate-400 hover:text-white hover:bg-white/[0.06]'
+              }`}
+              aria-label="Toggle Live diagnostics"
+              title="Toggle Live telemetry"
+            >
+              <Terminal className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={onClose}
+              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full text-slate-400 hover:text-white hover:bg-white/[0.06] transition-colors"
+              aria-label="Exit Live mode"
+              title="Exit Live mode"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </header>
+
+        {/* Real-time Diagnostics HUD Overlay (Collapsible) */}
+        {showDebugHud && debugStats && (
+          <div className="relative z-20 px-4 py-2 bg-black/80 border-b border-white/[0.08] backdrop-blur-md">
+            <div className="max-w-lg mx-auto grid grid-cols-4 gap-2 text-[10px] font-mono">
+              <div className="bg-white/[0.03] p-1.5 rounded border border-white/[0.04]">
+                <span className="text-slate-500 block text-[9px]">Text AI</span>
+                <span className="text-emerald-400 font-semibold">{debugStats.textProvider.toUpperCase()}</span>
+              </div>
+              <div className="bg-white/[0.03] p-1.5 rounded border border-white/[0.04]">
+                <span className="text-slate-500 block text-[9px]">Voice AI</span>
+                <span className="text-teal-400 font-semibold">{debugStats.voiceProvider.toUpperCase()}</span>
+              </div>
+              <div className="bg-white/[0.03] p-1.5 rounded border border-white/[0.04]">
+                <span className="text-slate-500 block text-[9px]">Latency</span>
+                <span className="text-slate-200">{debugStats.connectionLatencyMs || 0}ms</span>
+              </div>
+              <div className="bg-white/[0.03] p-1.5 rounded border border-white/[0.04]">
+                <span className="text-slate-500 block text-[9px]">Tokens</span>
+                <span className="text-amber-400">{debugStats.approximateTokens || 0}</span>
+              </div>
+            </div>
+            {debugStats.lastError && (
+              <div className="max-w-lg mx-auto mt-1.5 text-[10px] font-mono text-rose-400 truncate">
+                Last Error: {debugStats.lastError}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Central Voice Visualization Space */}
         <main className="relative z-10 flex-1 flex flex-col items-center justify-center px-4 py-6 max-w-lg mx-auto w-full text-center">

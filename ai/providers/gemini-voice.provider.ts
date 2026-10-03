@@ -1,6 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { IVoiceAIProvider, AudioTranscriptionRequest, AudioTranscriptionResponse } from './voice-provider.interface';
-import { VoiceProviderType, VoiceSynthesisRequest, VoiceSynthesisResponse } from '../../shared/types/provider';
+import { VoiceProviderType, VoiceSynthesisRequest, VoiceSynthesisResponse, ProviderError } from '../../shared/types/provider';
 
 function addWavHeader(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16): Buffer {
   const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
@@ -27,11 +27,18 @@ function addWavHeader(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bi
 
 export class GeminiVoiceAIProvider implements IVoiceAIProvider {
   public readonly providerType: VoiceProviderType = 'gemini';
-  public readonly modelName = 'gemini-3.8-flash-lite-tts';
+  public readonly modelName: string;
   private ai: GoogleGenAI | null = null;
   public readonly isConfigured: boolean = false;
+  public lastError?: string;
 
   constructor() {
+    this.modelName = (
+      process.env.VOICE_AI_MODEL ||
+      process.env.GEMINI_VOICE_MODEL ||
+      'gemini-3.8-flash-lite-tts'
+    ).trim();
+
     const apiKey =
       process.env.GEMINI_API_KEY ||
       process.env.AI_API_KEY ||
@@ -41,22 +48,27 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       try {
         this.ai = new GoogleGenAI({ apiKey });
         this.isConfigured = true;
-      } catch (err) {
+        console.log(`[GeminiVoiceAIProvider] Initialized with model: ${this.modelName}`);
+      } catch (err: any) {
         console.error('[GeminiVoiceAIProvider] Initialization error:', err);
         this.isConfigured = false;
+        this.lastError = err.message;
       }
     }
   }
 
   public async synthesizeSpeech(request: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
     if (!this.ai || !this.isConfigured) {
-      throw new Error(
-        'Voice AI service is not configured. Please configure GEMINI_API_KEY in your Render environment variables.'
+      throw new ProviderError(
+        'Voice AI service is not configured. Please configure GEMINI_API_KEY in your Render environment variables.',
+        'gemini',
+        'MISSING_CREDENTIALS',
+        400,
+        this.modelName
       );
     }
 
     try {
-      // Map voice identifier to Gemini prebuilt voice
       const voiceMap: Record<string, string> = {
         aura: 'Aoede',
         atlas: 'Fenrir',
@@ -69,7 +81,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
 
       const cleanText = request.text.replace(/[*#`_\[\]]/g, '').trim();
       if (!cleanText) {
-        throw new Error('No valid text provided for speech synthesis.');
+        throw new ProviderError('No valid text provided for speech synthesis.', 'gemini', 'INVALID_INPUT', 400);
       }
 
       const responseStream = await this.ai.models.generateContentStream({
@@ -100,33 +112,54 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       }
 
       if (pcmChunks.length === 0) {
-        throw new Error('Gemini TTS generated empty audio data.');
+        throw new ProviderError(
+          'Gemini voice synthesis returned empty audio data.',
+          'gemini',
+          'EMPTY_AUDIO',
+          500,
+          this.modelName
+        );
       }
 
-      const rawPcm = Buffer.concat(pcmChunks);
-      const wavBuffer = addWavHeader(rawPcm, 24000, 1, 16);
-      const audioUrl = `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
+      const pcmCombined = Buffer.concat(pcmChunks);
+      const wavBuffer = addWavHeader(pcmCombined, 24000, 1, 16);
+      const base64Wav = wavBuffer.toString('base64');
+      const audioUrl = `data:audio/wav;base64,${base64Wav}`;
 
-      // Calculate accurate duration (24000 samples/sec * 2 bytes/sample = 48000 bytes/sec)
-      const durationSeconds = +(rawPcm.length / 48000).toFixed(2);
+      const durationSeconds = Math.round(pcmCombined.length / (24000 * 2));
 
       return {
         audioUrl,
         format: 'audio/wav',
-        durationSeconds,
+        durationSeconds: Math.max(1, durationSeconds),
         isSimulated: false,
-        message: 'Voice synthesized successfully',
+        message: 'Speech synthesized successfully via Gemini Neural TTS.',
+        provider: this.providerType,
+        model: this.modelName,
       };
-    } catch (err: any) {
-      console.error('[GeminiVoiceAIProvider] Speech synthesis failed:', err);
-      throw new Error(`Voice synthesis failed: ${err.message || 'API error'}`);
+    } catch (error: any) {
+      console.error('[GeminiVoiceAIProvider] Speech synthesis failed:', error);
+      this.lastError = error.message;
+      if (error instanceof ProviderError) {
+        throw error;
+      }
+      throw new ProviderError(
+        error.message || 'Failed to synthesize speech via Gemini Voice API.',
+        'gemini',
+        'SYNTHESIS_FAILED',
+        500,
+        this.modelName
+      );
     }
   }
 
   public async transcribeAudio(request: AudioTranscriptionRequest): Promise<AudioTranscriptionResponse> {
     if (!this.ai || !this.isConfigured) {
-      throw new Error(
-        'Speech transcription service is not configured. Please configure GEMINI_API_KEY in Render.'
+      throw new ProviderError(
+        'Gemini speech transcription is unconfigured.',
+        'gemini',
+        'MISSING_CREDENTIALS',
+        400
       );
     }
 
@@ -166,7 +199,40 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       };
     } catch (err: any) {
       console.error('[GeminiVoiceAIProvider] Transcription failed:', err);
-      throw new Error(`Speech transcription failed: ${err.message || 'API error'}`);
+      this.lastError = err.message;
+      throw new ProviderError(`Speech transcription failed: ${err.message}`, 'gemini', 'TRANSCRIPTION_FAILED', 500);
+    }
+  }
+
+  public async testConnection(): Promise<{ success: boolean; latencyMs: number; model: string; error?: string }> {
+    if (!this.ai || !this.isConfigured) {
+      return {
+        success: false,
+        latencyMs: 0,
+        model: this.modelName,
+        error: 'GEMINI_API_KEY is not configured on the backend server.',
+      };
+    }
+
+    const startTime = Date.now();
+    try {
+      const res = await this.synthesizeSpeech({
+        text: 'Ready',
+        voiceId: 'aura',
+      });
+
+      return {
+        success: Boolean(res.audioUrl),
+        latencyMs: Date.now() - startTime,
+        model: this.modelName,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        latencyMs: Date.now() - startTime,
+        model: this.modelName,
+        error: err.message,
+      };
     }
   }
 }

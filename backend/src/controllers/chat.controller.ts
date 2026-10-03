@@ -20,8 +20,15 @@ export class ChatController {
       });
     } catch (error: any) {
       console.error('[ChatController] Error processing message:', error);
-      res.status(500).json({
+      const statusCode = error.statusCode && error.statusCode >= 400 && error.statusCode < 600
+        ? error.statusCode
+        : 500;
+
+      res.status(statusCode).json({
         success: false,
+        provider: error.provider || 'text_ai',
+        code: error.code || 'PROVIDER_UNAVAILABLE',
+        message: error.message || 'Internal server error while processing message.',
         error: error.message || 'Internal server error while processing message.',
         timestamp: new Date().toISOString(),
       });

@@ -7,6 +7,7 @@ export interface ProviderDetail {
   isConfigured: boolean;
   model: string;
   description?: string;
+  error?: string;
 }
 
 export interface ProviderStatus {
@@ -15,16 +16,18 @@ export interface ProviderStatus {
     isConfigured: boolean;
     hasApiKey: boolean;
     model: string;
-    status: 'ready' | 'missing_key' | 'fallback_active';
+    status: 'ready' | 'missing_key' | 'fallback_active' | 'error';
     description?: string;
+    lastError?: string;
   };
   voiceProvider: {
     type: VoiceProviderType;
     isConfigured: boolean;
     hasApiKey: boolean;
     model: string;
-    status: 'ready' | 'missing_key' | 'fallback_active';
+    status: 'ready' | 'missing_key' | 'fallback_active' | 'error';
     description?: string;
+    lastError?: string;
   };
   availableTextProviders?: ProviderDetail[];
   availableVoiceProviders?: ProviderDetail[];
@@ -51,4 +54,21 @@ export interface VoiceSynthesisResponse {
   isSimulated: boolean;
   message: string;
   provider?: VoiceProviderType;
+  model?: string;
+}
+
+export class ProviderError extends Error {
+  public provider: string;
+  public code: string;
+  public statusCode: number;
+  public model?: string;
+
+  constructor(message: string, provider: string, code = 'PROVIDER_ERROR', statusCode = 500, model?: string) {
+    super(message);
+    this.name = 'ProviderError';
+    this.provider = provider;
+    this.code = code;
+    this.statusCode = statusCode;
+    this.model = model;
+  }
 }

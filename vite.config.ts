@@ -29,8 +29,8 @@ export default defineConfig(({ mode }) => {
     } else if (repo) {
       base = `/${repo}/`;
     }
-  } else if (mode === 'production') {
-    base = './';
+  } else {
+    base = '/';
   }
 
   return {
@@ -84,7 +84,7 @@ export default defineConfig(({ mode }) => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,jpg,woff,woff2}'],
           cleanupOutdatedCaches: true,
-          navigateFallback: null,
+          navigateFallback: 'index.html',
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

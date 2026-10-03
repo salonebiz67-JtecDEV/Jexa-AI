@@ -38,7 +38,7 @@ export function loadAIProvidersConfig(): AIProvidersConfig {
   const voiceProvider = (process.env.VOICE_AI_PROVIDER as VoiceProviderType) || 'gemini';
 
   const groqApiKey = process.env.GROQ_API_KEY || '';
-  const groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  const groqModel = process.env.GROQ_TEXT_MODEL || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 
   const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY || '';
   const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM'; // Rachel

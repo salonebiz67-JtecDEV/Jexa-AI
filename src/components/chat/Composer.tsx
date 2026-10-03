@@ -13,6 +13,7 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import { useSpeechRecognition } from '../../hooks/useSpeechRecognition';
+import { LiveVoiceStatus } from '../../hooks/useLiveVoice';
 
 interface Attachment {
   id: string;
@@ -25,12 +26,14 @@ interface Attachment {
 interface ComposerProps {
   onSendMessage: (text: string, attachments?: Attachment[]) => void;
   onOpenLive: () => void;
+  liveStatus?: LiveVoiceStatus;
   disabled?: boolean;
 }
 
 export const Composer: React.FC<ComposerProps> = ({
   onSendMessage,
   onOpenLive,
+  liveStatus = 'idle',
   disabled = false,
 }) => {
   const [inputText, setInputText] = useState('');
@@ -255,12 +258,38 @@ export const Composer: React.FC<ComposerProps> = ({
             <button
               type="button"
               onClick={onOpenLive}
-              title="Start Live Voice session"
-              aria-label="Start Live Voice session"
-              className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-emerald-300 text-[11px] font-medium transition-colors"
+              title="Toggle Live Voice session"
+              aria-label="Toggle Live Voice session"
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-all ${
+                liveStatus === 'connecting'
+                  ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300'
+                  : liveStatus === 'speaking' || liveStatus === 'listening' || liveStatus === 'processing'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                  : liveStatus === 'error'
+                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                  : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.06] text-slate-400 hover:text-slate-200'
+              }`}
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>LIVE</span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  liveStatus === 'connecting'
+                    ? 'bg-cyan-400 animate-ping'
+                    : liveStatus === 'speaking' || liveStatus === 'listening' || liveStatus === 'processing'
+                    ? 'bg-emerald-400 animate-pulse'
+                    : liveStatus === 'error'
+                    ? 'bg-rose-400'
+                    : 'bg-slate-500'
+                }`}
+              />
+              <span>
+                {liveStatus === 'connecting'
+                  ? 'LIVE CONNECTING'
+                  : liveStatus === 'speaking' || liveStatus === 'listening' || liveStatus === 'processing'
+                  ? 'LIVE'
+                  : liveStatus === 'error'
+                  ? 'LIVE ERROR'
+                  : 'LIVE OFF'}
+              </span>
             </button>
 
             {/* Voice Dictation Button */}

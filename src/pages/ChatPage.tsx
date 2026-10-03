@@ -467,7 +467,8 @@ export const ChatPage: React.FC = () => {
             <footer className="shrink-0 bg-gradient-to-t from-[#07090e] via-[#07090e]/80 to-transparent">
               <Composer
                 onSendMessage={(text) => sendMessage(text)}
-                onOpenLive={liveVoice.openLiveMode}
+                onOpenLive={liveVoice.startLiveMode}
+                liveStatus={liveVoice.isOpen ? liveVoice.status : 'idle'}
                 disabled={isSending}
               />
             </footer>
@@ -547,6 +548,7 @@ export const ChatPage: React.FC = () => {
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onClearHistory={handleClearHistory}
+        liveDebugStats={liveVoice.debugStats}
       />
 
       {/* Live Voice Experience */}
@@ -564,6 +566,7 @@ export const ChatPage: React.FC = () => {
         onToggleMute={liveVoice.toggleMute}
         onInterrupt={liveVoice.interruptAiSpeech}
         onRetry={liveVoice.retryConnection}
+        debugStats={liveVoice.debugStats}
       />
 
       {/* Real-time Network Connectivity Indicator */}

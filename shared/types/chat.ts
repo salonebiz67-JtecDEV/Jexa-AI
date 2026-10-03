@@ -11,9 +11,12 @@ export interface ChatMessage {
   status?: 'sending' | 'streaming' | 'complete' | 'error';
   metadata?: {
     model?: string;
+    provider?: string;
     tokens?: number;
     audioUrl?: string;
     isDevelopmentMock?: boolean;
+    fallbackUsed?: boolean;
+    originalProvider?: string;
     memoriesReferenced?: string[];
   };
 }

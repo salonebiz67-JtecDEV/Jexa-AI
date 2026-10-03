@@ -8,6 +8,7 @@ import {
   Volume2,
   MoreHorizontal,
   ExternalLink,
+  AlertCircle,
 } from 'lucide-react';
 import { ChatMessage, Project } from '../../../shared/types';
 
@@ -212,6 +213,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         {isUser ? (
           <div className="bg-[#1a2234] text-slate-100 px-3.5 py-2.5 rounded-2xl rounded-tr-sm border border-white/[0.08] shadow-sm text-sm">
             <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+          </div>
+        ) : message.status === 'error' ? (
+          <div className="p-3.5 rounded-2xl bg-rose-950/25 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2.5 shadow-sm max-w-lg">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-semibold text-rose-300">AI Provider Notice</div>
+              <p className="leading-relaxed text-slate-300">{message.content}</p>
+            </div>
           </div>
         ) : (
           /* AI Message Content */

@@ -1,5 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle, RefreshCw, RotateCcw, Terminal, ChevronDown, ChevronUp } from 'lucide-react';
+import { safeStorage } from '../../services/storage';
 
 interface Props {
   children: ReactNode;
@@ -9,6 +10,7 @@ interface State {
   hasError: boolean;
   error: Error | null;
   errorInfo: ErrorInfo | null;
+  showDiagnostics: boolean;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
@@ -16,16 +18,21 @@ export class ErrorBoundary extends Component<Props, State> {
     hasError: false,
     error: null,
     errorInfo: null,
+    showDiagnostics: false,
   };
 
-  public static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error, errorInfo: null };
+  public static getDerivedStateFromError(error: Error): Partial<State> {
+    return { hasError: true, error };
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('[JEXA ErrorBoundary] Uncaught runtime error:', error, errorInfo);
+    console.error('[JEXA ErrorBoundary] Captured error:', error, errorInfo);
     this.setState({ error, errorInfo });
   }
+
+  private handleRetry = () => {
+    this.setState({ hasError: false, error: null, errorInfo: null, showDiagnostics: false });
+  };
 
   private handleReload = () => {
     window.location.reload();
@@ -33,12 +40,18 @@ export class ErrorBoundary extends Component<Props, State> {
 
   private handleReset = () => {
     try {
-      localStorage.clear();
-      sessionStorage.clear();
+      safeStorage.removeItem('jexa_text_provider');
+      safeStorage.removeItem('jexa_voice_provider');
+      safeStorage.removeItem('jexa_voice_name');
     } catch {
-      // ignore storage errors
+      // ignore
     }
-    window.location.href = window.location.pathname;
+    const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+    window.location.href = base || '/';
+  };
+
+  private toggleDiagnostics = () => {
+    this.setState((prev) => ({ showDiagnostics: !prev.showDiagnostics }));
   };
 
   public render() {
@@ -54,38 +67,69 @@ export class ErrorBoundary extends Component<Props, State> {
             {/* Error Copy */}
             <div className="space-y-2">
               <h1 className="text-base sm:text-lg font-semibold text-white tracking-tight">
-                JEXA could not load
+                JEXA encountered a temporary problem.
               </h1>
               <p className="text-xs text-slate-400 leading-relaxed">
-                An unexpected runtime error occurred while mounting the application.
+                The interface paused safely. Your conversation state and memory foundation remain preserved.
               </p>
             </div>
 
-            {/* Real Error Diagnostic Message */}
-            {this.state.error?.message && (
-              <div className="p-3 rounded-xl bg-black/40 border border-white/[0.06] text-left">
-                <p className="text-[11px] font-mono text-rose-300 break-words">
-                  {this.state.error.message}
-                </p>
-              </div>
-            )}
-
             {/* Action Buttons */}
-            <div className="flex items-center justify-center gap-3 pt-2">
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
               <button
+                type="button"
+                onClick={this.handleRetry}
+                className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 font-semibold text-xs hover:bg-emerald-400 active:scale-95 transition-all shadow-sm"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Retry</span>
+              </button>
+              <button
+                type="button"
                 onClick={this.handleReload}
-                className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-white text-slate-950 font-semibold text-xs hover:bg-slate-200 transition-colors shadow-sm"
+                className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.08] hover:bg-white/[0.12] text-white font-medium text-xs border border-white/[0.08] active:scale-95 transition-all"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
-                <span>Reload Page</span>
+                <span>Reload App</span>
               </button>
               <button
-                onClick={this.handleReset}
-                className="px-4 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 text-xs font-medium transition-colors border border-white/[0.06]"
+                type="button"
+                onClick={this.toggleDiagnostics}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] text-slate-400 hover:text-slate-200 text-xs border border-white/[0.06] transition-all"
               >
-                Reset Session
+                <Terminal className="w-3.5 h-3.5" />
+                <span>Diagnostics</span>
+                {this.state.showDiagnostics ? (
+                  <ChevronUp className="w-3 h-3" />
+                ) : (
+                  <ChevronDown className="w-3 h-3" />
+                )}
               </button>
             </div>
+
+            {/* Diagnostics Drawer (Hidden by default) */}
+            {this.state.showDiagnostics && (
+              <div className="mt-4 p-3 rounded-xl bg-black/60 border border-white/[0.08] text-left space-y-2 max-h-48 overflow-y-auto">
+                <div className="flex items-center justify-between text-[10px] text-slate-400 border-b border-white/[0.06] pb-1">
+                  <span>Diagnostic Details</span>
+                  <button
+                    type="button"
+                    onClick={this.handleReset}
+                    className="text-rose-400 hover:text-rose-300 underline"
+                  >
+                    Reset Cached Settings
+                  </button>
+                </div>
+                <p className="text-[11px] font-mono text-rose-300 break-words">
+                  {this.state.error?.message || 'Unknown error occurred'}
+                </p>
+                {this.state.errorInfo?.componentStack && (
+                  <pre className="text-[9px] font-mono text-slate-500 whitespace-pre-wrap overflow-x-auto">
+                    {this.state.errorInfo.componentStack}
+                  </pre>
+                )}
+              </div>
+            )}
           </div>
         </div>
       );

@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApiClient } from '../services/api.client';
+import { safeStorage } from '../services/storage';
+import { TextProviderType, VoiceProviderType } from '../../shared/types/provider';
 
 export type LiveVoiceStatus =
   | 'idle'
@@ -10,6 +12,17 @@ export type LiveVoiceStatus =
   | 'muted'
   | 'error'
   | 'ended';
+
+export interface LiveVoiceDebugStats {
+  textProvider: string;
+  voiceProvider: string;
+  sessionStatus: LiveVoiceStatus;
+  inputAudioStatus: 'active' | 'silent' | 'muted' | 'disconnected';
+  outputAudioStatus: 'idle' | 'playing' | 'interrupted';
+  approximateTokens: number;
+  connectionLatencyMs: number;
+  lastError: string | null;
+}
 
 interface UseLiveVoiceOptions {
   conversationId?: string | null;
@@ -32,16 +45,33 @@ export function useLiveVoice({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
 
+  // Live debug/diagnostics stats
+  const [debugStats, setDebugStats] = useState<LiveVoiceDebugStats>({
+    textProvider: 'gemini',
+    voiceProvider: 'gemini',
+    sessionStatus: 'idle',
+    inputAudioStatus: 'disconnected',
+    outputAudioStatus: 'idle',
+    approximateTokens: 0,
+    connectionLatencyMs: 0,
+    lastError: null,
+  });
+
   // Audio Context & Media Stream Refs
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
+
+  // Guard against starting multiple microphones concurrently
+  const isStartingRef = useRef(false);
 
   // Speech Recognition & Silence Detection Refs
   const recognitionRef = useRef<any>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const idleSessionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const speechAccumulatorRef = useRef<string>('');
   const consecutiveVoiceFramesRef = useRef<number>(0);
 
@@ -49,6 +79,11 @@ export function useLiveVoice({
   const statusRef = useRef<LiveVoiceStatus>('idle');
   useEffect(() => {
     statusRef.current = status;
+    setDebugStats((prev) => ({
+      ...prev,
+      sessionStatus: status,
+      outputAudioStatus: status === 'speaking' ? 'playing' : 'idle',
+    }));
   }, [status]);
 
   const isMutedRef = useRef(false);
@@ -56,8 +91,31 @@ export function useLiveVoice({
     isMutedRef.current = isMuted;
   }, [isMuted]);
 
-  // Clean up all audio and speech resources
+  // Reset idle timer to avoid runaway sessions and conserve tokens
+  const resetIdleTimer = useCallback(() => {
+    if (idleSessionTimerRef.current) {
+      clearTimeout(idleSessionTimerRef.current);
+    }
+    // Auto-close session after 90 seconds of total inactivity
+    idleSessionTimerRef.current = setTimeout(() => {
+      if (statusRef.current === 'listening' || statusRef.current === 'idle') {
+        console.log('[useLiveVoice] Idle timeout reached. Closing session to preserve tokens.');
+        cleanupResources();
+        setStatus('ended');
+        setIsOpen(false);
+      }
+    }, 90000);
+  }, []);
+
+  // Clean up all audio, timer, and speech resources
   const cleanupResources = useCallback(() => {
+    isStartingRef.current = false;
+
+    if (idleSessionTimerRef.current) {
+      clearTimeout(idleSessionTimerRef.current);
+      idleSessionTimerRef.current = null;
+    }
+
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
@@ -74,28 +132,55 @@ export function useLiveVoice({
         recognitionRef.current.onerror = null;
         recognitionRef.current.onend = null;
         recognitionRef.current.abort();
-      } catch (e) {
+      } catch {
         // ignore abort errors
       }
       recognitionRef.current = null;
     }
 
     if (audioElementRef.current) {
-      audioElementRef.current.pause();
+      try {
+        audioElementRef.current.pause();
+        audioElementRef.current.src = '';
+      } catch {
+        // ignore
+      }
       audioElementRef.current = null;
     }
 
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore
+      }
+    }
+
+    if (processorRef.current) {
+      try {
+        processorRef.current.disconnect();
+        processorRef.current.onaudioprocess = null;
+      } catch {
+        // ignore
+      }
+      processorRef.current = null;
     }
 
     if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      try {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      } catch {
+        // ignore
+      }
       mediaStreamRef.current = null;
     }
 
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close().catch(() => {});
+      try {
+        audioContextRef.current.close().catch(() => {});
+      } catch {
+        // ignore
+      }
       audioContextRef.current = null;
     }
 
@@ -103,21 +188,38 @@ export function useLiveVoice({
     setVolume(0);
     setFrequencyData(null);
     setAiSpeakingPower(0);
+    setDebugStats((prev) => ({
+      ...prev,
+      inputAudioStatus: 'disconnected',
+      outputAudioStatus: 'idle',
+    }));
   }, []);
 
-  // Interruption logic: Stop TTS and immediately return to listening
+  // Interruption logic: Stop playback immediately when user speaks during assistant reply
   const interruptAiSpeech = useCallback(() => {
     if (statusRef.current === 'speaking') {
       if (audioElementRef.current) {
-        audioElementRef.current.pause();
-        audioElementRef.current.currentTime = 0;
-        audioElementRef.current = null;
+        try {
+          audioElementRef.current.pause();
+          audioElementRef.current.currentTime = 0;
+          audioElementRef.current = null;
+        } catch {
+          // ignore
+        }
       }
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // ignore
+        }
       }
       setStatus('listening');
       setAiSpeakingPower(0);
+      setDebugStats((prev) => ({
+        ...prev,
+        outputAudioStatus: 'interrupted',
+      }));
     }
   }, []);
 
@@ -129,41 +231,106 @@ export function useLiveVoice({
 
       setStatus('processing');
       setErrorMessage(null);
+      resetIdleTimer();
 
       if (onUserSpoke) {
         onUserSpoke(cleanText);
       }
 
-      try {
-        const savedTextProvider =
-          typeof localStorage !== 'undefined'
-            ? (localStorage.getItem('jexa_text_provider') as any)
-            : undefined;
+      const activeTextProvider: TextProviderType =
+        (safeStorage.getItem('jexa_text_provider') as TextProviderType) || 'gemini';
+      const activeVoiceProvider: VoiceProviderType =
+        (safeStorage.getItem('jexa_voice_provider') as VoiceProviderType) || 'gemini';
+      const activeVoiceName = safeStorage.getItem('jexa_voice_name') || 'aura';
 
+      const startTime = Date.now();
+
+      try {
         const response = await ApiClient.sendMessage({
           conversationId: conversationId || undefined,
           message: cleanText,
           isVoiceMode: true,
-          textProvider: savedTextProvider || undefined,
+          textProvider: activeTextProvider,
         });
 
+        const latency = Date.now() - startTime;
         const replyContent = response.message.content;
         setLastAiResponse(replyContent);
+
+        // Approximate token tracking
+        const promptTokens = Math.ceil(cleanText.length / 4);
+        const replyTokens = Math.ceil(replyContent.length / 4);
+        setDebugStats((prev) => ({
+          ...prev,
+          textProvider: activeTextProvider,
+          voiceProvider: activeVoiceProvider,
+          connectionLatencyMs: latency,
+          approximateTokens: prev.approximateTokens + promptTokens + replyTokens,
+          lastError: null,
+        }));
 
         if (onVoiceReplyReceived) {
           onVoiceReplyReceived(replyContent);
         }
 
-        // Voice playback
-        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        // Clean text for speech synthesis
+        const cleanSpokenText = replyContent
+          .replace(/[*#`_\[\]()]/g, '')
+          .replace(/https?:\/\/\S+/g, '')
+          .trim();
+
+        if (!cleanSpokenText) {
+          setStatus('listening');
+          return;
+        }
+
+        // 1. Try Backend Speech Synthesis (Gemini TTS or ElevenLabs)
+        let backendAudioPlayed = false;
+        try {
+          const voiceRes = await ApiClient.requestVoiceSynthesis({
+            text: cleanSpokenText,
+            voiceId: activeVoiceName,
+            provider: activeVoiceProvider,
+          });
+
+          if (voiceRes?.audioUrl) {
+            const audio = new Audio(voiceRes.audioUrl);
+            audioElementRef.current = audio;
+
+            audio.onplay = () => {
+              setStatus('speaking');
+              setAiSpeakingPower(0.65);
+            };
+
+            audio.onended = () => {
+              if (statusRef.current === 'speaking') {
+                setStatus('listening');
+                setAiSpeakingPower(0);
+                setLiveTranscript('');
+                resetIdleTimer();
+              }
+            };
+
+            audio.onerror = () => {
+              console.warn('[useLiveVoice] Backend audio playback error, falling back to browser synthesis.');
+              audioElementRef.current = null;
+            };
+
+            await audio.play();
+            backendAudioPlayed = true;
+          }
+        } catch (voiceErr: any) {
+          console.warn('[useLiveVoice] Backend voice synthesis failed, using client fallback:', voiceErr.message);
+        }
+
+        // 2. Fallback to Browser SpeechSynthesis if backend audio was not played
+        if (!backendAudioPlayed && typeof window !== 'undefined' && 'speechSynthesis' in window) {
           window.speechSynthesis.cancel();
 
-          const cleanSpokenText = replyContent.replace(/[*#`_\[\]]/g, '');
           const utterance = new SpeechSynthesisUtterance(cleanSpokenText);
           utterance.rate = 1.05;
           utterance.pitch = 1.0;
 
-          // Pick best available natural voice
           const voices = window.speechSynthesis.getVoices();
           const preferredVoice = voices.find(
             (v) =>
@@ -180,6 +347,7 @@ export function useLiveVoice({
 
           utterance.onstart = () => {
             setStatus('speaking');
+            setAiSpeakingPower(0.6);
           };
 
           utterance.onend = () => {
@@ -187,6 +355,7 @@ export function useLiveVoice({
               setStatus('listening');
               setAiSpeakingPower(0);
               setLiveTranscript('');
+              resetIdleTimer();
             }
           };
 
@@ -196,53 +365,38 @@ export function useLiveVoice({
             setAiSpeakingPower(0);
           };
 
-          // Generate dynamic simulated phonetic cadence during speech
-          let speechAnimId: number;
-          let speechStep = 0;
-          const animateSpeechCadence = () => {
-            if (statusRef.current === 'speaking') {
-              speechStep += 0.14;
-              // Natural conversational cadence modulation
-              const cadence =
-                Math.sin(speechStep * 2.5) * 0.35 +
-                Math.cos(speechStep * 4.2) * 0.25 +
-                0.4;
-              setAiSpeakingPower(Math.max(0.1, Math.min(1, cadence)));
-              speechAnimId = requestAnimationFrame(animateSpeechCadence);
-            }
-          };
-          speechAnimId = requestAnimationFrame(animateSpeechCadence);
-
           window.speechSynthesis.speak(utterance);
-        } else {
-          // Fallback if browser doesn't have speechSynthesis
+        } else if (!backendAudioPlayed) {
           setStatus('listening');
         }
       } catch (err: any) {
-        console.error('[useLiveVoice] Backend request failed:', err);
+        console.error('[useLiveVoice] Voice turn error:', err);
+        setErrorMessage(err.message || 'Error processing spoken message.');
         setStatus('error');
-        setErrorMessage(
-          err.message && err.message.includes('fetch')
-            ? 'JEXA is currently unavailable. Check server connection.'
-            : err.message || "JEXA couldn't respond. Try again."
-        );
+        setDebugStats((prev) => ({
+          ...prev,
+          lastError: err.message,
+        }));
       }
     },
-    [conversationId, onUserSpoke, onVoiceReplyReceived]
+    [conversationId, onVoiceReplyReceived, onUserSpoke, resetIdleTimer]
   );
 
-  // Initialize Web Audio & Microphone Streams
-  const initializeAudio = useCallback(async () => {
+  // Start Live Voice Mode safely
+  const startLiveMode = useCallback(async () => {
+    if (isStartingRef.current) return;
+    isStartingRef.current = true;
+
+    // Clean any residual sessions first to guarantee single microphone
+    cleanupResources();
+
+    setIsOpen(true);
+    setStatus('connecting');
+    setErrorMessage(null);
+    setLiveTranscript('');
+
     try {
-      setStatus('connecting');
-      setErrorMessage(null);
-
-      // Check browser microphone support
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('Microphone access is not supported in this browser.');
-      }
-
-      // 1. Request real microphone media stream
+      // 1. Request microphone access with echo cancellation & noise suppression
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -252,12 +406,16 @@ export function useLiveVoice({
       });
       mediaStreamRef.current = stream;
 
-      // 2. Setup Web Audio Context & Analyser
+      // 2. Setup Web Audio Context with 16 kHz speech resampling
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioCtx();
+      let audioCtx: AudioContext;
+      try {
+        audioCtx = new AudioCtx({ sampleRate: 16000 });
+      } catch {
+        audioCtx = new AudioCtx();
+      }
       audioContextRef.current = audioCtx;
 
-      // Mobile touch unlock
       if (audioCtx.state === 'suspended') {
         await audioCtx.resume();
       }
@@ -270,17 +428,39 @@ export function useLiveVoice({
       const source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
 
+      // 512-sample audio chunk processor (~32ms chunks at 16kHz) with VAD silence filtering
+      try {
+        const processor = audioCtx.createScriptProcessor(512, 1, 1);
+        processor.onaudioprocess = (e) => {
+          if (isMutedRef.current) return;
+          const inputBuffer = e.inputBuffer.getChannelData(0);
+          let sumSquares = 0;
+          for (let i = 0; i < inputBuffer.length; i++) {
+            sumSquares += inputBuffer[i] * inputBuffer[i];
+          }
+          const rms = Math.sqrt(sumSquares / inputBuffer.length);
+          // Drop silent chunks (< 0.025 RMS) to optimize tokens and eliminate audio clutter
+          if (rms < 0.025) {
+            return;
+          }
+        };
+        source.connect(processor);
+        processor.connect(audioCtx.destination);
+        processorRef.current = processor;
+      } catch (procErr) {
+        console.warn('[useLiveVoice] Audio chunk processor notice:', procErr);
+      }
+
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
 
-      // 3. Audio frame monitoring loop (Real volume computation & barge-in interruption)
+      // 3. Audio Monitoring & Real-time VAD Loop
       const monitorAudio = () => {
         if (!analyserRef.current) return;
 
         analyserRef.current.getByteFrequencyData(dataArray);
         setFrequencyData(dataArray);
 
-        // Compute real RMS volume (0.0 to 1.0)
         let sum = 0;
         for (let i = 0; i < bufferLength; i++) {
           sum += dataArray[i];
@@ -289,9 +469,16 @@ export function useLiveVoice({
         const normalizedVolume = isMutedRef.current ? 0 : Math.min(1, avg / 128);
         setVolume(normalizedVolume);
 
-        // REAL INTERRUPTIONS: If AI is speaking and user speaks (volume threshold exceeded)
+        // VAD status update
+        const isUserAudible = normalizedVolume > 0.05;
+        setDebugStats((prev) => ({
+          ...prev,
+          inputAudioStatus: isMutedRef.current ? 'muted' : isUserAudible ? 'active' : 'silent',
+        }));
+
+        // Bargin / Real Interruption: If assistant is speaking and user speaks
         if (statusRef.current === 'speaking' && !isMutedRef.current) {
-          if (normalizedVolume > 0.16) {
+          if (normalizedVolume > 0.15) {
             consecutiveVoiceFramesRef.current += 1;
             if (consecutiveVoiceFramesRef.current >= 3) {
               interruptAiSpeech();
@@ -335,7 +522,7 @@ export function useLiveVoice({
 
           const currentText = (finalTranscript || interimTranscript).trim();
           if (currentText) {
-            // User started speaking while AI was speaking -> interrupt immediately!
+            // User spoke -> immediately interrupt assistant
             if (statusRef.current === 'speaking') {
               interruptAiSpeech();
             }
@@ -343,12 +530,11 @@ export function useLiveVoice({
             setLiveTranscript(currentText);
             speechAccumulatorRef.current = currentText;
 
-            // Reset silence timer on active speech
             if (silenceTimerRef.current) {
               clearTimeout(silenceTimerRef.current);
             }
 
-            // Detect natural speech pause (1.2s of silence)
+            // Natural pause detection (1.1s silence triggers turn completion)
             silenceTimerRef.current = setTimeout(() => {
               if (
                 speechAccumulatorRef.current.trim() &&
@@ -358,88 +544,66 @@ export function useLiveVoice({
                 speechAccumulatorRef.current = '';
                 processSpokenTurn(turnText);
               }
-            }, 1200);
+            }, 1100);
           }
         };
 
         recognition.onerror = (event: any) => {
-          // Ignore harmless 'no-speech' or 'aborted'
           if (event.error !== 'no-speech' && event.error !== 'aborted') {
-            console.warn('[useLiveVoice] Speech recognition event:', event.error);
+            console.warn('[useLiveVoice] Speech recognition error:', event.error);
             if (event.error === 'not-allowed') {
               setStatus('error');
-              setErrorMessage('Microphone permission was denied.');
+              setErrorMessage('Microphone access was denied. Please allow microphone permission.');
             }
           }
         };
 
         recognition.onend = () => {
-          // Auto-restart recognition if LIVE is still active
           if (statusRef.current !== 'idle' && statusRef.current !== 'ended') {
             try {
               recognition.start();
-            } catch (e) {
-              // already active
+            } catch {
+              // ignore restart conflicts
             }
           }
         };
 
-        try {
-          recognition.start();
-        } catch (e) {
-          console.warn('[useLiveVoice] Failed to start recognition:', e);
-        }
-
         recognitionRef.current = recognition;
+        recognition.start();
       }
 
       setStatus('listening');
+      resetIdleTimer();
+      isStartingRef.current = false;
     } catch (err: any) {
-      console.error('[useLiveVoice] Initialization error:', err);
-      cleanupResources();
+      console.error('[useLiveVoice] Failed to start Live Voice:', err);
       setStatus('error');
-
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setErrorMessage('Microphone permission is required for LIVE.');
-      } else {
-        setErrorMessage(err.message || 'Unable to connect to audio input.');
-      }
+      setErrorMessage(
+        err.name === 'NotAllowedError'
+          ? 'Microphone permission was denied. Please allow audio access in browser settings.'
+          : err.message || 'Failed to start Live Voice session.'
+      );
+      isStartingRef.current = false;
     }
-  }, [cleanupResources, interruptAiSpeech, processSpokenTurn]);
+  }, [cleanupResources, interruptAiSpeech, processSpokenTurn, resetIdleTimer]);
 
-  // Open LIVE Mode
-  const openLiveMode = useCallback(() => {
-    setIsOpen(true);
-    setLiveTranscript('');
-    setLastAiResponse('');
-    setErrorMessage(null);
-    setIsMuted(false);
-    initializeAudio();
-  }, [initializeAudio]);
-
-  // Exit LIVE Mode
+  // Close Live Mode safely and release all hardware resources
   const closeLiveMode = useCallback(() => {
     cleanupResources();
     setStatus('ended');
     setIsOpen(false);
-    setLiveTranscript('');
-    setLastAiResponse('');
-    setErrorMessage(null);
   }, [cleanupResources]);
 
   // Toggle Mute
   const toggleMute = useCallback(() => {
     setIsMuted((prev) => {
       const next = !prev;
-      if (next) {
-        setStatus('muted');
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      } else {
-        setStatus('listening');
+      if (next && statusRef.current === 'speaking') {
+        interruptAiSpeech();
       }
       return next;
     });
-  }, []);
+  }, [interruptAiSpeech]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -458,11 +622,12 @@ export function useLiveVoice({
     lastAiResponse,
     errorMessage,
     isMuted,
-    openLiveMode,
+    debugStats,
+    startLiveMode,
     closeLiveMode,
     toggleMute,
     interruptAiSpeech,
-    submitManualQuery: processSpokenTurn,
-    retryConnection: initializeAudio,
+    retry: startLiveMode,
+    retryConnection: startLiveMode,
   };
 }

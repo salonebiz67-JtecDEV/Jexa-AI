@@ -20,8 +20,15 @@ export class VoiceController {
       });
     } catch (error: any) {
       console.error('[VoiceController] Error in voice processing:', error);
-      res.status(500).json({
+      const statusCode = error.statusCode && error.statusCode >= 400 && error.statusCode < 600
+        ? error.statusCode
+        : 500;
+
+      res.status(statusCode).json({
         success: false,
+        provider: error.provider || 'voice_ai',
+        code: error.code || 'VOICE_SYNTHESIS_FAILED',
+        message: error.message || 'Internal server error in voice provider.',
         error: error.message || 'Internal server error in voice provider.',
         timestamp: new Date().toISOString(),
       });

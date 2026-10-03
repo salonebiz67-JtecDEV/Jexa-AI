@@ -3,6 +3,7 @@ import { MemoryService } from './memory.service';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { assembleConversationContext } from '../../../ai/brain/context-handler';
 import { SendMessagePayload, ChatResponsePayload, ChatMessage } from '../../../shared/types/chat';
+import { ProviderError, TextProviderType } from '../../../shared/types/provider';
 
 export class ChatService {
   public static async processMessage(payload: SendMessagePayload): Promise<ChatResponsePayload> {
@@ -48,17 +49,53 @@ export class ChatService {
       isVoiceMode: Boolean(payload.isVoiceMode),
     });
 
-    // 6. Execute Text AI Provider via Registry
+    // 6. Execute Text AI Provider via Registry with Failover
     const registry = AIProviderRegistry.getInstance();
-    const requestedProvider = payload.textProvider || profile.selectedTextProvider;
-    const textProvider = registry.getTextProvider(requestedProvider);
+    const primaryProviderType: TextProviderType =
+      payload.textProvider || profile.selectedTextProvider || 'gemini';
+    const fallbackProviderType: TextProviderType =
+      primaryProviderType === 'gemini' ? 'groq' : 'gemini';
 
-    const providerResponse = await textProvider.generateResponse({
-      systemPrompt: assembled.systemPrompt,
-      messages: assembled.formattedMessages,
-      temperature: 0.7,
-      maxTokens: 1024,
-    });
+    let providerResponse: any;
+    let fallbackUsed = false;
+    let primaryError: any = null;
+
+    try {
+      const primaryProvider = registry.getTextProvider(primaryProviderType);
+      providerResponse = await primaryProvider.generateResponse({
+        systemPrompt: assembled.systemPrompt,
+        messages: assembled.formattedMessages,
+        temperature: 0.7,
+        maxTokens: 1024,
+      });
+    } catch (err: any) {
+      console.warn(`[ChatService] Primary provider '${primaryProviderType}' failed:`, err.message);
+      primaryError = err;
+
+      // Failover to secondary text provider if configured
+      const fallbackProvider = registry.getTextProvider(fallbackProviderType);
+      if (fallbackProvider && fallbackProvider.isConfigured) {
+        console.log(`[ChatService] Attempting automatic failover to '${fallbackProviderType}'...`);
+        try {
+          providerResponse = await fallbackProvider.generateResponse({
+            systemPrompt: assembled.systemPrompt,
+            messages: assembled.formattedMessages,
+            temperature: 0.7,
+            maxTokens: 1024,
+          });
+          fallbackUsed = true;
+          console.log(`[ChatService] Failover to '${fallbackProviderType}' succeeded.`);
+        } catch (fallbackErr: any) {
+          console.error(
+            `[ChatService] Fallback provider '${fallbackProviderType}' also failed:`,
+            fallbackErr.message
+          );
+          throw primaryError;
+        }
+      } else {
+        throw primaryError;
+      }
+    }
 
     // 7. Persist assistant message
     const assistantMessage = await DatabaseService.saveMessage(convId, {
@@ -66,8 +103,11 @@ export class ChatService {
       content: providerResponse.content,
       metadata: {
         model: providerResponse.model,
+        provider: providerResponse.provider,
         tokens: providerResponse.tokensUsed?.total,
         isDevelopmentMock: providerResponse.isMock,
+        fallbackUsed,
+        originalProvider: primaryProviderType,
         memoriesReferenced: assembled.referencedMemoryIds,
       },
     });

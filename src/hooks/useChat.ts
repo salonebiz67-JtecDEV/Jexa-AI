@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiClient } from '../services/api.client';
 import { ChatMessage, Conversation } from '../../shared/types';
+import { safeStorage } from '../services/storage';
 
 export function useChat() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -168,10 +169,7 @@ export function useChat() {
       setError(null);
 
       try {
-        const savedTextProvider =
-          typeof localStorage !== 'undefined'
-            ? (localStorage.getItem('jexa_text_provider') as any)
-            : undefined;
+        const savedTextProvider = safeStorage.getItem('jexa_text_provider') as any;
 
         const response = await ApiClient.sendMessage({
           conversationId: currentConversationId || undefined,
@@ -191,14 +189,24 @@ export function useChat() {
       } catch (err: any) {
         console.error('[useChat] Send message failed:', err);
         setError(err.message || 'Failed to send message.');
-        // Append error assistant message
+
+        let userHelpMessage = `I encountered an issue connecting to the AI provider: ${err.message}.`;
+        if (err.code === 'MODEL_NOT_FOUND') {
+          userHelpMessage = `The configured model was not found (${err.message}). You can switch to Google Gemini in Settings or configure a supported model in GROQ_TEXT_MODEL on Render.`;
+        } else if (err.code === 'AUTHENTICATION_ERROR') {
+          userHelpMessage = `Authentication failed for the selected provider. Please verify your API key in Render environment settings or switch to an active provider in Settings.`;
+        } else if (err.code === 'MISSING_CREDENTIALS') {
+          userHelpMessage = `The selected provider is missing its API key. Please configure the required API key in your Render environment variables or switch to an active provider in Settings.`;
+        }
+
+        // Append non-crashing friendly error message in the chat
         setMessages((prev) => [
           ...prev,
           {
             id: `err-${Date.now()}`,
             conversationId: currentConversationId || '',
             role: 'assistant',
-            content: `I encountered an issue connecting to the provider: ${err.message}. Please check your connection and configuration.`,
+            content: userHelpMessage,
             createdAt: new Date().toISOString(),
             status: 'error',
           },

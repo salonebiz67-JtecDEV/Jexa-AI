@@ -9,8 +9,9 @@ import {
   ProviderStatus,
   VoiceSynthesisRequest,
   VoiceSynthesisResponse,
-  ApiResponse,
   HealthCheckResponse,
+  TextProviderType,
+  VoiceProviderType,
 } from '../../shared/types';
 
 // =========================================================================
@@ -18,22 +19,90 @@ import {
 // =========================================================================
 // - In local dev / monolithic mode: defaults to '/api' (proxied by Vite/Express)
 // - In GitHub Pages production: points to Render backend via VITE_API_BASE_URL
-//   (e.g., VITE_API_BASE_URL=https://jexa-backend.onrender.com)
-const RAW_BASE = (import.meta.env.VITE_API_BASE_URL || '').trim();
-export const API_BASE = RAW_BASE ? `${RAW_BASE.replace(/\/+$/, '')}/api` : '/api';
+//   or falls back automatically to the official deployed production service
+const DEFAULT_PROD_RENDER_URL = 'https://jexa-ai.onrender.com';
+const isGitHubPages =
+  typeof window !== 'undefined' && window.location.hostname.includes('github.io');
 
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  // If running in production on GitHub Pages without VITE_API_BASE_URL set, fail visibly with actionable guidance
-  const isGitHubPages = typeof window !== 'undefined' && window.location.hostname.includes('github.io');
-  if (isGitHubPages && !RAW_BASE && url.startsWith('/api')) {
-    throw new Error(
-      'JEXA Backend URL is not configured. Please set the VITE_API_BASE_URL repository variable in GitHub Settings -> Secrets and variables -> Actions to your Render service URL (e.g. https://your-service.onrender.com).'
-    );
+const configuredBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
+const resolvedBackendOrigin =
+  configuredBase || (isGitHubPages ? DEFAULT_PROD_RENDER_URL : '');
+
+export const API_BASE = resolvedBackendOrigin
+  ? `${resolvedBackendOrigin.replace(/\/+$/, '')}/api`
+  : '/api';
+
+export interface ProviderTestResult {
+  success: boolean;
+  provider: string;
+  model?: string;
+  latencyMs?: number;
+  message?: string;
+  code?: string;
+  error?: string;
+}
+
+export interface ProviderStatusSummary {
+  text: {
+    provider: string;
+    model: string;
+    configured: boolean;
+  };
+  voice: {
+    provider: string;
+    model: string;
+    configured: boolean;
+  };
+  availableText?: Array<{
+    type: string;
+    name: string;
+    isConfigured: boolean;
+    model: string;
+    description?: string;
+  }>;
+  availableVoice?: Array<{
+    type: string;
+    name: string;
+    isConfigured: boolean;
+    model: string;
+    description?: string;
+  }>;
+}
+
+export class ApiError extends Error {
+  public status: number;
+  public code?: string;
+  public provider?: string;
+
+  constructor(message: string, status: number, code?: string, provider?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    this.provider = provider;
   }
+}
 
-  let response: Response;
+async function fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 25000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    response = await fetch(url, {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchJson<T>(url: string, options?: RequestInit, allowRetry = true): Promise<T> {
+  let response: Response;
+
+  try {
+    response = await fetchWithTimeout(url, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
@@ -41,9 +110,26 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
       },
     });
   } catch (netErr: any) {
-    console.error(`[ApiClient] Network failure requesting ${url}:`, netErr);
-    throw new Error(
-      `Unable to reach the JEXA backend at ${url}. If using Render, please verify the backend service is running and VITE_API_BASE_URL is set in your environment.`
+    // If aborted due to timeout
+    if (netErr?.name === 'AbortError') {
+      throw new ApiError('Request timed out while waiting for server response.', 408, 'REQUEST_TIMEOUT');
+    }
+
+    // Single retry for transient network failure
+    if (allowRetry && (!options?.method || options.method === 'GET')) {
+      try {
+        await new Promise((r) => setTimeout(r, 600));
+        return await fetchJson<T>(url, options, false);
+      } catch {
+        // Fall through to standard error
+      }
+    }
+
+    console.warn(`[ApiClient] Network failure requesting ${url}:`, netErr);
+    throw new ApiError(
+      `Unable to reach backend at ${url}. Please verify internet connectivity or backend status.`,
+      0,
+      'NETWORK_FAILURE'
     );
   }
 
@@ -51,11 +137,16 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   try {
     body = await response.json();
   } catch {
-    throw new Error(`Server returned an invalid response (${response.status} ${response.statusText}).`);
+    throw new ApiError(
+      `Server returned an unparseable response (${response.status} ${response.statusText}).`,
+      response.status,
+      'INVALID_RESPONSE'
+    );
   }
 
   if (!response.ok || body.success === false) {
-    throw new Error(body.error || `HTTP ${response.status}: ${response.statusText}`);
+    const errorMsg = body?.error || body?.message || `HTTP ${response.status}: ${response.statusText}`;
+    throw new ApiError(errorMsg, response.status, body?.code, body?.provider);
   }
 
   return (body.data !== undefined ? body.data : (body as unknown as T)) as T;
@@ -165,6 +256,25 @@ export const ApiClient = {
     return fetchJson<BrainProfile>(`${API_BASE}/ai/brain-profile`, {
       method: 'POST',
       body: JSON.stringify(updates),
+    });
+  },
+
+  // Provider Status & Testing
+  async getProviderStatus(): Promise<ProviderStatusSummary> {
+    return fetchJson<ProviderStatusSummary>(`${API_BASE}/providers/status`);
+  },
+
+  async testTextProvider(provider: TextProviderType): Promise<ProviderTestResult> {
+    return fetchJson<ProviderTestResult>(`${API_BASE}/providers/test-text`, {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    });
+  },
+
+  async testVoiceProvider(provider: VoiceProviderType): Promise<ProviderTestResult> {
+    return fetchJson<ProviderTestResult>(`${API_BASE}/providers/test-voice`, {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
     });
   },
 

@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import apiRoutes from './backend/src/routes/api.routes';
 import { errorHandler } from './backend/src/middleware/error.middleware';
 import { isSupabaseConfigured } from './backend/src/database/supabase';
+import { AIProviderRegistry } from './ai/providers/registry';
 
 // Load environment variables
 dotenv.config();
@@ -65,8 +66,13 @@ app.get('/', (_req, res) => {
 
 // Health check endpoint (Render health monitoring) - Never exposes credentials or secrets
 app.get('/health', (_req, res) => {
+  const registry = AIProviderRegistry.getInstance();
   res.status(200).json({
     status: 'ok',
+    service: 'jexa-ai',
+    database: isSupabaseConfigured ? 'connected' : 'fallback_active',
+    textProvider: registry.getDefaultTextType(),
+    voiceProvider: registry.getDefaultVoiceType(),
   });
 });
 

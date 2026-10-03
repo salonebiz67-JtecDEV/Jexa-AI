@@ -5,12 +5,18 @@ import { ConversationController } from '../controllers/conversation.controller';
 import { MemoryController } from '../controllers/memory.controller';
 import { BrainController } from '../controllers/brain.controller';
 import { HealthController } from '../controllers/health.controller';
+import { ProviderController } from '../controllers/provider.controller';
 
 const router = Router();
 
 // Chat & Voice
 router.post('/chat', ChatController.sendMessage);
 router.post('/voice', VoiceController.handleVoice);
+
+// Provider Status & Testing
+router.get('/providers/status', ProviderController.getStatus);
+router.post('/providers/test-text', ProviderController.testText);
+router.post('/providers/test-voice', ProviderController.testVoice);
 
 // Conversations
 router.get('/conversations', ConversationController.list);
