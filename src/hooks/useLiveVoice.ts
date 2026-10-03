@@ -135,10 +135,16 @@ export function useLiveVoice({
       }
 
       try {
+        const savedTextProvider =
+          typeof localStorage !== 'undefined'
+            ? (localStorage.getItem('jexa_text_provider') as any)
+            : undefined;
+
         const response = await ApiClient.sendMessage({
           conversationId: conversationId || undefined,
           message: cleanText,
           isVoiceMode: true,
+          textProvider: savedTextProvider || undefined,
         });
 
         const replyContent = response.message.content;

@@ -2,31 +2,51 @@ import { ITextAIProvider } from './text-provider.interface';
 import { IVoiceAIProvider } from './voice-provider.interface';
 import { GeminiTextAIProvider } from './gemini.provider';
 import { GeminiVoiceAIProvider } from './gemini-voice.provider';
+import { GroqTextAIProvider } from './groq.provider';
+import { ElevenLabsVoiceAIProvider } from './elevenlabs.provider';
 import { loadAIProvidersConfig, AIProvidersConfig } from './config';
-import { ProviderStatus } from '../../shared/types/provider';
+import { ProviderStatus, TextProviderType, VoiceProviderType, ProviderDetail } from '../../shared/types/provider';
 
 export class AIProviderRegistry {
   private static instance: AIProviderRegistry;
-  private textProvider: ITextAIProvider;
-  private voiceProvider: IVoiceAIProvider;
+  private textProviders: Map<TextProviderType, ITextAIProvider> = new Map();
+  private voiceProviders: Map<VoiceProviderType, IVoiceAIProvider> = new Map();
+  private defaultTextType: TextProviderType = 'gemini';
+  private defaultVoiceType: VoiceProviderType = 'gemini';
   private config: AIProvidersConfig;
 
   private constructor() {
     this.config = loadAIProvidersConfig();
-    this.textProvider = new GeminiTextAIProvider();
-    this.voiceProvider = new GeminiVoiceAIProvider();
 
-    if (this.textProvider.isConfigured) {
-      console.log('[AIProviderRegistry] Connected to real Gemini Text Provider (gemini-3.8-flash).');
+    // Initialize Text Providers
+    const geminiText = new GeminiTextAIProvider();
+    const groqText = new GroqTextAIProvider();
+
+    this.textProviders.set('gemini', geminiText);
+    this.textProviders.set('groq', groqText);
+
+    // Default text provider based on config or availability
+    if (this.config.text.provider === 'groq' && groqText.isConfigured) {
+      this.defaultTextType = 'groq';
     } else {
-      console.warn('[AIProviderRegistry] GEMINI_API_KEY not configured. Real errors will be returned on chat requests.');
+      this.defaultTextType = 'gemini';
     }
 
-    if (this.voiceProvider.isConfigured) {
-      console.log('[AIProviderRegistry] Connected to real Gemini Voice Provider (gemini-3.8-flash-lite-tts).');
+    // Initialize Voice Providers
+    const geminiVoice = new GeminiVoiceAIProvider();
+    const elevenLabsVoice = new ElevenLabsVoiceAIProvider();
+
+    this.voiceProviders.set('gemini', geminiVoice);
+    this.voiceProviders.set('elevenlabs', elevenLabsVoice);
+
+    // Default voice provider based on config or availability
+    if (this.config.voice.provider === 'elevenlabs' && elevenLabsVoice.isConfigured) {
+      this.defaultVoiceType = 'elevenlabs';
     } else {
-      console.warn('[AIProviderRegistry] Voice API not configured. Real errors will be returned on voice requests.');
+      this.defaultVoiceType = 'gemini';
     }
+
+    console.log(`[AIProviderRegistry] Loaded providers - Text: [gemini (${geminiText.isConfigured ? 'ready' : 'missing key'}), groq (${groqText.isConfigured ? 'ready' : 'missing key'})] | Voice: [gemini (${geminiVoice.isConfigured ? 'ready' : 'missing key'}), elevenlabs (${elevenLabsVoice.isConfigured ? 'ready' : 'missing key'})]`);
   }
 
   public static getInstance(): AIProviderRegistry {
@@ -36,43 +56,111 @@ export class AIProviderRegistry {
     return AIProviderRegistry.instance;
   }
 
-  public getTextProvider(): ITextAIProvider {
-    return this.textProvider;
+  public getTextProvider(type?: TextProviderType): ITextAIProvider {
+    const targetType = type || this.defaultTextType;
+    const provider = this.textProviders.get(targetType);
+    if (provider) {
+      return provider;
+    }
+    const fallback = this.textProviders.get('gemini') || this.textProviders.get('groq');
+    if (fallback) {
+      return fallback;
+    }
+    throw new Error('[AIProviderRegistry] No text provider available.');
   }
 
-  public getVoiceProvider(): IVoiceAIProvider {
-    return this.voiceProvider;
+  public getVoiceProvider(type?: VoiceProviderType): IVoiceAIProvider {
+    const targetType = type || this.defaultVoiceType;
+    const provider = this.voiceProviders.get(targetType);
+    if (provider) {
+      return provider;
+    }
+    const fallback = this.voiceProviders.get('gemini') || this.voiceProviders.get('elevenlabs');
+    if (fallback) {
+      return fallback;
+    }
+    throw new Error('[AIProviderRegistry] No voice provider available.');
   }
 
   public registerTextProvider(provider: ITextAIProvider): void {
-    this.textProvider = provider;
+    this.textProviders.set(provider.providerType, provider);
   }
 
   public registerVoiceProvider(provider: IVoiceAIProvider): void {
-    this.voiceProvider = provider;
+    this.voiceProviders.set(provider.providerType, provider);
   }
 
-  public getStatus(hasSupabase: boolean): ProviderStatus {
-    const hasTextKey = this.textProvider.isConfigured;
-    const hasVoiceKey = this.voiceProvider.isConfigured;
+  public setDefaultTextType(type: TextProviderType): void {
+    this.defaultTextType = type;
+  }
+
+  public setDefaultVoiceType(type: VoiceProviderType): void {
+    this.defaultVoiceType = type;
+  }
+
+  public getStatus(hasSupabase: boolean, activeTextType?: TextProviderType, activeVoiceType?: VoiceProviderType): ProviderStatus {
+    const textType = activeTextType || this.defaultTextType;
+    const voiceType = activeVoiceType || this.defaultVoiceType;
+
+    const activeText = this.getTextProvider(textType);
+    const activeVoice = this.getVoiceProvider(voiceType);
+
+    const availableTextProviders: ProviderDetail[] = [
+      {
+        type: 'gemini',
+        name: 'Google Gemini',
+        isConfigured: Boolean(this.textProviders.get('gemini')?.isConfigured),
+        model: this.textProviders.get('gemini')?.modelName || 'gemini-3.8-flash',
+        description: 'Deep multimodal reasoning, large context window & fast latency',
+      },
+      {
+        type: 'groq',
+        name: 'Groq Cloud',
+        isConfigured: Boolean(this.textProviders.get('groq')?.isConfigured),
+        model: this.textProviders.get('groq')?.modelName || 'llama-3.3-70b-versatile',
+        description: 'Ultra high-speed LPU inference powered by Meta Llama 3.3',
+      },
+    ];
+
+    const availableVoiceProviders: ProviderDetail[] = [
+      {
+        type: 'gemini',
+        name: 'Gemini Voice TTS',
+        isConfigured: Boolean(this.voiceProviders.get('gemini')?.isConfigured),
+        model: this.voiceProviders.get('gemini')?.modelName || 'gemini-3.8-flash-lite-tts',
+        description: 'Direct expressive neural voice generated by Google GenAI',
+      },
+      {
+        type: 'elevenlabs',
+        name: 'ElevenLabs',
+        isConfigured: Boolean(this.voiceProviders.get('elevenlabs')?.isConfigured),
+        model: this.voiceProviders.get('elevenlabs')?.modelName || 'eleven_multilingual_v2',
+        description: 'Industry-standard realistic speech synthesis with emotional nuance',
+      },
+    ];
+
+    const hasTextKey = activeText.isConfigured;
+    const hasVoiceKey = activeVoice.isConfigured;
 
     return {
       textProvider: {
-        type: this.textProvider.providerType,
+        type: activeText.providerType,
         isConfigured: hasTextKey,
         hasApiKey: hasTextKey,
-        model: this.textProvider.modelName,
-        status: hasTextKey ? 'ready' : 'fallback_active',
-        description: hasTextKey ? 'Active primary provider' : 'Fallback provider active',
+        model: activeText.modelName,
+        status: hasTextKey ? 'ready' : 'missing_key',
+        description: `${activeText.providerType === 'groq' ? 'Groq Llama 3.3' : 'Google Gemini 3.8'} active`,
       },
       voiceProvider: {
-        type: this.voiceProvider.providerType,
+        type: activeVoice.providerType,
         isConfigured: hasVoiceKey,
         hasApiKey: hasVoiceKey,
-        model: this.voiceProvider.modelName,
-        status: hasVoiceKey ? 'ready' : 'fallback_active',
-        description: hasVoiceKey ? 'Active voice engine' : 'Fallback voice engine',
+        model: activeVoice.modelName,
+        status: hasVoiceKey ? 'ready' : 'missing_key',
+        description: `${activeVoice.providerType === 'elevenlabs' ? 'ElevenLabs Speech' : 'Gemini Neural Voice'} active`,
       },
+      availableTextProviders,
+      availableVoiceProviders,
       database: {
         type: hasSupabase ? 'supabase' : 'in_memory_fallback',
         isConfigured: hasSupabase,

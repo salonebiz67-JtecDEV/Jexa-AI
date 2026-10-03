@@ -68,6 +68,7 @@ export const ApiClient = {
       message: typeof payload?.message === 'string' ? payload.message : '',
       conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
       personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
+      textProvider: payload?.textProvider,
       stream: Boolean(payload?.stream),
       isVoiceMode: Boolean(payload?.isVoiceMode),
       userContext: payload?.userContext,
@@ -80,9 +81,16 @@ export const ApiClient = {
 
   // Voice
   async requestVoiceSynthesis(payload: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
+    const cleanPayload: VoiceSynthesisRequest = {
+      text: typeof payload?.text === 'string' ? payload.text : '',
+      voiceId: payload?.voiceId,
+      provider: payload?.provider,
+      speed: payload?.speed,
+      pitch: payload?.pitch,
+    };
     return fetchJson<VoiceSynthesisResponse>(`${API_BASE}/voice`, {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify(cleanPayload),
     });
   },
 

@@ -7,7 +7,11 @@ export class BrainController {
     try {
       const profile = await DatabaseService.getBrainProfile();
       const isDbConnected = await DatabaseService.isConnected();
-      const providerStatus = AIProviderRegistry.getInstance().getStatus(isDbConnected);
+      const providerStatus = AIProviderRegistry.getInstance().getStatus(
+        isDbConnected,
+        profile.selectedTextProvider,
+        profile.selectedVoiceProvider
+      );
 
       res.status(200).json({
         success: true,
@@ -26,6 +30,15 @@ export class BrainController {
     try {
       const updates = req.body;
       const updated = await DatabaseService.updateBrainProfile(updates);
+
+      const registry = AIProviderRegistry.getInstance();
+      if (updated.selectedTextProvider) {
+        registry.setDefaultTextType(updated.selectedTextProvider);
+      }
+      if (updated.selectedVoiceProvider) {
+        registry.setDefaultVoiceType(updated.selectedVoiceProvider);
+      }
+
       res.status(200).json({
         success: true,
         data: updated,

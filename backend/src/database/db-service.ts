@@ -19,6 +19,8 @@ class InMemoryDatabase {
       creator: JEXA_IDENTITY.creator,
       version: JEXA_IDENTITY.version,
       activePersonality: 'empathetic_companion',
+      selectedTextProvider: 'gemini',
+      selectedVoiceProvider: 'gemini',
       traits: ['Empathetic', 'Adaptive', 'Curious', 'Honest', 'Nuanced'],
       toneParameters: {
         warmth: 0.85,

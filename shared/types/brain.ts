@@ -1,3 +1,5 @@
+import { TextProviderType, VoiceProviderType } from './provider';
+
 export type PersonalityStyle = 'empathetic_companion' | 'deep_thinker' | 'creative_muse' | 'executive_partner';
 
 export interface BrainProfile {
@@ -7,6 +9,8 @@ export interface BrainProfile {
   creator: string;
   version: string;
   activePersonality: PersonalityStyle;
+  selectedTextProvider?: TextProviderType;
+  selectedVoiceProvider?: VoiceProviderType;
   traits: string[];
   toneParameters: {
     warmth: number;       // 0 to 1

@@ -168,10 +168,16 @@ export function useChat() {
       setError(null);
 
       try {
+        const savedTextProvider =
+          typeof localStorage !== 'undefined'
+            ? (localStorage.getItem('jexa_text_provider') as any)
+            : undefined;
+
         const response = await ApiClient.sendMessage({
           conversationId: currentConversationId || undefined,
           message: trimmed,
           personaId: cleanPersona,
+          textProvider: savedTextProvider || undefined,
         });
 
         // Set conversation ID if new conversation was formed

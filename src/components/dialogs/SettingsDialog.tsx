@@ -1,6 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, X, Check, Bell, BellOff, Download, Smartphone } from 'lucide-react';
+import {
+  ArrowLeft,
+  X,
+  Check,
+  Bell,
+  BellOff,
+  Download,
+  Smartphone,
+  Cpu,
+  Zap,
+  Volume2,
+  Mic,
+  Sparkles,
+} from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
+import { useBrainSettings } from '../../hooks/useBrainSettings';
+import { TextProviderType, VoiceProviderType } from '../../../shared/types/provider';
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -13,16 +28,47 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   onClose,
   onClearHistory,
 }) => {
+  const { profile, providerStatus, updateSettings } = useBrainSettings();
+
   const [theme, setTheme] = useState<'dark' | 'midnight' | 'obsidian'>('dark');
   const [voiceName, setVoiceName] = useState('aura');
   const [streamText, setStreamText] = useState(true);
   const [soundEffects, setSoundEffects] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
+  // Independent AI Provider Selections
+  const [textProvider, setTextProvider] = useState<TextProviderType>(() => {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('jexa_text_provider');
+      if (saved === 'gemini' || saved === 'groq') return saved as TextProviderType;
+    }
+    return 'gemini';
+  });
+
+  const [voiceProvider, setVoiceProvider] = useState<VoiceProviderType>(() => {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('jexa_voice_provider');
+      if (saved === 'gemini' || saved === 'elevenlabs') return saved as VoiceProviderType;
+    }
+    return 'gemini';
+  });
+
   // Real Notification Support
   const [notificationStatus, setNotificationStatus] = useState<NotificationPermission>('default');
-
   const { isInstallable, isInstalled, install } = usePWAInstall();
+
+  // Sync state when dialog opens or profile loads
+  useEffect(() => {
+    if (profile?.selectedTextProvider) {
+      setTextProvider(profile.selectedTextProvider);
+    }
+    if (profile?.selectedVoiceProvider) {
+      setVoiceProvider(profile.selectedVoiceProvider);
+    }
+    if (profile?.voiceSettings?.voiceId) {
+      setVoiceName(profile.voiceSettings.voiceId);
+    }
+  }, [profile, isOpen]);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -42,13 +88,45 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('jexa_text_provider', textProvider);
+      localStorage.setItem('jexa_voice_provider', voiceProvider);
+      localStorage.setItem('jexa_voice_name', voiceName);
+    }
+
+    try {
+      await updateSettings({
+        selectedTextProvider: textProvider,
+        selectedVoiceProvider: voiceProvider,
+        voiceSettings: {
+          voiceId: voiceName,
+          speed: 1.0,
+          pitch: 1.0,
+          autoSpeak: false,
+        },
+      });
+    } catch (err) {
+      console.error('[SettingsDialog] Failed to persist profile settings:', err);
+    }
+
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
       onClose();
     }, 600);
   };
+
+  // Helper to check provider availability from status
+  const isGroqConfigured =
+    providerStatus?.availableTextProviders?.find((p) => p.type === 'groq')?.isConfigured ?? false;
+  const isGeminiTextConfigured =
+    providerStatus?.availableTextProviders?.find((p) => p.type === 'gemini')?.isConfigured ?? true;
+
+  const isElevenLabsConfigured =
+    providerStatus?.availableVoiceProviders?.find((p) => p.type === 'elevenlabs')?.isConfigured ?? false;
+  const isGeminiVoiceConfigured =
+    providerStatus?.availableVoiceProviders?.find((p) => p.type === 'gemini')?.isConfigured ?? true;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md pt-safe pb-safe">
@@ -65,7 +143,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
               <span>Back</span>
             </button>
             <div className="h-4 w-px bg-white/[0.08]" />
-            <h2 className="font-semibold text-sm text-white">Settings</h2>
+            <h2 className="font-semibold text-sm text-white">Settings & AI Engines</h2>
           </div>
           <button
             onClick={onClose}
@@ -77,8 +155,209 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
         {/* Settings Body */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-5 flex-1">
-          {/* Theme Palette */}
+          {/* TEXT AI PROVIDER SELECTION */}
           <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Text AI Provider</span>
+              </label>
+              <span className="text-[10px] text-slate-500 font-mono">Independent Selection</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              {/* Gemini Text Provider Card */}
+              <button
+                type="button"
+                onClick={() => setTextProvider('gemini')}
+                className={`p-3 rounded-xl border text-left transition-all relative ${
+                  textProvider === 'gemini'
+                    ? 'border-emerald-500 bg-emerald-950/25 ring-1 ring-emerald-500/30'
+                    : 'border-white/[0.07] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Google Gemini</span>
+                  </div>
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      isGeminiTextConfigured ? 'bg-emerald-400 ring-2 ring-emerald-400/20' : 'bg-amber-400'
+                    }`}
+                  />
+                </div>
+                <div className="text-[10px] font-mono text-emerald-400/80 mb-1">gemini-3.8-flash</div>
+                <div className="text-[10px] text-slate-400 leading-tight">
+                  Multimodal reasoning & large context window
+                </div>
+                <div className="mt-2 pt-2 border-t border-white/[0.06] flex items-center justify-between">
+                  <span className="text-[9px] text-slate-500">Status</span>
+                  <span
+                    className={`text-[9px] font-medium ${
+                      isGeminiTextConfigured ? 'text-emerald-400' : 'text-amber-400'
+                    }`}
+                  >
+                    {isGeminiTextConfigured ? 'Configured' : 'Missing Key'}
+                  </span>
+                </div>
+              </button>
+
+              {/* Groq Text Provider Card */}
+              <button
+                type="button"
+                onClick={() => setTextProvider('groq')}
+                className={`p-3 rounded-xl border text-left transition-all relative ${
+                  textProvider === 'groq'
+                    ? 'border-emerald-500 bg-emerald-950/25 ring-1 ring-emerald-500/30'
+                    : 'border-white/[0.07] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
+                    <Zap className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Groq Cloud</span>
+                  </div>
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      isGroqConfigured ? 'bg-emerald-400 ring-2 ring-emerald-400/20' : 'bg-amber-400'
+                    }`}
+                  />
+                </div>
+                <div className="text-[10px] font-mono text-amber-400/80 mb-1">llama-3.3-70b</div>
+                <div className="text-[10px] text-slate-400 leading-tight">
+                  Ultra-low latency LPU hardware inference
+                </div>
+                <div className="mt-2 pt-2 border-t border-white/[0.06] flex items-center justify-between">
+                  <span className="text-[9px] text-slate-500">Status</span>
+                  <span
+                    className={`text-[9px] font-medium ${
+                      isGroqConfigured ? 'text-emerald-400' : 'text-amber-400'
+                    }`}
+                  >
+                    {isGroqConfigured ? 'Configured' : 'Missing Key'}
+                  </span>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {/* VOICE AI PROVIDER SELECTION */}
+          <div className="space-y-2 pt-3 border-t border-white/[0.06]">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Volume2 className="w-3.5 h-3.5 text-teal-400" />
+                <span>Voice AI Provider</span>
+              </label>
+              <span className="text-[10px] text-slate-500 font-mono">Independent Selection</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              {/* Gemini Voice Provider Card */}
+              <button
+                type="button"
+                onClick={() => setVoiceProvider('gemini')}
+                className={`p-3 rounded-xl border text-left transition-all relative ${
+                  voiceProvider === 'gemini'
+                    ? 'border-emerald-500 bg-emerald-950/25 ring-1 ring-emerald-500/30'
+                    : 'border-white/[0.07] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
+                    <Sparkles className="w-3.5 h-3.5 text-teal-400" />
+                    <span>Gemini Voice</span>
+                  </div>
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      isGeminiVoiceConfigured ? 'bg-emerald-400 ring-2 ring-emerald-400/20' : 'bg-amber-400'
+                    }`}
+                  />
+                </div>
+                <div className="text-[10px] font-mono text-teal-400/80 mb-1">flash-lite-tts</div>
+                <div className="text-[10px] text-slate-400 leading-tight">
+                  Google GenAI direct speech generation
+                </div>
+                <div className="mt-2 pt-2 border-t border-white/[0.06] flex items-center justify-between">
+                  <span className="text-[9px] text-slate-500">Status</span>
+                  <span
+                    className={`text-[9px] font-medium ${
+                      isGeminiVoiceConfigured ? 'text-emerald-400' : 'text-amber-400'
+                    }`}
+                  >
+                    {isGeminiVoiceConfigured ? 'Configured' : 'Missing Key'}
+                  </span>
+                </div>
+              </button>
+
+              {/* ElevenLabs Voice Provider Card */}
+              <button
+                type="button"
+                onClick={() => setVoiceProvider('elevenlabs')}
+                className={`p-3 rounded-xl border text-left transition-all relative ${
+                  voiceProvider === 'elevenlabs'
+                    ? 'border-emerald-500 bg-emerald-950/25 ring-1 ring-emerald-500/30'
+                    : 'border-white/[0.07] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
+                    <Mic className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>ElevenLabs</span>
+                  </div>
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      isElevenLabsConfigured ? 'bg-emerald-400 ring-2 ring-emerald-400/20' : 'bg-amber-400'
+                    }`}
+                  />
+                </div>
+                <div className="text-[10px] font-mono text-indigo-400/80 mb-1">multilingual_v2</div>
+                <div className="text-[10px] text-slate-400 leading-tight">
+                  High-fidelity emotive neural speech synthesis
+                </div>
+                <div className="mt-2 pt-2 border-t border-white/[0.06] flex items-center justify-between">
+                  <span className="text-[9px] text-slate-500">Status</span>
+                  <span
+                    className={`text-[9px] font-medium ${
+                      isElevenLabsConfigured ? 'text-emerald-400' : 'text-amber-400'
+                    }`}
+                  >
+                    {isElevenLabsConfigured ? 'Configured' : 'Missing Key'}
+                  </span>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {/* Voice Persona / Profile Preset */}
+          <div className="space-y-2 pt-3 border-t border-white/[0.06]">
+            <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+              Voice Persona
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { id: 'aura', name: 'Aura', desc: 'Serene' },
+                { id: 'atlas', name: 'Atlas', desc: 'Direct' },
+                { id: 'lyra', name: 'Lyra', desc: 'Bright' },
+              ].map((v) => (
+                <button
+                  key={v.id}
+                  onClick={() => setVoiceName(v.id)}
+                  className={`p-2 rounded-xl border text-left transition-all ${
+                    voiceName === v.id
+                      ? 'border-emerald-500 bg-emerald-950/20 text-white'
+                      : 'border-white/[0.06] text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="font-semibold text-xs text-white">{v.name}</div>
+                  <div className="text-[10px] text-slate-400">{v.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Theme Palette */}
+          <div className="space-y-2 pt-3 border-t border-white/[0.06]">
             <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
               Interface Theme
             </label>
@@ -99,33 +378,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 >
                   <div className={`w-full h-5 rounded-md mb-1.5 border border-white/[0.08] ${item.bg}`} />
                   <span className="text-[11px] font-medium">{item.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Voice Model Preference */}
-          <div className="space-y-2 pt-3 border-t border-white/[0.06]">
-            <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
-              Voice Model
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { id: 'aura', name: 'Aura', desc: 'Serene' },
-                { id: 'atlas', name: 'Atlas', desc: 'Direct' },
-                { id: 'lyra', name: 'Lyra', desc: 'Bright' },
-              ].map((v) => (
-                <button
-                  key={v.id}
-                  onClick={() => setVoiceName(v.id)}
-                  className={`p-2 rounded-xl border text-left transition-all ${
-                    voiceName === v.id
-                      ? 'border-emerald-500 bg-emerald-950/20 text-white'
-                      : 'border-white/[0.06] text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <div className="font-semibold text-xs text-white">{v.name}</div>
-                  <div className="text-[10px] text-slate-400">{v.desc}</div>
                 </button>
               ))}
             </div>
@@ -182,7 +434,12 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 <div>
                   <div className="text-xs font-medium text-white">Browser Notifications</div>
                   <div className="text-[10px] text-slate-400">
-                    Status: {notificationStatus === 'granted' ? 'Allowed' : notificationStatus === 'denied' ? 'Blocked' : 'Not Enabled'}
+                    Status:{' '}
+                    {notificationStatus === 'granted'
+                      ? 'Allowed'
+                      : notificationStatus === 'denied'
+                      ? 'Blocked'
+                      : 'Not Enabled'}
                   </div>
                 </div>
               </div>

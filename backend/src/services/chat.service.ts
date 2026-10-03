@@ -50,7 +50,8 @@ export class ChatService {
 
     // 6. Execute Text AI Provider via Registry
     const registry = AIProviderRegistry.getInstance();
-    const textProvider = registry.getTextProvider();
+    const requestedProvider = payload.textProvider || profile.selectedTextProvider;
+    const textProvider = registry.getTextProvider(requestedProvider);
 
     const providerResponse = await textProvider.generateResponse({
       systemPrompt: assembled.systemPrompt,

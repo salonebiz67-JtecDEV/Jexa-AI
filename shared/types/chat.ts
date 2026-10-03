@@ -1,3 +1,5 @@
+import { TextProviderType } from './provider';
+
 export type Role = 'user' | 'assistant' | 'system';
 
 export interface ChatMessage {
@@ -33,6 +35,7 @@ export interface SendMessagePayload {
   message: string;
   stream?: boolean;
   personaId?: string;
+  textProvider?: TextProviderType;
   isVoiceMode?: boolean;
   userContext?: {
     userName?: string;

@@ -3,4 +3,8 @@ export * from './text-provider.interface';
 export * from './voice-provider.interface';
 export * from './text-development.provider';
 export * from './voice-development.provider';
+export * from './gemini.provider';
+export * from './gemini-voice.provider';
+export * from './groq.provider';
+export * from './elevenlabs.provider';
 export * from './registry';
