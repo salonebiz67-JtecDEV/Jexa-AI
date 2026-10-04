@@ -64,6 +64,7 @@ export function useLiveVoice({
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const currentAudioUrlRef = useRef<string | null>(null);
 
   // Guard against starting multiple microphones concurrently
   const isStartingRef = useRef(false);
@@ -148,12 +149,13 @@ export function useLiveVoice({
       audioElementRef.current = null;
     }
 
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    if (currentAudioUrlRef.current && currentAudioUrlRef.current.startsWith('blob:')) {
       try {
-        window.speechSynthesis.cancel();
+        URL.revokeObjectURL(currentAudioUrlRef.current);
       } catch {
         // ignore
       }
+      currentAudioUrlRef.current = null;
     }
 
     if (processorRef.current) {
@@ -207,12 +209,13 @@ export function useLiveVoice({
           // ignore
         }
       }
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      if (currentAudioUrlRef.current && currentAudioUrlRef.current.startsWith('blob:')) {
         try {
-          window.speechSynthesis.cancel();
+          URL.revokeObjectURL(currentAudioUrlRef.current);
         } catch {
           // ignore
         }
+        currentAudioUrlRef.current = null;
       }
       setStatus('listening');
       setAiSpeakingPower(0);
@@ -284,8 +287,7 @@ export function useLiveVoice({
           return;
         }
 
-        // 1. Try Backend Speech Synthesis (Gemini TTS or ElevenLabs)
-        let backendAudioPlayed = false;
+        // Play Speech Synthesis using selected AI voice provider (Gemini or ElevenLabs)
         try {
           const voiceRes = await ApiClient.requestVoiceSynthesis({
             text: cleanSpokenText,
@@ -294,6 +296,7 @@ export function useLiveVoice({
           });
 
           if (voiceRes?.audioUrl) {
+            currentAudioUrlRef.current = voiceRes.audioUrl;
             const audio = new Audio(voiceRes.audioUrl);
             audioElementRef.current = audio;
 
@@ -303,6 +306,14 @@ export function useLiveVoice({
             };
 
             audio.onended = () => {
+              if (currentAudioUrlRef.current && currentAudioUrlRef.current.startsWith('blob:')) {
+                try {
+                  URL.revokeObjectURL(currentAudioUrlRef.current);
+                } catch {
+                  // ignore
+                }
+                currentAudioUrlRef.current = null;
+              }
               if (statusRef.current === 'speaking') {
                 setStatus('listening');
                 setAiSpeakingPower(0);
@@ -312,62 +323,38 @@ export function useLiveVoice({
             };
 
             audio.onerror = () => {
-              console.warn('[useLiveVoice] Backend audio playback error, falling back to browser synthesis.');
+              console.warn('[useLiveVoice] Audio playback failed on device.');
+              if (currentAudioUrlRef.current && currentAudioUrlRef.current.startsWith('blob:')) {
+                try {
+                  URL.revokeObjectURL(currentAudioUrlRef.current);
+                } catch {
+                  // ignore
+                }
+                currentAudioUrlRef.current = null;
+              }
               audioElementRef.current = null;
+              setStatus('error');
+              setErrorMessage('Audio was generated, but the device could not play it.');
             };
 
             await audio.play();
-            backendAudioPlayed = true;
+          } else {
+            setStatus('listening');
           }
         } catch (voiceErr: any) {
-          console.warn('[useLiveVoice] Backend voice synthesis failed, using client fallback:', voiceErr.message);
-        }
-
-        // 2. Fallback to Browser SpeechSynthesis if backend audio was not played
-        if (!backendAudioPlayed && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-          window.speechSynthesis.cancel();
-
-          const utterance = new SpeechSynthesisUtterance(cleanSpokenText);
-          utterance.rate = 1.05;
-          utterance.pitch = 1.0;
-
-          const voices = window.speechSynthesis.getVoices();
-          const preferredVoice = voices.find(
-            (v) =>
-              (v.name.includes('Natural') ||
-                v.name.includes('Neural') ||
-                v.name.includes('Google US') ||
-                v.name.includes('Samantha') ||
-                v.name.includes('en-US')) &&
-              v.lang.startsWith('en')
-          );
-          if (preferredVoice) {
-            utterance.voice = preferredVoice;
+          console.warn('[useLiveVoice] Backend voice synthesis failed:', voiceErr.message);
+          let friendlyError = voiceErr.message || 'Voice synthesis failed.';
+          if (activeVoiceProvider === 'gemini') {
+            friendlyError = 'Gemini voice is temporarily unavailable. Try ElevenLabs.';
+          } else if (activeVoiceProvider === 'elevenlabs') {
+            friendlyError = 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY.';
           }
-
-          utterance.onstart = () => {
-            setStatus('speaking');
-            setAiSpeakingPower(0.6);
-          };
-
-          utterance.onend = () => {
-            if (statusRef.current === 'speaking') {
-              setStatus('listening');
-              setAiSpeakingPower(0);
-              setLiveTranscript('');
-              resetIdleTimer();
-            }
-          };
-
-          utterance.onerror = (e) => {
-            console.warn('[useLiveVoice] Speech synthesis error:', e);
-            setStatus('listening');
-            setAiSpeakingPower(0);
-          };
-
-          window.speechSynthesis.speak(utterance);
-        } else if (!backendAudioPlayed) {
-          setStatus('listening');
+          setStatus('error');
+          setErrorMessage(friendlyError);
+          setDebugStats((prev) => ({
+            ...prev,
+            lastError: friendlyError,
+          }));
         }
       } catch (err: any) {
         console.error('[useLiveVoice] Voice turn error:', err);

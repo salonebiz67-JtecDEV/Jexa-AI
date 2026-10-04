@@ -12,6 +12,7 @@ import {
   HealthCheckResponse,
   TextProviderType,
   VoiceProviderType,
+  VoiceHealthResponse,
 } from '../../shared/types';
 
 // =========================================================================
@@ -40,6 +41,7 @@ export interface ProviderTestResult {
   message?: string;
   code?: string;
   error?: string;
+  audioUrl?: string;
 }
 
 export interface ProviderStatusSummary {
@@ -170,7 +172,7 @@ export const ApiClient = {
     });
   },
 
-  // Voice
+  // Voice Synthesis (handles binary audio Blob and JSON data URLs safely)
   async requestVoiceSynthesis(payload: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
     const cleanPayload: VoiceSynthesisRequest = {
       text: typeof payload?.text === 'string' ? payload.text : '',
@@ -179,10 +181,77 @@ export const ApiClient = {
       speed: payload?.speed,
       pitch: payload?.pitch,
     };
-    return fetchJson<VoiceSynthesisResponse>(`${API_BASE}/voice`, {
+
+    const res = await fetchWithTimeout(`${API_BASE}/voice`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'audio/*, application/json',
+      },
       body: JSON.stringify(cleanPayload),
     });
+
+    const contentType = res.headers.get('content-type') || '';
+
+    // Direct binary audio response (audio/mpeg, audio/wav, audio/pcm)
+    if (contentType.includes('audio/') || contentType.includes('application/octet-stream')) {
+      if (!res.ok) {
+        throw new ApiError(`Voice provider failed with status ${res.status}.`, res.status);
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      return {
+        audioUrl: objectUrl,
+        format: contentType.includes('mpeg') ? 'audio/mpeg' : 'audio/wav',
+        isSimulated: false,
+        message: 'Voice synthesized successfully.',
+        provider: payload.provider,
+      };
+    }
+
+    // JSON response (includes data URL or error)
+    const body: any = await res.json();
+    if (!res.ok || body.success === false) {
+      const errorMsg = body?.message || body?.error || `Voice synthesis failed (${res.status})`;
+      throw new ApiError(errorMsg, res.status, body?.code, body?.provider);
+    }
+    return (body.data !== undefined ? body.data : body) as VoiceSynthesisResponse;
+  },
+
+  async synthesizeBinaryAudio(payload: VoiceSynthesisRequest): Promise<Blob> {
+    const cleanPayload: VoiceSynthesisRequest = {
+      text: typeof payload?.text === 'string' ? payload.text : '',
+      voiceId: payload?.voiceId,
+      provider: payload?.provider,
+      speed: payload?.speed,
+      pitch: payload?.pitch,
+    };
+
+    const res = await fetchWithTimeout(`${API_BASE}/voice/synthesize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'audio/mpeg, audio/wav, audio/*',
+      },
+      body: JSON.stringify(cleanPayload),
+    });
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!res.ok || contentType.includes('application/json')) {
+      try {
+        const errJson = await res.json();
+        throw new ApiError(errJson.message || errJson.error || 'Voice synthesis failed', res.status, errJson.code, errJson.provider);
+      } catch (e: any) {
+        if (e instanceof ApiError) throw e;
+        throw new ApiError(`Voice provider returned error HTTP ${res.status}`, res.status);
+      }
+    }
+
+    return await res.blob();
+  },
+
+  async getVoiceHealth(): Promise<VoiceHealthResponse> {
+    return fetchJson<VoiceHealthResponse>(`${API_BASE}/voice/health`);
   },
 
   // Conversations
@@ -271,11 +340,18 @@ export const ApiClient = {
     });
   },
 
-  async testVoiceProvider(provider: VoiceProviderType): Promise<ProviderTestResult> {
-    return fetchJson<ProviderTestResult>(`${API_BASE}/providers/test-voice`, {
-      method: 'POST',
-      body: JSON.stringify({ provider }),
-    });
+  async testVoiceProvider(provider: VoiceProviderType, text?: string): Promise<ProviderTestResult> {
+    try {
+      return await fetchJson<ProviderTestResult>(`${API_BASE}/voice/test`, {
+        method: 'POST',
+        body: JSON.stringify({ provider, text }),
+      });
+    } catch {
+      return await fetchJson<ProviderTestResult>(`${API_BASE}/providers/test-voice`, {
+        method: 'POST',
+        body: JSON.stringify({ provider }),
+      });
+    }
   },
 
   // Health

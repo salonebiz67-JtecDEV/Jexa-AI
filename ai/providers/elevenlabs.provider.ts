@@ -112,6 +112,8 @@ export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
       const estimatedDuration = Math.max(1, Math.round(wordCount / 2.5));
 
       return {
+        audioBuffer: buffer,
+        contentType: 'audio/mpeg',
         audioUrl,
         format: 'audio/mpeg',
         durationSeconds: estimatedDuration,
@@ -140,46 +142,36 @@ export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
     throw new ProviderError('ElevenLabs audio transcription is not supported.', 'elevenlabs', 'UNSUPPORTED', 501);
   }
 
-  // Safe minimal credential check via /v1/user endpoint (consumes 0 voice characters)
-  public async testConnection(): Promise<{ success: boolean; latencyMs: number; model: string; error?: string }> {
+  // Real end-to-end voice test that verifies credentials and produces actual speech
+  public async testConnection(): Promise<{ success: boolean; latencyMs: number; model: string; audioUrl?: string; error?: string }> {
     if (!this.isConfigured || !this.apiKey) {
       return {
         success: false,
         latencyMs: 0,
         model: this.modelName,
-        error: 'ELEVENLABS_API_KEY is not configured on the backend server.',
+        error: 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY in Render environment.',
       };
     }
 
     const startTime = Date.now();
     try {
-      const response = await fetch('https://api.elevenlabs.io/v1/user', {
-        headers: {
-          'xi-api-key': this.apiKey,
-        },
+      const res = await this.synthesizeSpeech({
+        text: 'JEXA voice system online. ElevenLabs speech test successful.',
+        voiceId: 'aura',
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        return {
-          success: false,
-          latencyMs: Date.now() - startTime,
-          model: this.modelName,
-          error: `ElevenLabs verification failed (${response.status}): ${errorText}`,
-        };
-      }
-
       return {
-        success: true,
+        success: Boolean(res.audioUrl),
         latencyMs: Date.now() - startTime,
         model: this.modelName,
+        audioUrl: res.audioUrl,
       };
     } catch (err: any) {
       return {
         success: false,
         latencyMs: Date.now() - startTime,
         model: this.modelName,
-        error: err.message,
+        error: err.message || 'ElevenLabs speech generation failed.',
       };
     }
   }

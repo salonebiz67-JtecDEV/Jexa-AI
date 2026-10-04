@@ -48,6 +48,8 @@ export interface VoiceSynthesisRequest {
 }
 
 export interface VoiceSynthesisResponse {
+  audioBuffer?: any;
+  contentType?: string;
   audioUrl?: string;
   format?: 'audio/mpeg' | 'audio/wav' | 'browser_synthesis';
   durationSeconds?: number;
@@ -55,6 +57,19 @@ export interface VoiceSynthesisResponse {
   message: string;
   provider?: VoiceProviderType;
   model?: string;
+}
+
+export interface VoiceHealthResponse {
+  gemini: {
+    configured: boolean;
+    provider: 'gemini';
+    model?: string;
+  };
+  elevenlabs: {
+    configured: boolean;
+    provider: 'elevenlabs';
+    model?: string;
+  };
 }
 
 export class ProviderError extends Error {

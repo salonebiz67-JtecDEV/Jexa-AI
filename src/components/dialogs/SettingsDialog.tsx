@@ -25,6 +25,7 @@ import { useBrainSettings } from '../../hooks/useBrainSettings';
 import { TextProviderType, VoiceProviderType } from '../../../shared/types/provider';
 import { safeStorage } from '../../services/storage';
 import { ApiClient, ProviderTestResult } from '../../services/api.client';
+import { AudioPlayer } from '../../services/audioPlayer';
 
 import { LiveVoiceDebugStats } from '../../hooks/useLiveVoice';
 
@@ -62,12 +63,16 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     return 'gemini';
   });
 
-  // Provider testing state
+  // Text testing state
   const [testingText, setTestingText] = useState(false);
   const [textTestResult, setTextTestResult] = useState<ProviderTestResult | null>(null);
 
-  const [testingVoice, setTestingVoice] = useState(false);
-  const [voiceTestResult, setVoiceTestResult] = useState<ProviderTestResult | null>(null);
+  // Dedicated Voice Provider Testing
+  const [testingGeminiVoice, setTestingGeminiVoice] = useState(false);
+  const [geminiVoiceTestResult, setGeminiVoiceTestResult] = useState<ProviderTestResult | null>(null);
+
+  const [testingElevenLabsVoice, setTestingElevenLabsVoice] = useState(false);
+  const [elevenLabsVoiceTestResult, setElevenLabsVoiceTestResult] = useState<ProviderTestResult | null>(null);
 
   // Debug/Diagnostics panel toggle
   const [showDeveloperPanel, setShowDeveloperPanel] = useState(false);
@@ -123,21 +128,45 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     }
   };
 
-  const handleTestVoice = async () => {
-    setTestingVoice(true);
-    setVoiceTestResult(null);
+  const handleTestGeminiVoice = async () => {
+    setTestingGeminiVoice(true);
+    setGeminiVoiceTestResult(null);
     try {
-      const res = await ApiClient.testVoiceProvider(voiceProvider);
-      setVoiceTestResult(res);
+      const res = await ApiClient.testVoiceProvider('gemini');
+      setGeminiVoiceTestResult(res);
+      if (res.success && res.audioUrl) {
+        await AudioPlayer.playUrl(res.audioUrl);
+      }
       await refresh();
     } catch (err: any) {
-      setVoiceTestResult({
+      setGeminiVoiceTestResult({
         success: false,
-        provider: voiceProvider,
-        error: err.message || 'Voice test request failed.',
+        provider: 'gemini',
+        error: err.message || 'Gemini voice is temporarily unavailable. Try ElevenLabs.',
       });
     } finally {
-      setTestingVoice(false);
+      setTestingGeminiVoice(false);
+    }
+  };
+
+  const handleTestElevenLabsVoice = async () => {
+    setTestingElevenLabsVoice(true);
+    setElevenLabsVoiceTestResult(null);
+    try {
+      const res = await ApiClient.testVoiceProvider('elevenlabs');
+      setElevenLabsVoiceTestResult(res);
+      if (res.success && res.audioUrl) {
+        await AudioPlayer.playUrl(res.audioUrl);
+      }
+      await refresh();
+    } catch (err: any) {
+      setElevenLabsVoiceTestResult({
+        success: false,
+        provider: 'elevenlabs',
+        error: err.message || 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY.',
+      });
+    } finally {
+      setTestingElevenLabsVoice(false);
     }
   };
 
@@ -358,125 +387,178 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
             </div>
 
             {/* Provider Selection Cards */}
-            <div className="grid grid-cols-2 gap-3">
-              {/* Gemini Voice Card */}
-              <button
-                type="button"
-                onClick={() => {
-                  setVoiceProvider('gemini');
-                  setVoiceTestResult(null);
-                }}
-                className={`p-3 rounded-xl border text-left transition-all relative ${
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Google Gemini Card */}
+              <div
+                className={`p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between ${
                   voiceProvider === 'gemini'
                     ? 'border-emerald-500 bg-emerald-950/25 ring-1 ring-emerald-500/30'
                     : 'border-white/[0.07] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]'
                 }`}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
-                    <Sparkles className="w-3.5 h-3.5 text-teal-400" />
-                    <span>Gemini Live Voice</span>
+                <div
+                  className="cursor-pointer"
+                  onClick={() => setVoiceProvider('gemini')}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
+                      <Sparkles className="w-3.5 h-3.5 text-teal-400" />
+                      <span>Google Gemini</span>
+                    </div>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium ${
+                        geminiVoiceTestResult && !geminiVoiceTestResult.success
+                          ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                          : isGeminiVoiceConfigured
+                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                          : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          geminiVoiceTestResult && !geminiVoiceTestResult.success
+                            ? 'bg-rose-400'
+                            : isGeminiVoiceConfigured
+                            ? 'bg-emerald-400'
+                            : 'bg-amber-400'
+                        }`}
+                      />
+                      {geminiVoiceTestResult && !geminiVoiceTestResult.success
+                        ? 'Error'
+                        : isGeminiVoiceConfigured
+                        ? 'Connected'
+                        : 'Not configured'}
+                    </span>
                   </div>
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      isGeminiVoiceConfigured ? 'bg-emerald-400 ring-2 ring-emerald-400/20' : 'bg-amber-400'
-                    }`}
-                  />
+                  <div className="text-[10px] font-mono text-teal-400/80 mb-1">
+                    {geminiVoiceDetail?.model || 'gemini-3.8-flash-lite-tts'}
+                  </div>
+                  <div className="text-[10px] text-slate-400 leading-tight mb-3">
+                    Google GenAI native neural speech synthesis (Aura / Aoede)
+                  </div>
                 </div>
-                <div className="text-[10px] font-mono text-teal-400/80 mb-1">
-                  {geminiVoiceDetail?.model || 'gemini-3.8-flash-lite-tts'}
-                </div>
-                <div className="text-[10px] text-slate-400 leading-tight">
-                  Google GenAI native neural speech
-                </div>
-                <div className="mt-2.5 pt-2 border-t border-white/[0.06] flex items-center justify-between">
-                  <span className="text-[9px] text-slate-500">Status</span>
-                  <span
-                    className={`text-[9px] font-medium ${
-                      isGeminiVoiceConfigured ? 'text-emerald-400' : 'text-amber-400'
-                    }`}
+
+                {/* Test Gemini Voice Action */}
+                <div className="pt-2 border-t border-white/[0.06] space-y-1.5">
+                  <button
+                    type="button"
+                    onClick={handleTestGeminiVoice}
+                    disabled={testingGeminiVoice}
+                    className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-[11px] font-medium text-slate-200 transition-all disabled:opacity-50"
                   >
-                    {isGeminiVoiceConfigured ? 'Connected' : 'Not configured'}
-                  </span>
+                    <Play className="w-3 h-3 text-teal-400" />
+                    <span>{testingGeminiVoice ? 'Testing...' : 'Test Gemini Voice'}</span>
+                  </button>
+
+                  {geminiVoiceTestResult && (
+                    <div
+                      className={`text-[10px] font-medium flex items-center gap-1 ${
+                        geminiVoiceTestResult.success ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {geminiVoiceTestResult.success ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">Voice generated successfully ({geminiVoiceTestResult.latencyMs}ms)</span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate" title={geminiVoiceTestResult.error}>
+                            Error: {geminiVoiceTestResult.error}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </button>
+              </div>
 
               {/* ElevenLabs Card */}
-              <button
-                type="button"
-                onClick={() => {
-                  setVoiceProvider('elevenlabs');
-                  setVoiceTestResult(null);
-                }}
-                className={`p-3 rounded-xl border text-left transition-all relative ${
+              <div
+                className={`p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between ${
                   voiceProvider === 'elevenlabs'
                     ? 'border-emerald-500 bg-emerald-950/25 ring-1 ring-emerald-500/30'
                     : 'border-white/[0.07] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]'
                 }`}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
-                    <Mic className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>ElevenLabs</span>
-                  </div>
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      isElevenLabsConfigured ? 'bg-emerald-400 ring-2 ring-emerald-400/20' : 'bg-amber-400'
-                    }`}
-                  />
-                </div>
-                <div className="text-[10px] font-mono text-indigo-400/80 mb-1">
-                  {elevenLabsDetail?.model || 'eleven_multilingual_v2'}
-                </div>
-                <div className="text-[10px] text-slate-400 leading-tight">
-                  Emotive human-grade speech synthesis
-                </div>
-                <div className="mt-2.5 pt-2 border-t border-white/[0.06] flex items-center justify-between">
-                  <span className="text-[9px] text-slate-500">Status</span>
-                  <span
-                    className={`text-[9px] font-medium ${
-                      isElevenLabsConfigured ? 'text-emerald-400' : 'text-amber-400'
-                    }`}
-                  >
-                    {isElevenLabsConfigured ? 'Connected' : 'Not configured'}
-                  </span>
-                </div>
-              </button>
-            </div>
-
-            {/* Test Voice Provider Button & Result */}
-            <div className="flex items-center justify-between pt-1">
-              <button
-                type="button"
-                onClick={handleTestVoice}
-                disabled={testingVoice}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-xs font-medium text-slate-200 transition-all disabled:opacity-50"
-              >
-                <Play className="w-3 h-3 text-teal-400" />
-                <span>{testingVoice ? 'Testing Voice...' : `Test ${voiceProvider === 'elevenlabs' ? 'ElevenLabs' : 'Gemini'} Voice`}</span>
-              </button>
-
-              {voiceTestResult && (
                 <div
-                  className={`text-[10px] font-medium flex items-center gap-1 ${
-                    voiceTestResult.success ? 'text-emerald-400' : 'text-rose-400'
-                  }`}
+                  className="cursor-pointer"
+                  onClick={() => setVoiceProvider('elevenlabs')}
                 >
-                  {voiceTestResult.success ? (
-                    <>
-                      <Check className="w-3.5 h-3.5" />
-                      <span>{voiceTestResult.model} Connected ({voiceTestResult.latencyMs}ms)</span>
-                    </>
-                  ) : (
-                    <>
-                      <AlertCircle className="w-3.5 h-3.5" />
-                      <span className="truncate max-w-[200px]" title={voiceTestResult.error}>
-                        {voiceTestResult.code || 'Unavailable'}: {voiceTestResult.error}
-                      </span>
-                    </>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
+                      <Mic className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>ElevenLabs</span>
+                    </div>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium ${
+                        elevenLabsVoiceTestResult && !elevenLabsVoiceTestResult.success
+                          ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                          : isElevenLabsConfigured
+                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                          : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          elevenLabsVoiceTestResult && !elevenLabsVoiceTestResult.success
+                            ? 'bg-rose-400'
+                            : isElevenLabsConfigured
+                            ? 'bg-emerald-400'
+                            : 'bg-amber-400'
+                        }`}
+                      />
+                      {elevenLabsVoiceTestResult && !elevenLabsVoiceTestResult.success
+                        ? 'Error'
+                        : isElevenLabsConfigured
+                        ? 'Connected'
+                        : 'Not configured'}
+                    </span>
+                  </div>
+                  <div className="text-[10px] font-mono text-indigo-400/80 mb-1">
+                    {elevenLabsDetail?.model || 'eleven_multilingual_v2'}
+                  </div>
+                  <div className="text-[10px] text-slate-400 leading-tight mb-3">
+                    Emotive human-grade speech synthesis (Rachel / Multilingual)
+                  </div>
+                </div>
+
+                {/* Test ElevenLabs Voice Action */}
+                <div className="pt-2 border-t border-white/[0.06] space-y-1.5">
+                  <button
+                    type="button"
+                    onClick={handleTestElevenLabsVoice}
+                    disabled={testingElevenLabsVoice}
+                    className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-[11px] font-medium text-slate-200 transition-all disabled:opacity-50"
+                  >
+                    <Play className="w-3 h-3 text-indigo-400" />
+                    <span>{testingElevenLabsVoice ? 'Testing...' : 'Test ElevenLabs Voice'}</span>
+                  </button>
+
+                  {elevenLabsVoiceTestResult && (
+                    <div
+                      className={`text-[10px] font-medium flex items-center gap-1 ${
+                        elevenLabsVoiceTestResult.success ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {elevenLabsVoiceTestResult.success ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">Voice generated successfully ({elevenLabsVoiceTestResult.latencyMs}ms)</span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate" title={elevenLabsVoiceTestResult.error}>
+                            Error: {elevenLabsVoiceTestResult.error}
+                          </span>
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
+              </div>
             </div>
           </div>
 
@@ -484,26 +566,43 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           {/* SECTION 3: VOICE PERSONA / PROFILE PRESET                      */}
           {/* ============================================================== */}
           <div className="space-y-2 pt-3 border-t border-white/[0.06]">
-            <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
-              Voice Persona
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                Voice Persona
+              </label>
+              <span className="text-[9px] text-slate-500 font-mono">
+                Mapped to {voiceProvider === 'elevenlabs' ? 'ElevenLabs' : 'Gemini'}
+              </span>
+            </div>
             <div className="grid grid-cols-3 gap-2">
               {[
-                { id: 'aura', name: 'Aura', desc: 'Serene & Warm' },
-                { id: 'atlas', name: 'Atlas', desc: 'Direct & Crisp' },
-                { id: 'lyra', name: 'Lyra', desc: 'Bright & Expressive' },
+                {
+                  id: 'aura',
+                  name: 'Aura',
+                  desc: voiceProvider === 'elevenlabs' ? 'Rachel • Warm' : 'Aoede • Serene',
+                },
+                {
+                  id: 'atlas',
+                  name: 'Atlas',
+                  desc: voiceProvider === 'elevenlabs' ? 'Adam • Crisp' : 'Fenrir • Direct',
+                },
+                {
+                  id: 'lyra',
+                  name: 'Lyra',
+                  desc: voiceProvider === 'elevenlabs' ? 'Bella • Expressive' : 'Kore • Bright',
+                },
               ].map((v) => (
                 <button
                   key={v.id}
                   onClick={() => setVoiceName(v.id)}
-                  className={`p-2 rounded-xl border text-left transition-all ${
+                  className={`p-2.5 rounded-xl border text-left transition-all ${
                     voiceName === v.id
-                      ? 'border-emerald-500 bg-emerald-950/20 text-white'
-                      : 'border-white/[0.06] text-slate-400 hover:text-slate-200'
+                      ? 'border-emerald-500 bg-emerald-950/25 text-white ring-1 ring-emerald-500/20'
+                      : 'border-white/[0.06] text-slate-400 hover:text-slate-200 bg-white/[0.02]'
                   }`}
                 >
-                  <div className="font-semibold text-xs text-white">{v.name}</div>
-                  <div className="text-[10px] text-slate-400">{v.desc}</div>
+                  <div className="font-semibold text-xs text-white mb-0.5">{v.name}</div>
+                  <div className="text-[10px] text-slate-400 leading-tight">{v.desc}</div>
                 </button>
               ))}
             </div>
@@ -606,16 +705,30 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   {/* 8. Last Provider Error */}
                   <div className="bg-white/[0.03] p-2 rounded-lg border border-white/[0.04]">
                     <span className="text-slate-500 block mb-0.5">Last Provider Error</span>
-                    <p
-                      className={`truncate font-semibold ${
-                        liveDebugStats?.lastError || textTestResult?.error || voiceTestResult?.error
-                          ? 'text-rose-400'
-                          : 'text-slate-400'
-                      }`}
-                      title={liveDebugStats?.lastError || textTestResult?.error || voiceTestResult?.error || 'None'}
-                    >
-                      {liveDebugStats?.lastError || textTestResult?.error || voiceTestResult?.error || 'None'}
-                    </p>
+                    {(() => {
+                      const activeVoiceTestError =
+                        voiceProvider === 'gemini'
+                          ? geminiVoiceTestResult?.error
+                          : elevenLabsVoiceTestResult?.error;
+                      const displayError =
+                        liveDebugStats?.lastError ||
+                        textTestResult?.error ||
+                        activeVoiceTestError ||
+                        geminiVoiceTestResult?.error ||
+                        elevenLabsVoiceTestResult?.error ||
+                        'None';
+                      const hasError = displayError !== 'None';
+                      return (
+                        <p
+                          className={`truncate font-semibold ${
+                            hasError ? 'text-rose-400' : 'text-slate-400'
+                          }`}
+                          title={displayError}
+                        >
+                          {displayError}
+                        </p>
+                      );
+                    })()}
                   </div>
                 </div>
 

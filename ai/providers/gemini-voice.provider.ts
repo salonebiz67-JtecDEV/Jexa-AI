@@ -129,6 +129,8 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       const durationSeconds = Math.round(pcmCombined.length / (24000 * 2));
 
       return {
+        audioBuffer: wavBuffer,
+        contentType: 'audio/wav',
         audioUrl,
         format: 'audio/wav',
         durationSeconds: Math.max(1, durationSeconds),
@@ -204,7 +206,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
     }
   }
 
-  public async testConnection(): Promise<{ success: boolean; latencyMs: number; model: string; error?: string }> {
+  public async testConnection(): Promise<{ success: boolean; latencyMs: number; model: string; audioUrl?: string; error?: string }> {
     if (!this.ai || !this.isConfigured) {
       return {
         success: false,
@@ -217,7 +219,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
     const startTime = Date.now();
     try {
       const res = await this.synthesizeSpeech({
-        text: 'Ready',
+        text: 'JEXA voice system online. Gemini neural speech test successful.',
         voiceId: 'aura',
       });
 
@@ -225,6 +227,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         success: Boolean(res.audioUrl),
         latencyMs: Date.now() - startTime,
         model: this.modelName,
+        audioUrl: res.audioUrl,
       };
     } catch (err: any) {
       return {

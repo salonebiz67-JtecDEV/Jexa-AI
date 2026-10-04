@@ -17,6 +17,9 @@ import { PWAInstallBanner } from '../components/common/PWAInstallBanner';
 import { OfflineIndicator } from '../components/common/OfflineIndicator';
 import { useChat } from '../hooks/useChat';
 import { useLiveVoice } from '../hooks/useLiveVoice';
+import { AudioPlayer } from '../services/audioPlayer';
+import { safeStorage } from '../services/storage';
+import { ApiClient } from '../services/api.client';
 import { Project, ImageItem, ScheduleItem, PluginItem, RemoteDevice } from '../../shared/types';
 import cyberLandscapeImg from '../assets/images/image_cyber_landscape_1790783143139.jpg';
 import abstractNeuralImg from '../assets/images/image_abstract_neural_1790783155459.jpg';
@@ -341,13 +344,37 @@ export const ChatPage: React.FC = () => {
     );
   };
 
-  // Message Actions
-  const handleSpeak = (text: string) => {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const clean = text.replace(/[*#`_\[\]]/g, '');
-      const utterance = new SpeechSynthesisUtterance(clean);
-      window.speechSynthesis.speak(utterance);
+  // Real AI Voice synthesis using selected Voice Provider (Gemini Neural TTS or ElevenLabs)
+  const handleSpeak = async (text: string) => {
+    if (AudioPlayer.isPlaying) {
+      AudioPlayer.stop();
+      return;
+    }
+
+    const activeVoiceProvider =
+      (safeStorage.getItem('jexa_voice_provider') as any) || 'gemini';
+    const activeVoiceName =
+      safeStorage.getItem('jexa_voice_name') || 'aura';
+
+    const cleanText = text
+      .replace(/[*#`_\[\]()]/g, '')
+      .replace(/https?:\/\/\S+/g, '')
+      .trim();
+
+    if (!cleanText) return;
+
+    try {
+      const voiceRes = await ApiClient.requestVoiceSynthesis({
+        text: cleanText,
+        voiceId: activeVoiceName,
+        provider: activeVoiceProvider,
+      });
+
+      if (voiceRes?.audioUrl) {
+        await AudioPlayer.playUrl(voiceRes.audioUrl);
+      }
+    } catch (err: any) {
+      console.warn('[ChatPage] Real AI voice playback error:', err.message);
     }
   };
 

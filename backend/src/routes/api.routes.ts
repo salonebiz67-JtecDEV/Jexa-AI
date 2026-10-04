@@ -12,6 +12,9 @@ const router = Router();
 // Chat & Voice
 router.post('/chat', ChatController.sendMessage);
 router.post('/voice', VoiceController.handleVoice);
+router.post('/voice/synthesize', VoiceController.handleVoice);
+router.get('/voice/health', VoiceController.getHealth);
+router.post('/voice/test', VoiceController.testVoice);
 
 // Provider Status & Testing
 router.get('/providers/status', ProviderController.getStatus);
