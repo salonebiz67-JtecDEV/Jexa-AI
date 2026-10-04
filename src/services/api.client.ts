@@ -13,6 +13,7 @@ import {
   TextProviderType,
   VoiceProviderType,
   VoiceHealthResponse,
+  ProviderHealthStatus,
 } from '../../shared/types';
 
 // =========================================================================
@@ -37,9 +38,11 @@ export interface ProviderTestResult {
   success: boolean;
   provider: string;
   model?: string;
+  voiceId?: string;
   latencyMs?: number;
   message?: string;
   code?: string;
+  status?: ProviderHealthStatus;
   error?: string;
   audioUrl?: string;
 }
@@ -49,11 +52,20 @@ export interface ProviderStatusSummary {
     provider: string;
     model: string;
     configured: boolean;
+    status?: ProviderHealthStatus;
+    error?: string;
   };
   voice: {
     provider: string;
     model: string;
     configured: boolean;
+    voiceId?: string;
+    status?: ProviderHealthStatus;
+    error?: string;
+    lastSuccessfulTest?: {
+      timestamp: string;
+      latencyMs: number;
+    };
   };
   availableText?: Array<{
     type: string;
@@ -61,13 +73,22 @@ export interface ProviderStatusSummary {
     isConfigured: boolean;
     model: string;
     description?: string;
+    status: ProviderHealthStatus;
+    error?: string;
   }>;
   availableVoice?: Array<{
     type: string;
     name: string;
     isConfigured: boolean;
     model: string;
+    voiceId?: string;
     description?: string;
+    status: ProviderHealthStatus;
+    error?: string;
+    lastSuccessfulTest?: {
+      timestamp: string;
+      latencyMs: number;
+    };
   }>;
 }
 
@@ -337,6 +358,16 @@ export const ApiClient = {
     return fetchJson<ProviderTestResult>(`${API_BASE}/providers/test-text`, {
       method: 'POST',
       body: JSON.stringify({ provider }),
+    });
+  },
+
+  async selectProviders(selection: {
+    textProvider?: TextProviderType;
+    voiceProvider?: VoiceProviderType;
+  }): Promise<{ success: boolean; data: any }> {
+    return fetchJson<{ success: boolean; data: any }>(`${API_BASE}/providers/select`, {
+      method: 'POST',
+      body: JSON.stringify(selection),
     });
   },
 

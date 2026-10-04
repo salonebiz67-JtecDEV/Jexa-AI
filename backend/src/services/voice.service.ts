@@ -24,9 +24,9 @@ export class VoiceService {
     if (!targetProviderType) {
       try {
         const profile = await DatabaseService.getBrainProfile();
-        targetProviderType = profile.selectedVoiceProvider || 'gemini';
+        targetProviderType = profile.selectedVoiceProvider || registry.getDefaultVoiceType();
       } catch {
-        targetProviderType = 'gemini';
+        targetProviderType = registry.getDefaultVoiceType();
       }
     }
 

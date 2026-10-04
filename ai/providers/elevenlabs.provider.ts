@@ -1,5 +1,11 @@
 import { IVoiceAIProvider, AudioTranscriptionRequest, AudioTranscriptionResponse } from './voice-provider.interface';
-import { VoiceProviderType, VoiceSynthesisRequest, VoiceSynthesisResponse, ProviderError } from '../../shared/types/provider';
+import {
+  VoiceProviderType,
+  VoiceSynthesisRequest,
+  VoiceSynthesisResponse,
+  ProviderError,
+  ProviderHealthStatus,
+} from '../../shared/types/provider';
 
 export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
   public readonly providerType: VoiceProviderType = 'elevenlabs';
@@ -8,6 +14,9 @@ export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
   public readonly isConfigured: boolean;
   public readonly defaultVoiceId: string;
   public lastError?: string;
+  public lastErrorCode?: string;
+  public hasSuccessfulTest: boolean = false;
+  public lastSuccessfulTest?: { timestamp: string; latencyMs: number };
 
   constructor() {
     this.apiKey = (process.env.ELEVENLABS_API_KEY || '').trim();
@@ -20,6 +29,17 @@ export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
     } else {
       console.warn('[ElevenLabsVoiceAIProvider] ELEVENLABS_API_KEY is not set. ElevenLabs voice will not be available until configured.');
     }
+  }
+
+  public getStatus(): ProviderHealthStatus {
+    if (!this.isConfigured || !this.apiKey) return 'NOT_CONFIGURED';
+    if (this.lastErrorCode === 'PAYMENT_REQUIRED') return 'PAYMENT_REQUIRED';
+    if (this.lastErrorCode === 'AUTHENTICATION_ERROR') return 'AUTHENTICATION_ERROR';
+    if (this.lastErrorCode === 'MODEL_NOT_FOUND') return 'MODEL_NOT_FOUND';
+    if (this.lastErrorCode === 'QUOTA_EXHAUSTED') return 'QUOTA_EXHAUSTED';
+    if (this.hasSuccessfulTest) return 'CONNECTED';
+    if (this.lastError) return 'UNAVAILABLE';
+    return 'UNAVAILABLE';
   }
 
   public async synthesizeSpeech(request: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
@@ -53,6 +73,7 @@ export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
       ? voiceMap[request.voiceId.toLowerCase()] || request.voiceId
       : this.defaultVoiceId;
 
+    const startTime = Date.now();
     try {
       const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${targetVoiceId}`, {
         method: 'POST',
@@ -73,31 +94,92 @@ export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        this.lastError = errorText;
+        let errorText = '';
+        let errorJson: any = null;
+        try {
+          errorText = await response.text();
+          errorJson = JSON.parse(errorText);
+        } catch {
+          errorJson = null;
+        }
 
-        if (response.status === 401) {
+        console.error(`[ElevenLabsVoiceAIProvider] API returned HTTP ${response.status}:`, errorText);
+        const detailStatus = errorJson?.detail?.status || errorJson?.detail?.code || '';
+        const detailMsg = errorJson?.detail?.message || (typeof errorJson?.detail === 'string' ? errorJson.detail : errorText);
+
+        if (
+          response.status === 402 ||
+          detailStatus === 'voice_not_accessible_on_free_tier' ||
+          detailStatus === 'payment_required' ||
+          errorText.includes('payment_required') ||
+          errorText.includes('voice_not_accessible_on_free_tier') ||
+          errorText.includes('subscription')
+        ) {
+          this.lastErrorCode = 'PAYMENT_REQUIRED';
+          this.lastError = 'This ElevenLabs voice requires a paid plan.';
           throw new ProviderError(
-            'Invalid ElevenLabs API key. Please check ELEVENLABS_API_KEY in your Render environment.',
+            'This ElevenLabs voice requires a paid plan.',
+            'elevenlabs',
+            'PAYMENT_REQUIRED',
+            402,
+            this.modelName
+          );
+        }
+
+        if (response.status === 401 || response.status === 403) {
+          this.lastErrorCode = 'AUTHENTICATION_ERROR';
+          this.lastError = 'Provider authentication or permission failed.';
+          throw new ProviderError(
+            'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY in Render environment.',
             'elevenlabs',
             'AUTHENTICATION_ERROR',
             401,
             this.modelName
           );
-        } else if (response.status === 404) {
+        }
+
+        if (response.status === 404) {
+          this.lastErrorCode = 'MODEL_NOT_FOUND';
+          this.lastError = 'The selected model or voice was not found.';
           throw new ProviderError(
-            `ElevenLabs Voice ID '${targetVoiceId}' or model was not found. Please verify ELEVENLABS_VOICE_ID.`,
+            `The selected ElevenLabs voice '${targetVoiceId}' or model was not found.`,
             'elevenlabs',
-            'VOICE_NOT_FOUND',
+            'MODEL_NOT_FOUND',
             404,
             this.modelName
           );
         }
 
+        if (response.status === 429) {
+          this.lastErrorCode = 'QUOTA_EXHAUSTED';
+          this.lastError = 'ElevenLabs quota or rate limit reached.';
+          throw new ProviderError(
+            'ElevenLabs quota or rate limit reached. Try again later.',
+            'elevenlabs',
+            'QUOTA_EXHAUSTED',
+            429,
+            this.modelName
+          );
+        }
+
+        if (response.status === 503 || response.status === 502) {
+          this.lastErrorCode = 'UNAVAILABLE';
+          this.lastError = 'The provider is temporarily unavailable.';
+          throw new ProviderError(
+            'The provider is temporarily unavailable.',
+            'elevenlabs',
+            'UNAVAILABLE',
+            503,
+            this.modelName
+          );
+        }
+
+        this.lastErrorCode = 'UNAVAILABLE';
+        this.lastError = detailMsg || 'ElevenLabs speech generation failed.';
         throw new ProviderError(
-          `ElevenLabs API error (${response.status}): ${errorText}`,
+          detailMsg || `ElevenLabs API error (${response.status})`,
           'elevenlabs',
-          'PROVIDER_ERROR',
+          'UNAVAILABLE',
           response.status,
           this.modelName
         );
@@ -110,6 +192,16 @@ export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
 
       const wordCount = cleanText.split(/\s+/).length;
       const estimatedDuration = Math.max(1, Math.round(wordCount / 2.5));
+      const latencyMs = Date.now() - startTime;
+
+      // Real test success confirmed
+      this.hasSuccessfulTest = true;
+      this.lastSuccessfulTest = {
+        timestamp: new Date().toISOString(),
+        latencyMs,
+      };
+      this.lastErrorCode = undefined;
+      this.lastError = undefined;
 
       return {
         audioBuffer: buffer,
@@ -124,10 +216,11 @@ export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
       };
     } catch (error: any) {
       console.error('[ElevenLabsVoiceAIProvider] Speech synthesis failed:', error);
-      this.lastError = error.message;
       if (error instanceof ProviderError) {
         throw error;
       }
+      this.lastErrorCode = 'UNAVAILABLE';
+      this.lastError = error.message || 'ElevenLabs speech synthesis failed.';
       throw new ProviderError(
         error.message || 'ElevenLabs speech synthesis failed.',
         'elevenlabs',
@@ -143,12 +236,25 @@ export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
   }
 
   // Real end-to-end voice test that verifies credentials and produces actual speech
-  public async testConnection(): Promise<{ success: boolean; latencyMs: number; model: string; audioUrl?: string; error?: string }> {
+  public async testConnection(): Promise<{
+    success: boolean;
+    latencyMs: number;
+    model: string;
+    voiceId: string;
+    audioUrl?: string;
+    code?: string;
+    status: ProviderHealthStatus;
+    error?: string;
+    message?: string;
+  }> {
     if (!this.isConfigured || !this.apiKey) {
       return {
         success: false,
         latencyMs: 0,
         model: this.modelName,
+        voiceId: this.defaultVoiceId,
+        code: 'NOT_CONFIGURED',
+        status: 'NOT_CONFIGURED',
         error: 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY in Render environment.',
       };
     }
@@ -157,20 +263,30 @@ export class ElevenLabsVoiceAIProvider implements IVoiceAIProvider {
     try {
       const res = await this.synthesizeSpeech({
         text: 'JEXA voice system online. ElevenLabs speech test successful.',
-        voiceId: 'aura',
+        voiceId: this.defaultVoiceId,
       });
 
+      const latencyMs = Date.now() - startTime;
       return {
         success: Boolean(res.audioUrl),
-        latencyMs: Date.now() - startTime,
+        latencyMs,
         model: this.modelName,
+        voiceId: this.defaultVoiceId,
         audioUrl: res.audioUrl,
+        code: 'CONNECTED',
+        status: 'CONNECTED',
+        message: 'Voice generated successfully',
       };
     } catch (err: any) {
+      const latencyMs = Date.now() - startTime;
+      const status = this.getStatus();
       return {
         success: false,
-        latencyMs: Date.now() - startTime,
+        latencyMs,
         model: this.modelName,
+        voiceId: this.defaultVoiceId,
+        code: err.code || 'UNAVAILABLE',
+        status,
         error: err.message || 'ElevenLabs speech generation failed.',
       };
     }

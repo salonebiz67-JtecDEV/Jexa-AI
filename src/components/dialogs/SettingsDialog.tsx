@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useBrainSettings } from '../../hooks/useBrainSettings';
-import { TextProviderType, VoiceProviderType } from '../../../shared/types/provider';
+import { TextProviderType, VoiceProviderType, ProviderHealthStatus } from '../../../shared/types/provider';
 import { safeStorage } from '../../services/storage';
 import { ApiClient, ProviderTestResult } from '../../services/api.client';
 import { AudioPlayer } from '../../services/audioPlayer';
@@ -64,8 +64,11 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   });
 
   // Text testing state
-  const [testingText, setTestingText] = useState(false);
-  const [textTestResult, setTextTestResult] = useState<ProviderTestResult | null>(null);
+  const [testingGeminiText, setTestingGeminiText] = useState(false);
+  const [geminiTextTestResult, setGeminiTextTestResult] = useState<ProviderTestResult | null>(null);
+
+  const [testingGroqText, setTestingGroqText] = useState(false);
+  const [groqTextTestResult, setGroqTextTestResult] = useState<ProviderTestResult | null>(null);
 
   // Dedicated Voice Provider Testing
   const [testingGeminiVoice, setTestingGeminiVoice] = useState(false);
@@ -110,21 +113,63 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     }
   };
 
-  const handleTestText = async () => {
-    setTestingText(true);
-    setTextTestResult(null);
+  const handleSelectTextProvider = async (provider: TextProviderType) => {
+    setTextProvider(provider);
+    safeStorage.setItem('jexa_text_provider', provider);
     try {
-      const res = await ApiClient.testTextProvider(textProvider);
-      setTextTestResult(res);
+      await ApiClient.selectProviders({ textProvider: provider });
+    } catch (err: any) {
+      console.warn('[SettingsDialog] Failed to persist text provider selection:', err.message);
+    }
+  };
+
+  const handleSelectVoiceProvider = async (provider: VoiceProviderType) => {
+    setVoiceProvider(provider);
+    safeStorage.setItem('jexa_voice_provider', provider);
+    try {
+      await ApiClient.selectProviders({ voiceProvider: provider });
+    } catch (err: any) {
+      console.warn('[SettingsDialog] Failed to persist voice provider selection:', err.message);
+    }
+  };
+
+  const handleTestGeminiText = async () => {
+    setTestingGeminiText(true);
+    setGeminiTextTestResult(null);
+    try {
+      const res = await ApiClient.testTextProvider('gemini');
+      setGeminiTextTestResult(res);
       await refresh();
     } catch (err: any) {
-      setTextTestResult({
+      setGeminiTextTestResult({
         success: false,
-        provider: textProvider,
-        error: err.message || 'Test request failed.',
+        provider: 'gemini',
+        code: err.code || 'UNAVAILABLE',
+        status: err.code || 'UNAVAILABLE',
+        error: err.message || 'Gemini text connection failed.',
       });
     } finally {
-      setTestingText(false);
+      setTestingGeminiText(false);
+    }
+  };
+
+  const handleTestGroqText = async () => {
+    setTestingGroqText(true);
+    setGroqTextTestResult(null);
+    try {
+      const res = await ApiClient.testTextProvider('groq');
+      setGroqTextTestResult(res);
+      await refresh();
+    } catch (err: any) {
+      setGroqTextTestResult({
+        success: false,
+        provider: 'groq',
+        code: err.code || 'UNAVAILABLE',
+        status: err.code || 'UNAVAILABLE',
+        error: err.message || 'Groq text connection failed.',
+      });
+    } finally {
+      setTestingGroqText(false);
     }
   };
 
@@ -135,14 +180,23 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
       const res = await ApiClient.testVoiceProvider('gemini');
       setGeminiVoiceTestResult(res);
       if (res.success && res.audioUrl) {
-        await AudioPlayer.playUrl(res.audioUrl);
+        try {
+          await AudioPlayer.playUrl(res.audioUrl);
+        } catch (audioErr) {
+          console.warn('[SettingsDialog] Test audio playback error:', audioErr);
+        }
       }
       await refresh();
     } catch (err: any) {
+      const isQuota = err.status === 429 || err.code === 'QUOTA_EXHAUSTED' || err.message?.includes('quota');
       setGeminiVoiceTestResult({
         success: false,
         provider: 'gemini',
-        error: err.message || 'Gemini voice is temporarily unavailable. Try ElevenLabs.',
+        code: isQuota ? 'QUOTA_EXHAUSTED' : err.code || 'UNAVAILABLE',
+        status: isQuota ? 'QUOTA_EXHAUSTED' : err.code || 'UNAVAILABLE',
+        error: isQuota
+          ? 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.'
+          : err.message || 'Gemini Voice is temporarily unavailable. Try ElevenLabs.',
       });
     } finally {
       setTestingGeminiVoice(false);
@@ -156,14 +210,23 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
       const res = await ApiClient.testVoiceProvider('elevenlabs');
       setElevenLabsVoiceTestResult(res);
       if (res.success && res.audioUrl) {
-        await AudioPlayer.playUrl(res.audioUrl);
+        try {
+          await AudioPlayer.playUrl(res.audioUrl);
+        } catch (audioErr) {
+          console.warn('[SettingsDialog] Test audio playback error:', audioErr);
+        }
       }
       await refresh();
     } catch (err: any) {
+      const is402 = err.status === 402 || err.code === 'PAYMENT_REQUIRED';
       setElevenLabsVoiceTestResult({
         success: false,
         provider: 'elevenlabs',
-        error: err.message || 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY.',
+        code: is402 ? 'PAYMENT_REQUIRED' : err.code || 'UNAVAILABLE',
+        status: is402 ? 'PAYMENT_REQUIRED' : err.code || 'UNAVAILABLE',
+        error: is402
+          ? 'This ElevenLabs voice requires a paid plan.'
+          : err.message || 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY in Render environment.',
       });
     } finally {
       setTestingElevenLabsVoice(false);
@@ -178,6 +241,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     safeStorage.setItem('jexa_voice_name', voiceName);
 
     try {
+      await ApiClient.selectProviders({ textProvider, voiceProvider });
       await updateSettings({
         selectedTextProvider: textProvider,
         selectedVoiceProvider: voiceProvider,
@@ -211,6 +275,80 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   const isGeminiVoiceConfigured = geminiVoiceDetail?.isConfigured ?? true;
   const isElevenLabsConfigured = elevenLabsDetail?.isConfigured ?? false;
+
+  // Resolved statuses matching exact user requirements:
+  // CONNECTED | UNAVAILABLE | QUOTA_EXHAUSTED | AUTHENTICATION_ERROR | PAYMENT_REQUIRED | MODEL_NOT_FOUND | NOT_CONFIGURED
+  const geminiTextStatus: ProviderHealthStatus = geminiTextTestResult
+    ? (geminiTextTestResult.status || (geminiTextTestResult.success ? 'CONNECTED' : (geminiTextTestResult.code as ProviderHealthStatus) || 'UNAVAILABLE'))
+    : (geminiTextDetail?.status || (isGeminiTextConfigured ? 'CONNECTED' : 'NOT_CONFIGURED'));
+
+  const groqTextStatus: ProviderHealthStatus = groqTextTestResult
+    ? (groqTextTestResult.status || (groqTextTestResult.success ? 'CONNECTED' : (groqTextTestResult.code as ProviderHealthStatus) || 'UNAVAILABLE'))
+    : (groqTextDetail?.status || (isGroqConfigured ? 'CONNECTED' : 'NOT_CONFIGURED'));
+
+  // Voice providers: do NOT show "CONNECTED" merely because API key exists! Only after real successful test
+  const geminiVoiceStatus: ProviderHealthStatus = geminiVoiceTestResult
+    ? (geminiVoiceTestResult.status || (geminiVoiceTestResult.success ? 'CONNECTED' : (geminiVoiceTestResult.code as ProviderHealthStatus) || 'UNAVAILABLE'))
+    : (geminiVoiceDetail?.status || (isGeminiVoiceConfigured ? 'UNAVAILABLE' : 'NOT_CONFIGURED'));
+
+  const elevenLabsVoiceStatus: ProviderHealthStatus = elevenLabsVoiceTestResult
+    ? (elevenLabsVoiceTestResult.status || (elevenLabsVoiceTestResult.success ? 'CONNECTED' : (elevenLabsVoiceTestResult.code as ProviderHealthStatus) || 'UNAVAILABLE'))
+    : (elevenLabsDetail?.status || (isElevenLabsConfigured ? 'UNAVAILABLE' : 'NOT_CONFIGURED'));
+
+  const renderStatusBadge = (status: ProviderHealthStatus) => {
+    switch (status) {
+      case 'CONNECTED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            CONNECTED
+          </span>
+        );
+      case 'QUOTA_EXHAUSTED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+            QUOTA EXHAUSTED
+          </span>
+        );
+      case 'PAYMENT_REQUIRED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+            PAYMENT REQUIRED
+          </span>
+        );
+      case 'AUTHENTICATION_ERROR':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+            AUTHENTICATION ERROR
+          </span>
+        );
+      case 'MODEL_NOT_FOUND':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+            MODEL NOT FOUND
+          </span>
+        );
+      case 'NOT_CONFIGURED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-500/15 text-slate-400 border border-white/10">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+            NOT CONFIGURED
+          </span>
+        );
+      case 'UNAVAILABLE':
+      default:
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/20">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+            UNAVAILABLE
+          </span>
+        );
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md pt-safe pb-safe">
@@ -252,125 +390,180 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
             </div>
 
             {/* Provider Selection Cards */}
-            <div className="grid grid-cols-2 gap-3">
-              {/* Google Gemini Card */}
-              <button
-                type="button"
-                onClick={() => {
-                  setTextProvider('gemini');
-                  setTextTestResult(null);
-                }}
-                className={`p-3 rounded-xl border text-left transition-all relative ${
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Google Gemini Text Card */}
+              <div
+                className={`p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between ${
                   textProvider === 'gemini'
                     ? 'border-emerald-500 bg-emerald-950/25 ring-1 ring-emerald-500/30'
                     : 'border-white/[0.07] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]'
                 }`}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
-                    <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Google Gemini</span>
+                <div
+                  className="cursor-pointer"
+                  onClick={() => handleSelectTextProvider('gemini')}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Google Gemini</span>
+                    </div>
+                    {renderStatusBadge(geminiTextStatus)}
                   </div>
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      isGeminiTextConfigured ? 'bg-emerald-400 ring-2 ring-emerald-400/20' : 'bg-amber-400'
-                    }`}
-                  />
-                </div>
-                <div className="text-[10px] font-mono text-emerald-400/80 mb-1">
-                  {geminiTextDetail?.model || 'gemini-3.8-flash'}
-                </div>
-                <div className="text-[10px] text-slate-400 leading-tight">
-                  Multimodal reasoning & large context
-                </div>
-                <div className="mt-2.5 pt-2 border-t border-white/[0.06] flex items-center justify-between">
-                  <span className="text-[9px] text-slate-500">Status</span>
-                  <span
-                    className={`text-[9px] font-medium ${
-                      isGeminiTextConfigured ? 'text-emerald-400' : 'text-amber-400'
-                    }`}
-                  >
-                    {isGeminiTextConfigured ? 'Connected' : 'Not configured'}
-                  </span>
-                </div>
-              </button>
 
-              {/* Groq Cloud Card */}
-              <button
-                type="button"
-                onClick={() => {
-                  setTextProvider('groq');
-                  setTextTestResult(null);
-                }}
-                className={`p-3 rounded-xl border text-left transition-all relative ${
+                  <div className="flex items-center gap-2 mb-2">
+                    <span
+                      className={`text-[9px] px-1.5 py-0.5 rounded font-medium border ${
+                        isGeminiTextConfigured
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                          : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                      }`}
+                    >
+                      {isGeminiTextConfigured ? 'API Configured' : 'Not Configured'}
+                    </span>
+                    <span className="text-[10px] font-mono text-emerald-400/90 truncate">
+                      {geminiTextDetail?.model || 'gemini-3.8-flash'}
+                    </span>
+                  </div>
+
+                  <p className="text-[10px] text-slate-400 leading-tight mb-2">
+                    Deep multimodal reasoning, large context window & fast latency.
+                  </p>
+
+                  <div className="text-[9px] text-slate-500 mb-3 flex items-center justify-between">
+                    <span>Last Test:</span>
+                    <span className="text-slate-300 font-mono">
+                      {geminiTextTestResult?.success
+                        ? `${geminiTextTestResult.latencyMs}ms (Verified)`
+                        : isGeminiTextConfigured
+                        ? 'Ready to test'
+                        : 'No test yet'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Gemini Text Test Button & Status */}
+                <div className="pt-2 border-t border-white/[0.06] space-y-1.5">
+                  <button
+                    type="button"
+                    onClick={handleTestGeminiText}
+                    disabled={testingGeminiText}
+                    className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-[11px] font-medium text-slate-200 transition-all disabled:opacity-50"
+                  >
+                    <Play className="w-3 h-3 text-emerald-400" />
+                    <span>{testingGeminiText ? 'Testing Connection...' : 'Test Gemini Text'}</span>
+                  </button>
+
+                  {geminiTextTestResult && (
+                    <div
+                      className={`text-[10px] font-medium flex items-center gap-1 ${
+                        geminiTextTestResult.success ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {geminiTextTestResult.success ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">{geminiTextTestResult.model} Connected ({geminiTextTestResult.latencyMs}ms)</span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate" title={geminiTextTestResult.error}>
+                            {geminiTextTestResult.error}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Groq Cloud Text Card */}
+              <div
+                className={`p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between ${
                   textProvider === 'groq'
                     ? 'border-emerald-500 bg-emerald-950/25 ring-1 ring-emerald-500/30'
                     : 'border-white/[0.07] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]'
                 }`}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
-                    <Zap className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Groq Cloud</span>
-                  </div>
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      isGroqConfigured ? 'bg-emerald-400 ring-2 ring-emerald-400/20' : 'bg-amber-400'
-                    }`}
-                  />
-                </div>
-                <div className="text-[10px] font-mono text-amber-400/80 mb-1">
-                  {groqTextDetail?.model || 'llama-3.3-70b-versatile'}
-                </div>
-                <div className="text-[10px] text-slate-400 leading-tight">
-                  Ultra-fast LPU inference (Llama 3)
-                </div>
-                <div className="mt-2.5 pt-2 border-t border-white/[0.06] flex items-center justify-between">
-                  <span className="text-[9px] text-slate-500">Status</span>
-                  <span
-                    className={`text-[9px] font-medium ${
-                      isGroqConfigured ? 'text-emerald-400' : 'text-amber-400'
-                    }`}
-                  >
-                    {isGroqConfigured ? 'Connected' : 'Not configured'}
-                  </span>
-                </div>
-              </button>
-            </div>
-
-            {/* Test Text Provider Button & Result */}
-            <div className="flex items-center justify-between pt-1">
-              <button
-                type="button"
-                onClick={handleTestText}
-                disabled={testingText}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-xs font-medium text-slate-200 transition-all disabled:opacity-50"
-              >
-                <Play className="w-3 h-3 text-emerald-400" />
-                <span>{testingText ? 'Testing Connection...' : `Test ${textProvider === 'groq' ? 'Groq' : 'Gemini'} Text`}</span>
-              </button>
-
-              {textTestResult && (
                 <div
-                  className={`text-[10px] font-medium flex items-center gap-1 ${
-                    textTestResult.success ? 'text-emerald-400' : 'text-rose-400'
-                  }`}
+                  className="cursor-pointer"
+                  onClick={() => handleSelectTextProvider('groq')}
                 >
-                  {textTestResult.success ? (
-                    <>
-                      <Check className="w-3.5 h-3.5" />
-                      <span>{textTestResult.model} Connected ({textTestResult.latencyMs}ms)</span>
-                    </>
-                  ) : (
-                    <>
-                      <AlertCircle className="w-3.5 h-3.5" />
-                      <span className="truncate max-w-[200px]" title={textTestResult.error}>
-                        {textTestResult.code || 'Unavailable'}: {textTestResult.error}
-                      </span>
-                    </>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
+                      <Zap className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Groq Cloud</span>
+                    </div>
+                    {renderStatusBadge(groqTextStatus)}
+                  </div>
+
+                  <div className="flex items-center gap-2 mb-2">
+                    <span
+                      className={`text-[9px] px-1.5 py-0.5 rounded font-medium border ${
+                        isGroqConfigured
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                          : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                      }`}
+                    >
+                      {isGroqConfigured ? 'API Configured' : 'Not Configured'}
+                    </span>
+                    <span className="text-[10px] font-mono text-amber-400/90 truncate">
+                      {groqTextDetail?.model || 'llama-3.3-70b-versatile'}
+                    </span>
+                  </div>
+
+                  <p className="text-[10px] text-slate-400 leading-tight mb-2">
+                    Ultra-fast LPU inference powered by Meta Llama 3 models.
+                  </p>
+
+                  <div className="text-[9px] text-slate-500 mb-3 flex items-center justify-between">
+                    <span>Last Test:</span>
+                    <span className="text-slate-300 font-mono">
+                      {groqTextTestResult?.success
+                        ? `${groqTextTestResult.latencyMs}ms (Verified)`
+                        : isGroqConfigured
+                        ? 'Ready to test'
+                        : 'No test yet'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Groq Text Test Button & Status */}
+                <div className="pt-2 border-t border-white/[0.06] space-y-1.5">
+                  <button
+                    type="button"
+                    onClick={handleTestGroqText}
+                    disabled={testingGroqText}
+                    className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-[11px] font-medium text-slate-200 transition-all disabled:opacity-50"
+                  >
+                    <Play className="w-3 h-3 text-amber-400" />
+                    <span>{testingGroqText ? 'Testing Connection...' : 'Test Groq Text'}</span>
+                  </button>
+
+                  {groqTextTestResult && (
+                    <div
+                      className={`text-[10px] font-medium flex items-center gap-1 ${
+                        groqTextTestResult.success ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {groqTextTestResult.success ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">{groqTextTestResult.model} Connected ({groqTextTestResult.latencyMs}ms)</span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate" title={groqTextTestResult.error}>
+                            {groqTextTestResult.error}
+                          </span>
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
+              </div>
             </div>
           </div>
 
@@ -388,7 +581,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
             {/* Provider Selection Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* Google Gemini Card */}
+              {/* Google Gemini Voice Card */}
               <div
                 className={`p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between ${
                   voiceProvider === 'gemini'
@@ -398,43 +591,44 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
               >
                 <div
                   className="cursor-pointer"
-                  onClick={() => setVoiceProvider('gemini')}
+                  onClick={() => handleSelectVoiceProvider('gemini')}
                 >
-                  <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
                       <Sparkles className="w-3.5 h-3.5 text-teal-400" />
-                      <span>Google Gemini</span>
+                      <span>Gemini Voice</span>
                     </div>
+                    {renderStatusBadge(geminiVoiceStatus)}
+                  </div>
+
+                  <div className="flex items-center gap-2 mb-2">
                     <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium ${
-                        geminiVoiceTestResult && !geminiVoiceTestResult.success
-                          ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
-                          : isGeminiVoiceConfigured
-                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                          : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                      className={`text-[9px] px-1.5 py-0.5 rounded font-medium border ${
+                        isGeminiVoiceConfigured
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                          : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
                       }`}
                     >
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          geminiVoiceTestResult && !geminiVoiceTestResult.success
-                            ? 'bg-rose-400'
-                            : isGeminiVoiceConfigured
-                            ? 'bg-emerald-400'
-                            : 'bg-amber-400'
-                        }`}
-                      />
-                      {geminiVoiceTestResult && !geminiVoiceTestResult.success
-                        ? 'Error'
-                        : isGeminiVoiceConfigured
-                        ? 'Connected'
-                        : 'Not configured'}
+                      {isGeminiVoiceConfigured ? 'API Configured' : 'Not Configured'}
+                    </span>
+                    <span className="text-[10px] font-mono text-teal-400/90 truncate">
+                      {geminiVoiceDetail?.model || 'gemini-3.8-flash-lite-tts'}
                     </span>
                   </div>
-                  <div className="text-[10px] font-mono text-teal-400/80 mb-1">
-                    {geminiVoiceDetail?.model || 'gemini-3.8-flash-lite-tts'}
+
+                  <div className="text-[10px] text-slate-400 leading-tight mb-2">
+                    Voice IDs: <span className="text-slate-300 font-mono">Aoede / Fenrir / Kore</span>
                   </div>
-                  <div className="text-[10px] text-slate-400 leading-tight mb-3">
-                    Google GenAI native neural speech synthesis (Aura / Aoede)
+
+                  <div className="text-[9px] text-slate-500 mb-3 flex items-center justify-between">
+                    <span>Last Successful Test:</span>
+                    <span className="text-slate-300 font-mono">
+                      {geminiVoiceTestResult?.success
+                        ? `${geminiVoiceTestResult.latencyMs}ms (Just tested)`
+                        : geminiVoiceDetail?.lastSuccessfulTest
+                        ? `${geminiVoiceDetail.lastSuccessfulTest.latencyMs}ms`
+                        : 'No test yet'}
+                    </span>
                   </div>
                 </div>
 
@@ -447,34 +641,46 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                     className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-[11px] font-medium text-slate-200 transition-all disabled:opacity-50"
                   >
                     <Play className="w-3 h-3 text-teal-400" />
-                    <span>{testingGeminiVoice ? 'Testing...' : 'Test Gemini Voice'}</span>
+                    <span>{testingGeminiVoice ? 'Testing Voice...' : 'Test Gemini Voice'}</span>
                   </button>
 
+                  {/* Actual error or status banner */}
                   {geminiVoiceTestResult && (
                     <div
-                      className={`text-[10px] font-medium flex items-center gap-1 ${
-                        geminiVoiceTestResult.success ? 'text-emerald-400' : 'text-rose-400'
+                      className={`text-[10px] p-2 rounded-lg font-medium border flex items-start gap-1.5 ${
+                        geminiVoiceTestResult.success
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                          : geminiVoiceTestResult.code === 'QUOTA_EXHAUSTED'
+                          ? 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+                          : 'bg-rose-500/10 text-rose-300 border-rose-500/20'
                       }`}
                     >
                       {geminiVoiceTestResult.success ? (
                         <>
-                          <Check className="w-3.5 h-3.5 shrink-0" />
-                          <span className="truncate">Voice generated successfully ({geminiVoiceTestResult.latencyMs}ms)</span>
+                          <Check className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span>Voice generated successfully ({geminiVoiceTestResult.latencyMs}ms)</span>
                         </>
                       ) : (
                         <>
-                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                          <span className="truncate" title={geminiVoiceTestResult.error}>
-                            Error: {geminiVoiceTestResult.error}
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span className="leading-snug">
+                            {geminiVoiceTestResult.error}
                           </span>
                         </>
                       )}
                     </div>
                   )}
+
+                  {!geminiVoiceTestResult && geminiVoiceDetail?.error && (
+                    <div className="text-[10px] p-2 rounded-lg font-medium bg-amber-500/10 text-amber-300 border border-amber-500/20 flex items-start gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span className="leading-snug">{geminiVoiceDetail.error}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* ElevenLabs Card */}
+              {/* ElevenLabs Voice Card */}
               <div
                 className={`p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between ${
                   voiceProvider === 'elevenlabs'
@@ -484,43 +690,44 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
               >
                 <div
                   className="cursor-pointer"
-                  onClick={() => setVoiceProvider('elevenlabs')}
+                  onClick={() => handleSelectVoiceProvider('elevenlabs')}
                 >
-                  <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-1.5 text-white font-semibold text-xs">
                       <Mic className="w-3.5 h-3.5 text-indigo-400" />
                       <span>ElevenLabs</span>
                     </div>
+                    {renderStatusBadge(elevenLabsVoiceStatus)}
+                  </div>
+
+                  <div className="flex items-center gap-2 mb-2">
                     <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium ${
-                        elevenLabsVoiceTestResult && !elevenLabsVoiceTestResult.success
-                          ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
-                          : isElevenLabsConfigured
-                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                          : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                      className={`text-[9px] px-1.5 py-0.5 rounded font-medium border ${
+                        isElevenLabsConfigured
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                          : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
                       }`}
                     >
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          elevenLabsVoiceTestResult && !elevenLabsVoiceTestResult.success
-                            ? 'bg-rose-400'
-                            : isElevenLabsConfigured
-                            ? 'bg-emerald-400'
-                            : 'bg-amber-400'
-                        }`}
-                      />
-                      {elevenLabsVoiceTestResult && !elevenLabsVoiceTestResult.success
-                        ? 'Error'
-                        : isElevenLabsConfigured
-                        ? 'Connected'
-                        : 'Not configured'}
+                      {isElevenLabsConfigured ? 'API Configured' : 'Not Configured'}
+                    </span>
+                    <span className="text-[10px] font-mono text-indigo-400/90 truncate">
+                      {elevenLabsDetail?.model || 'eleven_multilingual_v2'}
                     </span>
                   </div>
-                  <div className="text-[10px] font-mono text-indigo-400/80 mb-1">
-                    {elevenLabsDetail?.model || 'eleven_multilingual_v2'}
+
+                  <div className="text-[10px] text-slate-400 leading-tight mb-2 truncate" title={elevenLabsDetail?.voiceId || '21m00Tcm4TlvDq8ikWAM (Rachel)'}>
+                    Voice ID: <span className="text-slate-300 font-mono">{elevenLabsDetail?.voiceId || '21m00Tcm4TlvDq8ikWAM (Rachel)'}</span>
                   </div>
-                  <div className="text-[10px] text-slate-400 leading-tight mb-3">
-                    Emotive human-grade speech synthesis (Rachel / Multilingual)
+
+                  <div className="text-[9px] text-slate-500 mb-3 flex items-center justify-between">
+                    <span>Last Successful Test:</span>
+                    <span className="text-slate-300 font-mono">
+                      {elevenLabsVoiceTestResult?.success
+                        ? `${elevenLabsVoiceTestResult.latencyMs}ms (Just tested)`
+                        : elevenLabsDetail?.lastSuccessfulTest
+                        ? `${elevenLabsDetail.lastSuccessfulTest.latencyMs}ms`
+                        : 'No test yet'}
+                    </span>
                   </div>
                 </div>
 
@@ -533,28 +740,40 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                     className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-[11px] font-medium text-slate-200 transition-all disabled:opacity-50"
                   >
                     <Play className="w-3 h-3 text-indigo-400" />
-                    <span>{testingElevenLabsVoice ? 'Testing...' : 'Test ElevenLabs Voice'}</span>
+                    <span>{testingElevenLabsVoice ? 'Testing Voice...' : 'Test ElevenLabs Voice'}</span>
                   </button>
 
+                  {/* Actual error or status banner */}
                   {elevenLabsVoiceTestResult && (
                     <div
-                      className={`text-[10px] font-medium flex items-center gap-1 ${
-                        elevenLabsVoiceTestResult.success ? 'text-emerald-400' : 'text-rose-400'
+                      className={`text-[10px] p-2 rounded-lg font-medium border flex items-start gap-1.5 ${
+                        elevenLabsVoiceTestResult.success
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                          : elevenLabsVoiceTestResult.code === 'PAYMENT_REQUIRED'
+                          ? 'bg-purple-500/10 text-purple-300 border-purple-500/20'
+                          : 'bg-rose-500/10 text-rose-300 border-rose-500/20'
                       }`}
                     >
                       {elevenLabsVoiceTestResult.success ? (
                         <>
-                          <Check className="w-3.5 h-3.5 shrink-0" />
-                          <span className="truncate">Voice generated successfully ({elevenLabsVoiceTestResult.latencyMs}ms)</span>
+                          <Check className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span>Voice generated successfully ({elevenLabsVoiceTestResult.latencyMs}ms)</span>
                         </>
                       ) : (
                         <>
-                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                          <span className="truncate" title={elevenLabsVoiceTestResult.error}>
-                            Error: {elevenLabsVoiceTestResult.error}
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span className="leading-snug">
+                            {elevenLabsVoiceTestResult.error}
                           </span>
                         </>
                       )}
+                    </div>
+                  )}
+
+                  {!elevenLabsVoiceTestResult && elevenLabsDetail?.error && (
+                    <div className="text-[10px] p-2 rounded-lg font-medium bg-amber-500/10 text-amber-300 border border-amber-500/20 flex items-start gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span className="leading-snug">{elevenLabsDetail.error}</span>
                     </div>
                   )}
                 </div>
@@ -696,8 +915,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                     <p className="text-slate-200 font-semibold">
                       {liveDebugStats?.connectionLatencyMs
                         ? `${liveDebugStats.connectionLatencyMs} ms`
-                        : textTestResult?.latencyMs
-                        ? `${textTestResult.latencyMs} ms (test)`
+                        : (textProvider === 'groq' ? groqTextTestResult : geminiTextTestResult)?.latencyMs
+                        ? `${(textProvider === 'groq' ? groqTextTestResult : geminiTextTestResult)?.latencyMs} ms (test)`
                         : '< 50 ms'}
                     </p>
                   </div>
@@ -706,13 +925,17 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   <div className="bg-white/[0.03] p-2 rounded-lg border border-white/[0.04]">
                     <span className="text-slate-500 block mb-0.5">Last Provider Error</span>
                     {(() => {
+                      const activeTextTestResult =
+                        textProvider === 'groq'
+                          ? groqTextTestResult
+                          : geminiTextTestResult;
                       const activeVoiceTestError =
                         voiceProvider === 'gemini'
                           ? geminiVoiceTestResult?.error
                           : elevenLabsVoiceTestResult?.error;
                       const displayError =
                         liveDebugStats?.lastError ||
-                        textTestResult?.error ||
+                        activeTextTestResult?.error ||
                         activeVoiceTestError ||
                         geminiVoiceTestResult?.error ||
                         elevenLabsVoiceTestResult?.error ||

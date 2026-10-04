@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { AlertTriangle, ArrowRight, X } from 'lucide-react';
 import { Sidebar, ActiveNavTab } from '../components/layout/Sidebar';
 import { ChatHeader } from '../components/layout/ChatHeader';
 import { MessageList } from '../components/chat/MessageList';
@@ -48,6 +49,14 @@ export const ChatPage: React.FC = () => {
   const [settingsOpen, setSettingsOpen] = useState(() => {
     return typeof window !== 'undefined' && window.location.pathname.toLowerCase().endsWith('/settings');
   });
+
+  // Voice engine error & fallback notification banner
+  const [voiceNotification, setVoiceNotification] = useState<{
+    message: string;
+    type: 'error' | 'warning' | 'info';
+    actionLabel?: string;
+    onAction?: () => void;
+  } | null>(null);
 
   // Chat State
   const {
@@ -363,6 +372,34 @@ export const ChatPage: React.FC = () => {
 
     if (!cleanText) return;
 
+    // Check if Gemini Voice quota is currently exhausted
+    const quotaExhaustedUntil = parseInt(
+      safeStorage.getItem('jexa_gemini_voice_quota_until') || '0',
+      10
+    );
+    if (activeVoiceProvider === 'gemini' && Date.now() < quotaExhaustedUntil) {
+      setVoiceNotification({
+        message: 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.',
+        type: 'warning',
+        actionLabel: 'Switch to ElevenLabs',
+        onAction: async () => {
+          safeStorage.setItem('jexa_voice_provider', 'elevenlabs');
+          try {
+            await ApiClient.selectProviders({ voiceProvider: 'elevenlabs' });
+          } catch (err: any) {
+            console.warn('[ChatPage] Failed to sync voice provider selection:', err.message);
+          }
+          setVoiceNotification({
+            message: 'Switched voice engine to ElevenLabs.',
+            type: 'info',
+          });
+          setTimeout(() => setVoiceNotification(null), 3500);
+          handleSpeak(text);
+        },
+      });
+      return;
+    }
+
     try {
       const voiceRes = await ApiClient.requestVoiceSynthesis({
         text: cleanText,
@@ -375,6 +412,83 @@ export const ChatPage: React.FC = () => {
       }
     } catch (err: any) {
       console.warn('[ChatPage] Real AI voice playback error:', err.message);
+      const errMsg = err.message || '';
+      const is429 =
+        err.status === 429 ||
+        err.statusCode === 429 ||
+        err.code === 'QUOTA_EXHAUSTED' ||
+        errMsg.includes('429') ||
+        errMsg.includes('quota') ||
+        errMsg.includes('RESOURCE_EXHAUSTED');
+      const is402 =
+        err.status === 402 ||
+        err.statusCode === 402 ||
+        err.code === 'PAYMENT_REQUIRED' ||
+        errMsg.includes('402') ||
+        errMsg.includes('paid plan');
+
+      if (is429) {
+        // Record quota exhausted cooldown to stop spamming Gemini Voice
+        safeStorage.setItem(
+          'jexa_gemini_voice_quota_until',
+          String(Date.now() + 12 * 60 * 60 * 1000)
+        );
+        setVoiceNotification({
+          message: 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.',
+          type: 'warning',
+          actionLabel: 'Switch to ElevenLabs',
+          onAction: async () => {
+            safeStorage.setItem('jexa_voice_provider', 'elevenlabs');
+            try {
+              await ApiClient.selectProviders({ voiceProvider: 'elevenlabs' });
+            } catch (selErr: any) {
+              console.warn('[ChatPage] Failed to sync voice provider:', selErr.message);
+            }
+            setVoiceNotification({
+              message: 'Switched voice engine to ElevenLabs.',
+              type: 'info',
+            });
+            setTimeout(() => setVoiceNotification(null), 3500);
+            handleSpeak(text);
+          },
+        });
+      } else if (is402) {
+        setVoiceNotification({
+          message: 'This ElevenLabs voice requires a paid plan.',
+          type: 'warning',
+          actionLabel: 'Switch to Gemini',
+          onAction: async () => {
+            safeStorage.setItem('jexa_voice_provider', 'gemini');
+            try {
+              await ApiClient.selectProviders({ voiceProvider: 'gemini' });
+            } catch (selErr: any) {
+              console.warn('[ChatPage] Failed to sync voice provider:', selErr.message);
+            }
+            setVoiceNotification({
+              message: 'Switched voice engine to Gemini.',
+              type: 'info',
+            });
+            setTimeout(() => setVoiceNotification(null), 3500);
+            handleSpeak(text);
+          },
+        });
+      } else {
+        const cleanMessage =
+          err.status === 401 || err.status === 403
+            ? 'Provider authentication or permission failed.'
+            : err.status === 404
+            ? 'The selected model or voice was not found.'
+            : err.status === 503
+            ? 'The provider is temporarily unavailable.'
+            : errMsg || 'Voice synthesis failed.';
+
+        setVoiceNotification({
+          message: cleanMessage,
+          type: 'error',
+          actionLabel: 'Settings',
+          onAction: () => setSettingsOpen(true),
+        });
+      }
     }
   };
 
@@ -492,6 +606,36 @@ export const ChatPage: React.FC = () => {
 
             {/* ONE Primary Compact Floating Composer */}
             <footer className="shrink-0 bg-gradient-to-t from-[#07090e] via-[#07090e]/80 to-transparent">
+              {/* Voice Engine Fallback & Notification Pill */}
+              {voiceNotification && (
+                <div className="max-w-3xl mx-auto px-4 sm:px-6 mb-2">
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between gap-3 text-xs sm:text-sm text-amber-200 backdrop-blur-md shadow-lg animate-fadeIn">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span className="truncate">{voiceNotification.message}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {voiceNotification.actionLabel && voiceNotification.onAction && (
+                        <button
+                          onClick={voiceNotification.onAction}
+                          className="px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 transition-colors flex items-center gap-1 cursor-pointer"
+                        >
+                          {voiceNotification.actionLabel}
+                          <ArrowRight className="w-3 h-3" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setVoiceNotification(null)}
+                        className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                        title="Dismiss"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <Composer
                 onSendMessage={(text) => sendMessage(text)}
                 onOpenLive={liveVoice.startLiveMode}

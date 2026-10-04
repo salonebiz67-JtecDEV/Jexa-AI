@@ -52,7 +52,7 @@ export class ChatService {
     // 6. Execute Text AI Provider via Registry with Failover
     const registry = AIProviderRegistry.getInstance();
     const primaryProviderType: TextProviderType =
-      payload.textProvider || profile.selectedTextProvider || 'gemini';
+      payload.textProvider || profile.selectedTextProvider || registry.getDefaultTextType() || 'gemini';
     const fallbackProviderType: TextProviderType =
       primaryProviderType === 'gemini' ? 'groq' : 'gemini';
 

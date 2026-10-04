@@ -57,24 +57,29 @@ export class VoiceController {
       const provider = error.provider || 'voice_ai';
       let message = error.message || 'Voice synthesis failed.';
 
-      // User-friendly error messages
-      if (error.code === 'MISSING_CREDENTIALS') {
-        message =
-          provider === 'elevenlabs'
-            ? 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY.'
-            : 'Gemini voice is temporarily unavailable. Try ElevenLabs.';
-      } else if (error.code === 'VOICE_NOT_FOUND') {
-        message = 'ElevenLabs voice ID is invalid or unavailable.';
-      } else if (error.code === 'MODEL_NOT_FOUND') {
-        message = 'The selected voice model is unavailable.';
-      } else if (provider === 'gemini' && statusCode >= 500) {
-        message = 'Gemini voice is temporarily unavailable. Try ElevenLabs.';
+      if (statusCode === 429 || error.code === 'QUOTA_EXHAUSTED') {
+        message = provider === 'gemini'
+          ? 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.'
+          : 'ElevenLabs quota or rate limit reached.';
+      } else if (statusCode === 402 || error.code === 'PAYMENT_REQUIRED') {
+        message = 'This ElevenLabs voice requires a paid plan.';
+      } else if (statusCode === 404 || error.code === 'MODEL_NOT_FOUND' || error.code === 'VOICE_NOT_FOUND') {
+        message = 'The selected model or voice was not found.';
+      } else if (statusCode === 401 || statusCode === 403 || error.code === 'AUTHENTICATION_ERROR') {
+        message = 'Provider authentication or permission failed.';
+      } else if (statusCode === 503 || error.code === 'UNAVAILABLE') {
+        message = 'The provider is temporarily unavailable.';
+      } else if (error.code === 'NOT_CONFIGURED' || error.code === 'MISSING_CREDENTIALS') {
+        message = provider === 'elevenlabs'
+          ? 'ElevenLabs is not configured. Check ELEVENLABS_API_KEY in Render environment.'
+          : 'Gemini Voice is not configured. Check GEMINI_API_KEY on the server.';
       }
 
       res.status(statusCode).json({
         success: false,
         provider,
-        code: error.code || 'VOICE_SYNTHESIS_FAILED',
+        code: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : statusCode === 402 ? 'PAYMENT_REQUIRED' : 'VOICE_SYNTHESIS_FAILED'),
+        status: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : statusCode === 402 ? 'PAYMENT_REQUIRED' : 'UNAVAILABLE'),
         message,
         error: message,
         timestamp: new Date().toISOString(),
@@ -127,17 +132,29 @@ export class VoiceController {
       const provider = error.provider || req.body?.provider || 'voice_ai';
       let message = error.message || 'Voice test failed.';
 
-      if (error.code === 'MISSING_CREDENTIALS') {
-        message =
-          provider === 'elevenlabs'
-            ? 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY.'
-            : 'Gemini voice is temporarily unavailable. Check GEMINI_API_KEY.';
+      if (statusCode === 429 || error.code === 'QUOTA_EXHAUSTED') {
+        message = provider === 'gemini'
+          ? 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.'
+          : 'ElevenLabs quota or rate limit reached.';
+      } else if (statusCode === 402 || error.code === 'PAYMENT_REQUIRED') {
+        message = 'This ElevenLabs voice requires a paid plan.';
+      } else if (statusCode === 404 || error.code === 'MODEL_NOT_FOUND' || error.code === 'VOICE_NOT_FOUND') {
+        message = 'The selected model or voice was not found.';
+      } else if (statusCode === 401 || statusCode === 403 || error.code === 'AUTHENTICATION_ERROR') {
+        message = 'Provider authentication or permission failed.';
+      } else if (statusCode === 503 || error.code === 'UNAVAILABLE') {
+        message = 'The provider is temporarily unavailable.';
+      } else if (error.code === 'NOT_CONFIGURED' || error.code === 'MISSING_CREDENTIALS') {
+        message = provider === 'elevenlabs'
+          ? 'ElevenLabs is not configured. Check ELEVENLABS_API_KEY in Render environment.'
+          : 'Gemini Voice is not configured. Check GEMINI_API_KEY on the server.';
       }
 
       res.status(statusCode).json({
         success: false,
         provider,
-        code: error.code || 'TEST_FAILED',
+        code: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : statusCode === 402 ? 'PAYMENT_REQUIRED' : 'TEST_FAILED'),
+        status: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : statusCode === 402 ? 'PAYMENT_REQUIRED' : 'UNAVAILABLE'),
         message,
         error: message,
         timestamp: new Date().toISOString(),

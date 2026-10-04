@@ -18,14 +18,56 @@ export class ProviderController {
             provider: status.textProvider.type,
             model: status.textProvider.model,
             configured: status.textProvider.isConfigured,
+            status: status.textProvider.status,
+            error: status.textProvider.lastError,
           },
           voice: {
             provider: status.voiceProvider.type,
             model: status.voiceProvider.model,
             configured: status.voiceProvider.isConfigured,
+            status: status.voiceProvider.status,
+            voiceId: status.voiceProvider.voiceId,
+            error: status.voiceProvider.lastError,
+            lastSuccessfulTest: status.voiceProvider.lastSuccessfulTest,
           },
           availableText: status.availableTextProviders,
           availableVoice: status.availableVoiceProviders,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  public static async selectProviders(req: Request, res: Response): Promise<void> {
+    try {
+      const textProvider: TextProviderType | undefined = req.body?.textProvider;
+      const voiceProvider: VoiceProviderType | undefined = req.body?.voiceProvider;
+      const registry = AIProviderRegistry.getInstance();
+
+      if (textProvider) {
+        registry.setDefaultTextType(textProvider);
+      }
+      if (voiceProvider) {
+        registry.setDefaultVoiceType(voiceProvider);
+      }
+
+      try {
+        await DatabaseService.updateBrainProfile({
+          selectedTextProvider: textProvider,
+          selectedVoiceProvider: voiceProvider,
+        });
+      } catch (dbErr: any) {
+        console.warn('[ProviderController] Failed to persist provider selection in DB:', dbErr.message);
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Active AI providers updated successfully.',
+        data: {
+          textProvider: registry.getDefaultTextType(),
+          voiceProvider: registry.getDefaultVoiceType(),
         },
         timestamp: new Date().toISOString(),
       });
@@ -46,6 +88,8 @@ export class ProviderController {
           provider,
           model: result.model,
           latencyMs: result.latencyMs,
+          status: result.status,
+          code: result.code,
           message: result.success ? `${result.model} connected successfully.` : result.error,
           error: result.error,
         },
@@ -71,8 +115,11 @@ export class ProviderController {
         data: {
           provider,
           model: result.model,
+          voiceId: (result as any).voiceId,
           latencyMs: result.latencyMs,
           audioUrl: (result as any).audioUrl,
+          status: (result as any).status,
+          code: (result as any).code,
           message: result.success ? 'Voice generated successfully' : result.error,
           error: result.error,
         },

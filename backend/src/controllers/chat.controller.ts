@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { ChatService } from '../services/chat.service';
 import { SendMessagePayload } from '../../../shared/types/chat';
+import { formatCleanProviderError } from '../../../shared/types/provider';
 
 export class ChatController {
   public static async sendMessage(req: Request, res: Response): Promise<void> {
@@ -20,16 +21,14 @@ export class ChatController {
       });
     } catch (error: any) {
       console.error('[ChatController] Error processing message:', error);
-      const statusCode = error.statusCode && error.statusCode >= 400 && error.statusCode < 600
-        ? error.statusCode
-        : 500;
+      const formatted = formatCleanProviderError(error);
 
-      res.status(statusCode).json({
+      res.status(formatted.statusCode).json({
         success: false,
         provider: error.provider || 'text_ai',
-        code: error.code || 'PROVIDER_UNAVAILABLE',
-        message: error.message || 'Internal server error while processing message.',
-        error: error.message || 'Internal server error while processing message.',
+        code: formatted.code,
+        message: formatted.cleanMessage,
+        error: formatted.cleanMessage,
         timestamp: new Date().toISOString(),
       });
     }

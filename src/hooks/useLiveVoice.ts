@@ -343,12 +343,36 @@ export function useLiveVoice({
           }
         } catch (voiceErr: any) {
           console.warn('[useLiveVoice] Backend voice synthesis failed:', voiceErr.message);
-          let friendlyError = voiceErr.message || 'Voice synthesis failed.';
-          if (activeVoiceProvider === 'gemini') {
-            friendlyError = 'Gemini voice is temporarily unavailable. Try ElevenLabs.';
-          } else if (activeVoiceProvider === 'elevenlabs') {
-            friendlyError = 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY.';
+          const rawErr = voiceErr.message || '';
+          let friendlyError = rawErr;
+
+          if (
+            voiceErr.status === 429 ||
+            voiceErr.code === 'QUOTA_EXHAUSTED' ||
+            rawErr.includes('429') ||
+            rawErr.includes('quota') ||
+            rawErr.includes('RESOURCE_EXHAUSTED')
+          ) {
+            friendlyError = 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.';
+          } else if (
+            voiceErr.status === 402 ||
+            voiceErr.code === 'PAYMENT_REQUIRED' ||
+            rawErr.includes('402') ||
+            rawErr.includes('paid plan')
+          ) {
+            friendlyError = 'This ElevenLabs voice requires a paid plan.';
+          } else if (voiceErr.status === 401 || voiceErr.status === 403 || rawErr.includes('401')) {
+            friendlyError = 'Provider authentication or permission failed.';
+          } else if (voiceErr.status === 404 || rawErr.includes('404')) {
+            friendlyError = 'The selected model or voice was not found.';
+          } else if (voiceErr.status === 503) {
+            friendlyError = 'The provider is temporarily unavailable.';
+          } else if (!friendlyError) {
+            friendlyError = activeVoiceProvider === 'gemini'
+              ? 'Gemini Voice is temporarily unavailable.'
+              : 'ElevenLabs voice synthesis failed.';
           }
+
           setStatus('error');
           setErrorMessage(friendlyError);
           setDebugStats((prev) => ({

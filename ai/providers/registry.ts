@@ -4,8 +4,8 @@ import { GeminiTextAIProvider } from './gemini.provider';
 import { GeminiVoiceAIProvider } from './gemini-voice.provider';
 import { GroqTextAIProvider } from './groq.provider';
 import { ElevenLabsVoiceAIProvider } from './elevenlabs.provider';
-import { loadAIProvidersConfig, AIProvidersConfig } from './config';
-import { ProviderStatus, TextProviderType, VoiceProviderType, ProviderDetail } from '../../shared/types/provider';
+import { ProviderStatus, TextProviderType, VoiceProviderType, ProviderDetail, ProviderHealthStatus } from '../../shared/types/provider';
+import { AIProvidersConfig, loadAIProvidersConfig } from './config';
 
 export class AIProviderRegistry {
   private static instance: AIProviderRegistry;
@@ -108,13 +108,32 @@ export class AIProviderRegistry {
     return this.defaultVoiceType;
   }
 
-  public async testTextProvider(type: TextProviderType): Promise<{ success: boolean; latencyMs: number; model: string; error?: string }> {
+  public async testTextProvider(type: TextProviderType): Promise<{
+    success: boolean;
+    latencyMs: number;
+    model: string;
+    code?: string;
+    status?: ProviderHealthStatus;
+    error?: string;
+  }> {
     const provider = this.textProviders.get(type);
     if (!provider) {
-      return { success: false, latencyMs: 0, model: 'unknown', error: `Text provider '${type}' is not registered.` };
+      return { success: false, latencyMs: 0, model: 'unknown', code: 'UNAVAILABLE', status: 'UNAVAILABLE', error: `Text provider '${type}' is not registered.` };
     }
     if ('testConnection' in provider && typeof (provider as any).testConnection === 'function') {
-      return await (provider as any).testConnection();
+      const res = await (provider as any).testConnection();
+      const status: ProviderHealthStatus = res.success
+        ? 'CONNECTED'
+        : !provider.isConfigured
+        ? 'NOT_CONFIGURED'
+        : res.error?.includes('404') || res.error?.includes('not found')
+        ? 'MODEL_NOT_FOUND'
+        : res.error?.includes('401') || res.error?.includes('API_KEY')
+        ? 'AUTHENTICATION_ERROR'
+        : res.error?.includes('429') || res.error?.includes('quota')
+        ? 'QUOTA_EXHAUSTED'
+        : 'UNAVAILABLE';
+      return { ...res, status };
     }
 
     const startTime = Date.now();
@@ -125,16 +144,33 @@ export class AIProviderRegistry {
         maxTokens: 5,
         temperature: 0.1,
       });
-      return { success: true, latencyMs: Date.now() - startTime, model: res.model };
+      return { success: true, latencyMs: Date.now() - startTime, model: res.model, status: 'CONNECTED' };
     } catch (err: any) {
-      return { success: false, latencyMs: Date.now() - startTime, model: provider.modelName, error: err.message };
+      return {
+        success: false,
+        latencyMs: Date.now() - startTime,
+        model: provider.modelName,
+        code: 'UNAVAILABLE',
+        status: !provider.isConfigured ? 'NOT_CONFIGURED' : 'UNAVAILABLE',
+        error: err.message,
+      };
     }
   }
 
-  public async testVoiceProvider(type: VoiceProviderType): Promise<{ success: boolean; latencyMs: number; model: string; error?: string }> {
+  public async testVoiceProvider(type: VoiceProviderType): Promise<{
+    success: boolean;
+    latencyMs: number;
+    model: string;
+    voiceId?: string;
+    audioUrl?: string;
+    code?: string;
+    status?: ProviderHealthStatus;
+    error?: string;
+    message?: string;
+  }> {
     const provider = this.voiceProviders.get(type);
     if (!provider) {
-      return { success: false, latencyMs: 0, model: 'unknown', error: `Voice provider '${type}' is not registered.` };
+      return { success: false, latencyMs: 0, model: 'unknown', code: 'UNAVAILABLE', status: 'UNAVAILABLE', error: `Voice provider '${type}' is not registered.` };
     }
     if ('testConnection' in provider && typeof (provider as any).testConnection === 'function') {
       return await (provider as any).testConnection();
@@ -143,9 +179,24 @@ export class AIProviderRegistry {
     const startTime = Date.now();
     try {
       const res = await provider.synthesizeSpeech({ text: 'Hello', voiceId: 'aura' });
-      return { success: Boolean(res.audioUrl), latencyMs: Date.now() - startTime, model: provider.modelName };
+      return {
+        success: Boolean(res.audioUrl),
+        latencyMs: Date.now() - startTime,
+        model: provider.modelName,
+        audioUrl: res.audioUrl,
+        code: 'CONNECTED',
+        status: 'CONNECTED',
+        message: 'Voice generated successfully',
+      };
     } catch (err: any) {
-      return { success: false, latencyMs: Date.now() - startTime, model: provider.modelName, error: err.message };
+      return {
+        success: false,
+        latencyMs: Date.now() - startTime,
+        model: provider.modelName,
+        code: (err as any).code || 'UNAVAILABLE',
+        status: !provider.isConfigured ? 'NOT_CONFIGURED' : 'UNAVAILABLE',
+        error: err.message,
+      };
     }
   }
 
@@ -156,22 +207,56 @@ export class AIProviderRegistry {
     const activeText = this.getTextProvider(textType);
     const activeVoice = this.getVoiceProvider(voiceType);
 
+    const geminiText = this.textProviders.get('gemini');
+    const groqText = this.textProviders.get('groq');
+
+    const geminiVoice = this.voiceProviders.get('gemini') as any;
+    const elevenLabsVoice = this.voiceProviders.get('elevenlabs') as any;
+
+    const geminiTextStatus: ProviderHealthStatus = !geminiText?.isConfigured
+      ? 'NOT_CONFIGURED'
+      : (geminiText as any)?.lastError
+      ? 'UNAVAILABLE'
+      : 'CONNECTED';
+
+    const groqTextStatus: ProviderHealthStatus = !groqText?.isConfigured
+      ? 'NOT_CONFIGURED'
+      : (groqText as any)?.lastError?.includes('404')
+      ? 'MODEL_NOT_FOUND'
+      : (groqText as any)?.lastError
+      ? 'UNAVAILABLE'
+      : 'CONNECTED';
+
+    const geminiVoiceStatus: ProviderHealthStatus = geminiVoice?.getStatus
+      ? geminiVoice.getStatus()
+      : !geminiVoice?.isConfigured
+      ? 'NOT_CONFIGURED'
+      : 'UNAVAILABLE';
+
+    const elevenLabsVoiceStatus: ProviderHealthStatus = elevenLabsVoice?.getStatus
+      ? elevenLabsVoice.getStatus()
+      : !elevenLabsVoice?.isConfigured
+      ? 'NOT_CONFIGURED'
+      : 'UNAVAILABLE';
+
     const availableTextProviders: ProviderDetail[] = [
       {
         type: 'gemini',
         name: 'Google Gemini',
-        isConfigured: Boolean(this.textProviders.get('gemini')?.isConfigured),
-        model: this.textProviders.get('gemini')?.modelName || 'gemini-3.8-flash',
+        isConfigured: Boolean(geminiText?.isConfigured),
+        model: geminiText?.modelName || 'gemini-3.8-flash',
         description: 'Deep multimodal reasoning, large context window & fast latency',
-        error: (this.textProviders.get('gemini') as any)?.lastError,
+        status: geminiTextStatus,
+        error: (geminiText as any)?.lastError,
       },
       {
         type: 'groq',
         name: 'Groq Cloud',
-        isConfigured: Boolean(this.textProviders.get('groq')?.isConfigured),
-        model: this.textProviders.get('groq')?.modelName || 'llama-3.3-70b-versatile',
+        isConfigured: Boolean(groqText?.isConfigured),
+        model: groqText?.modelName || 'llama-3.3-70b-versatile',
         description: 'Ultra high-speed LPU inference powered by Meta Llama 3.3',
-        error: (this.textProviders.get('groq') as any)?.lastError,
+        status: groqTextStatus,
+        error: (groqText as any)?.lastError,
       },
     ];
 
@@ -179,42 +264,53 @@ export class AIProviderRegistry {
       {
         type: 'gemini',
         name: 'Gemini Voice TTS',
-        isConfigured: Boolean(this.voiceProviders.get('gemini')?.isConfigured),
-        model: this.voiceProviders.get('gemini')?.modelName || 'gemini-3.8-flash-lite-tts',
+        isConfigured: Boolean(geminiVoice?.isConfigured),
+        model: geminiVoice?.modelName || 'gemini-3.8-flash-lite-tts',
+        voiceId: 'Aoede (Aura) / Fenrir (Atlas) / Kore (Lyra)',
         description: 'Direct expressive neural voice generated by Google GenAI',
-        error: (this.voiceProviders.get('gemini') as any)?.lastError,
+        status: geminiVoiceStatus,
+        error: geminiVoice?.lastError,
+        lastSuccessfulTest: geminiVoice?.lastSuccessfulTest,
       },
       {
         type: 'elevenlabs',
         name: 'ElevenLabs',
-        isConfigured: Boolean(this.voiceProviders.get('elevenlabs')?.isConfigured),
-        model: this.voiceProviders.get('elevenlabs')?.modelName || 'eleven_multilingual_v2',
+        isConfigured: Boolean(elevenLabsVoice?.isConfigured),
+        model: elevenLabsVoice?.modelName || 'eleven_multilingual_v2',
+        voiceId: elevenLabsVoice?.defaultVoiceId || '21m00Tcm4TlvDq8ikWAM (Rachel)',
         description: 'Industry-standard realistic speech synthesis with emotional nuance',
-        error: (this.voiceProviders.get('elevenlabs') as any)?.lastError,
+        status: elevenLabsVoiceStatus,
+        error: elevenLabsVoice?.lastError,
+        lastSuccessfulTest: elevenLabsVoice?.lastSuccessfulTest,
       },
     ];
 
-    const hasTextKey = activeText.isConfigured;
-    const hasVoiceKey = activeVoice.isConfigured;
+    const activeTextStatus = activeText.providerType === 'groq' ? groqTextStatus : geminiTextStatus;
+    const activeVoiceStatus = activeVoice.providerType === 'elevenlabs' ? elevenLabsVoiceStatus : geminiVoiceStatus;
 
     return {
       textProvider: {
         type: activeText.providerType,
-        isConfigured: hasTextKey,
-        hasApiKey: hasTextKey,
+        isConfigured: activeText.isConfigured,
+        hasApiKey: activeText.isConfigured,
         model: activeText.modelName,
-        status: hasTextKey ? 'ready' : 'missing_key',
+        status: activeTextStatus,
         description: `${activeText.providerType === 'groq' ? 'Groq LPU' : 'Google Gemini'} active`,
         lastError: (activeText as any)?.lastError,
       },
       voiceProvider: {
         type: activeVoice.providerType,
-        isConfigured: hasVoiceKey,
-        hasApiKey: hasVoiceKey,
+        isConfigured: activeVoice.isConfigured,
+        hasApiKey: activeVoice.isConfigured,
         model: activeVoice.modelName,
-        status: hasVoiceKey ? 'ready' : 'missing_key',
+        voiceId:
+          activeVoice.providerType === 'elevenlabs'
+            ? elevenLabsVoice?.defaultVoiceId || '21m00Tcm4TlvDq8ikWAM'
+            : 'Aoede / Fenrir / Kore',
+        status: activeVoiceStatus,
         description: `${activeVoice.providerType === 'elevenlabs' ? 'ElevenLabs Speech' : 'Gemini Neural Voice'} active`,
         lastError: (activeVoice as any)?.lastError,
+        lastSuccessfulTest: (activeVoice as any)?.lastSuccessfulTest,
       },
       availableTextProviders,
       availableVoiceProviders,
@@ -223,7 +319,7 @@ export class AIProviderRegistry {
         isConfigured: hasSupabase,
         status: hasSupabase ? 'connected' : 'unconfigured_fallback',
       },
-      isProductionReady: hasTextKey && hasVoiceKey && hasSupabase,
+      isProductionReady: activeText.isConfigured && activeVoice.isConfigured && hasSupabase,
     };
   }
 }

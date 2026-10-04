@@ -16,8 +16,9 @@ router.post('/voice/synthesize', VoiceController.handleVoice);
 router.get('/voice/health', VoiceController.getHealth);
 router.post('/voice/test', VoiceController.testVoice);
 
-// Provider Status & Testing
+// Provider Status, Selection & Testing
 router.get('/providers/status', ProviderController.getStatus);
+router.post('/providers/select', ProviderController.selectProviders);
 router.post('/providers/test-text', ProviderController.testText);
 router.post('/providers/test-voice', ProviderController.testVoice);
 

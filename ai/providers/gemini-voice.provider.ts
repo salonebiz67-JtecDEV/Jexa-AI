@@ -1,6 +1,12 @@
 import { GoogleGenAI } from '@google/genai';
 import { IVoiceAIProvider, AudioTranscriptionRequest, AudioTranscriptionResponse } from './voice-provider.interface';
-import { VoiceProviderType, VoiceSynthesisRequest, VoiceSynthesisResponse, ProviderError } from '../../shared/types/provider';
+import {
+  VoiceProviderType,
+  VoiceSynthesisRequest,
+  VoiceSynthesisResponse,
+  ProviderError,
+  ProviderHealthStatus,
+} from '../../shared/types/provider';
 
 function addWavHeader(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16): Buffer {
   const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
@@ -31,6 +37,11 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
   private ai: GoogleGenAI | null = null;
   public readonly isConfigured: boolean = false;
   public lastError?: string;
+  public lastErrorCode?: string;
+  public quotaExhaustedUntil: number = 0;
+  public quotaRetryDelaySeconds: number = 0;
+  public hasSuccessfulTest: boolean = false;
+  public lastSuccessfulTest?: { timestamp: string; latencyMs: number };
 
   constructor() {
     this.modelName = (
@@ -53,21 +64,52 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         console.error('[GeminiVoiceAIProvider] Initialization error:', err);
         this.isConfigured = false;
         this.lastError = err.message;
+        this.lastErrorCode = 'NOT_CONFIGURED';
       }
     }
   }
 
+  public isQuotaExhausted(): boolean {
+    return Date.now() < this.quotaExhaustedUntil;
+  }
+
+  public getStatus(): ProviderHealthStatus {
+    if (!this.isConfigured || !this.ai) return 'NOT_CONFIGURED';
+    if (this.isQuotaExhausted() || this.lastErrorCode === 'QUOTA_EXHAUSTED') return 'QUOTA_EXHAUSTED';
+    if (this.lastErrorCode === 'AUTHENTICATION_ERROR') return 'AUTHENTICATION_ERROR';
+    if (this.lastErrorCode === 'MODEL_NOT_FOUND') return 'MODEL_NOT_FOUND';
+    if (this.lastErrorCode === 'PAYMENT_REQUIRED') return 'PAYMENT_REQUIRED';
+    if (this.hasSuccessfulTest) return 'CONNECTED';
+    if (this.lastError) return 'UNAVAILABLE';
+    return 'UNAVAILABLE';
+  }
+
   public async synthesizeSpeech(request: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
     if (!this.ai || !this.isConfigured) {
+      this.lastErrorCode = 'NOT_CONFIGURED';
       throw new ProviderError(
         'Voice AI service is not configured. Please configure GEMINI_API_KEY in your Render environment variables.',
         'gemini',
-        'MISSING_CREDENTIALS',
+        'NOT_CONFIGURED',
         400,
         this.modelName
       );
     }
 
+    if (this.isQuotaExhausted()) {
+      const remainingMs = Math.max(0, this.quotaExhaustedUntil - Date.now());
+      const remainingHours = Math.ceil(remainingMs / (1000 * 60 * 60));
+      const retryHint = remainingHours > 1 ? `in ~${remainingHours}h` : 'later';
+      throw new ProviderError(
+        `Gemini Voice quota exhausted. Try again ${retryHint} or switch to ElevenLabs.`,
+        'gemini',
+        'QUOTA_EXHAUSTED',
+        429,
+        this.modelName
+      );
+    }
+
+    const startTime = Date.now();
     try {
       const voiceMap: Record<string, string> = {
         aura: 'Aoede',
@@ -127,6 +169,16 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       const audioUrl = `data:audio/wav;base64,${base64Wav}`;
 
       const durationSeconds = Math.round(pcmCombined.length / (24000 * 2));
+      const latencyMs = Date.now() - startTime;
+
+      // Real test success confirmed
+      this.hasSuccessfulTest = true;
+      this.lastSuccessfulTest = {
+        timestamp: new Date().toISOString(),
+        latencyMs,
+      };
+      this.lastErrorCode = undefined;
+      this.lastError = undefined;
 
       return {
         audioBuffer: wavBuffer,
@@ -141,14 +193,82 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       };
     } catch (error: any) {
       console.error('[GeminiVoiceAIProvider] Speech synthesis failed:', error);
-      this.lastError = error.message;
+
       if (error instanceof ProviderError) {
         throw error;
       }
+
+      const errStr = `${error.message || ''} ${error.status || ''} ${error.statusCode || ''} ${error.code || ''}`;
+      const is429 =
+        error.status === 429 ||
+        error.statusCode === 429 ||
+        error.code === 429 ||
+        errStr.includes('429') ||
+        errStr.includes('RESOURCE_EXHAUSTED') ||
+        errStr.includes('quota') ||
+        errStr.includes('Quota exceeded');
+
+      if (is429) {
+        // Parse retry delay from Google GenAI error message or default to 12 hours for the 10-request limit
+        let cooldownMs = 12 * 60 * 60 * 1000;
+        const matchSec = error.message?.match(/retry(?:\s+in|\s+after)?\s+(\d+(?:\.\d+)?)\s*s/i);
+        if (matchSec && parseFloat(matchSec[1])) {
+          cooldownMs = parseFloat(matchSec[1]) * 1000;
+        }
+        this.quotaExhaustedUntil = Date.now() + cooldownMs;
+        this.lastErrorCode = 'QUOTA_EXHAUSTED';
+        this.lastError = 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.';
+        throw new ProviderError(
+          'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.',
+          'gemini',
+          'QUOTA_EXHAUSTED',
+          429,
+          this.modelName
+        );
+      }
+
+      if (error.status === 401 || error.status === 403 || errStr.includes('401') || errStr.includes('API_KEY_INVALID')) {
+        this.lastErrorCode = 'AUTHENTICATION_ERROR';
+        this.lastError = 'Provider authentication or permission failed.';
+        throw new ProviderError(
+          'Gemini authentication failed. Verify GEMINI_API_KEY in Render environment.',
+          'gemini',
+          'AUTHENTICATION_ERROR',
+          401,
+          this.modelName
+        );
+      }
+
+      if (error.status === 404 || errStr.includes('404') || errStr.includes('not found')) {
+        this.lastErrorCode = 'MODEL_NOT_FOUND';
+        this.lastError = 'The selected model or voice was not found.';
+        throw new ProviderError(
+          `The selected voice model '${this.modelName}' was not found.`,
+          'gemini',
+          'MODEL_NOT_FOUND',
+          404,
+          this.modelName
+        );
+      }
+
+      if (error.status === 503 || errStr.includes('503') || errStr.includes('UNAVAILABLE')) {
+        this.lastErrorCode = 'UNAVAILABLE';
+        this.lastError = 'The provider is temporarily unavailable.';
+        throw new ProviderError(
+          'Gemini Voice is temporarily unavailable.',
+          'gemini',
+          'UNAVAILABLE',
+          503,
+          this.modelName
+        );
+      }
+
+      this.lastErrorCode = 'UNAVAILABLE';
+      this.lastError = 'Gemini Voice is temporarily unavailable.';
       throw new ProviderError(
-        error.message || 'Failed to synthesize speech via Gemini Voice API.',
+        'Gemini Voice is temporarily unavailable.',
         'gemini',
-        'SYNTHESIS_FAILED',
+        'UNAVAILABLE',
         500,
         this.modelName
       );
@@ -160,7 +280,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       throw new ProviderError(
         'Gemini speech transcription is unconfigured.',
         'gemini',
-        'MISSING_CREDENTIALS',
+        'NOT_CONFIGURED',
         400
       );
     }
@@ -206,13 +326,38 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
     }
   }
 
-  public async testConnection(): Promise<{ success: boolean; latencyMs: number; model: string; audioUrl?: string; error?: string }> {
+  public async testConnection(): Promise<{
+    success: boolean;
+    latencyMs: number;
+    model: string;
+    voiceId?: string;
+    audioUrl?: string;
+    code?: string;
+    status: ProviderHealthStatus;
+    error?: string;
+    message?: string;
+  }> {
     if (!this.ai || !this.isConfigured) {
       return {
         success: false,
         latencyMs: 0,
         model: this.modelName,
+        voiceId: 'Aoede (Aura)',
+        code: 'NOT_CONFIGURED',
+        status: 'NOT_CONFIGURED',
         error: 'GEMINI_API_KEY is not configured on the backend server.',
+      };
+    }
+
+    if (this.isQuotaExhausted()) {
+      return {
+        success: false,
+        latencyMs: 0,
+        model: this.modelName,
+        voiceId: 'Aoede (Aura)',
+        code: 'QUOTA_EXHAUSTED',
+        status: 'QUOTA_EXHAUSTED',
+        error: 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.',
       };
     }
 
@@ -223,18 +368,28 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         voiceId: 'aura',
       });
 
+      const latencyMs = Date.now() - startTime;
       return {
         success: Boolean(res.audioUrl),
-        latencyMs: Date.now() - startTime,
+        latencyMs,
         model: this.modelName,
+        voiceId: 'Aoede (Aura)',
         audioUrl: res.audioUrl,
+        code: 'CONNECTED',
+        status: 'CONNECTED',
+        message: 'Voice generated successfully',
       };
     } catch (err: any) {
+      const latencyMs = Date.now() - startTime;
+      const status = this.getStatus();
       return {
         success: false,
-        latencyMs: Date.now() - startTime,
+        latencyMs,
         model: this.modelName,
-        error: err.message,
+        voiceId: 'Aoede (Aura)',
+        code: err.code || 'UNAVAILABLE',
+        status,
+        error: err.message || 'Gemini Voice test failed.',
       };
     }
   }

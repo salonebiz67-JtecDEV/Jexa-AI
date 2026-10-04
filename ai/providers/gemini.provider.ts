@@ -1,6 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { ITextAIProvider, TextGenerationRequest, TextGenerationResponse } from './text-provider.interface';
-import { TextProviderType, ProviderError } from '../../shared/types/provider';
+import { TextProviderType, ProviderError, formatCleanProviderError } from '../../shared/types/provider';
 
 export class GeminiTextAIProvider implements ITextAIProvider {
   public readonly providerType: TextProviderType = 'gemini';
@@ -63,6 +63,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       });
 
       const responseText = response.text || '';
+      this.lastError = undefined;
 
       return {
         content: responseText,
@@ -78,31 +79,14 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       };
     } catch (error: any) {
       console.error('[GeminiTextAIProvider] API call failed:', error);
-      this.lastError = error.message;
-
-      const errMsg = error.message || '';
-      let code = 'PROVIDER_ERROR';
-      let statusCode = 500;
-
-      if (errMsg.includes('403') || errMsg.includes('PERMISSION_DENIED') || errMsg.includes('API key')) {
-        code = 'AUTHENTICATION_ERROR';
-        statusCode = 403;
-      } else if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
-        code = 'RATE_LIMITED';
-        statusCode = 429;
-      } else if (errMsg.includes('503') || errMsg.includes('UNAVAILABLE')) {
-        code = 'PROVIDER_UNAVAILABLE';
-        statusCode = 503;
-      } else if (errMsg.includes('not found') || errMsg.includes('404')) {
-        code = 'MODEL_NOT_FOUND';
-        statusCode = 404;
-      }
+      const formatted = formatCleanProviderError(error);
+      this.lastError = formatted.cleanMessage;
 
       throw new ProviderError(
-        `Gemini API error: ${errMsg}`,
+        formatted.cleanMessage,
         'gemini',
-        code,
-        statusCode,
+        formatted.code,
+        formatted.statusCode,
         this.modelName
       );
     }
@@ -146,6 +130,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       }
 
       onChunk('', true);
+      this.lastError = undefined;
 
       return {
         content: fullText,
@@ -161,12 +146,13 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       };
     } catch (error: any) {
       console.error('[GeminiTextAIProvider] Streaming failed:', error);
-      this.lastError = error.message;
+      const formatted = formatCleanProviderError(error);
+      this.lastError = formatted.cleanMessage;
       throw new ProviderError(
-        `Gemini stream error: ${error.message || 'Stream generation failed'}`,
+        formatted.cleanMessage,
         'gemini',
-        'PROVIDER_STREAM_ERROR',
-        500,
+        formatted.code,
+        formatted.statusCode,
         this.modelName
       );
     }
@@ -191,17 +177,21 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         temperature: 0.1,
       });
 
+      this.lastError = undefined;
+
       return {
         success: true,
         latencyMs: Date.now() - startTime,
         model: res.model,
       };
     } catch (err: any) {
+      const formatted = formatCleanProviderError(err);
+      this.lastError = formatted.cleanMessage;
       return {
         success: false,
         latencyMs: Date.now() - startTime,
         model: this.modelName,
-        error: err.message,
+        error: formatted.cleanMessage,
       };
     }
   }
