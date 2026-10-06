@@ -3,6 +3,7 @@ export * from './brain';
 export * from './memory';
 export * from './provider';
 export * from './features';
+export * from './database';
 
 export interface ApiResponse<T = any> {
   success: boolean;

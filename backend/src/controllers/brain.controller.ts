@@ -5,7 +5,8 @@ import { AIProviderRegistry } from '../../../ai/providers/registry';
 export class BrainController {
   public static async getProfile(req: Request, res: Response): Promise<void> {
     try {
-      const profile = await DatabaseService.getBrainProfile();
+      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const profile = await DatabaseService.getBrainProfile(userId);
       const isDbConnected = await DatabaseService.isConnected();
       const providerStatus = AIProviderRegistry.getInstance().getStatus(
         isDbConnected,
@@ -22,14 +23,16 @@ export class BrainController {
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[BrainController] getProfile error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to fetch brain profile.' });
     }
   }
 
   public static async updateProfile(req: Request, res: Response): Promise<void> {
     try {
       const updates = req.body;
-      const updated = await DatabaseService.updateBrainProfile(updates);
+      const userId = (req.headers['x-user-id'] as string) || req.body?.userId;
+      const updated = await DatabaseService.updateBrainProfile(updates, userId);
 
       const registry = AIProviderRegistry.getInstance();
       if (updated.selectedTextProvider) {
@@ -45,7 +48,8 @@ export class BrainController {
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[BrainController] updateProfile error:', error);
+      res.status(500).json({ success: false, error: error.message || "Couldn't save settings. Please try again." });
     }
   }
 }

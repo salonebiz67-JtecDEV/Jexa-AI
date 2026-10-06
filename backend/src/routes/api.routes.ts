@@ -7,8 +7,14 @@ import { MemoryController } from '../controllers/memory.controller';
 import { BrainController } from '../controllers/brain.controller';
 import { HealthController } from '../controllers/health.controller';
 import { ProviderController } from '../controllers/provider.controller';
+import { DatabaseController } from '../controllers/database.controller';
 
 const router = Router();
+
+// Database Health & Diagnostics
+router.get('/database/health', DatabaseController.getHealth);
+router.post('/database/test', DatabaseController.runTest);
+router.get('/database/schema', DatabaseController.getSchema);
 
 // Chat & Voice
 router.post('/chat', ChatController.sendMessage);

@@ -10,7 +10,10 @@ export interface BrainProfile {
   version: string;
   activePersonality: PersonalityStyle;
   selectedTextProvider?: TextProviderType;
+  selectedTextModel?: string;
   selectedVoiceProvider?: VoiceProviderType;
+  selectedVoiceModel?: string;
+  theme?: 'dark' | 'light' | 'system';
   traits: string[];
   toneParameters: {
     warmth: number;       // 0 to 1

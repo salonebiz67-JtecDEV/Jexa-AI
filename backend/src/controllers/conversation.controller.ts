@@ -4,28 +4,38 @@ import { DatabaseService } from '../database/db-service';
 export class ConversationController {
   public static async list(req: Request, res: Response): Promise<void> {
     try {
-      const conversations = await DatabaseService.listConversations();
+      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const conversations = await DatabaseService.listConversations(userId);
       res.status(200).json({
         success: true,
         data: conversations,
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[ConversationController] list error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Unable to sync with the server.',
+      });
     }
   }
 
   public static async create(req: Request, res: Response): Promise<void> {
     try {
       const { title, personaId } = req.body || {};
-      const conversation = await DatabaseService.createConversation(title, personaId);
+      const userId = (req.headers['x-user-id'] as string) || req.body?.userId;
+      const conversation = await DatabaseService.createConversation(title, personaId, userId);
       res.status(201).json({
         success: true,
         data: conversation,
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[ConversationController] create error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Couldn't save. Please try again.",
+      });
     }
   }
 
@@ -43,7 +53,11 @@ export class ConversationController {
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[ConversationController] getById error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Unable to sync with the server.',
+      });
     }
   }
 
@@ -68,7 +82,11 @@ export class ConversationController {
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[ConversationController] update error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Couldn't save. Please try again.",
+      });
     }
   }
 
@@ -89,7 +107,11 @@ export class ConversationController {
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[ConversationController] togglePin error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Couldn't save. Please try again.",
+      });
     }
   }
 
@@ -103,7 +125,11 @@ export class ConversationController {
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[ConversationController] getMessages error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Unable to sync with the server.',
+      });
     }
   }
 
@@ -117,7 +143,11 @@ export class ConversationController {
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[ConversationController] delete error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Couldn't save. Please try again.",
+      });
     }
   }
 }
