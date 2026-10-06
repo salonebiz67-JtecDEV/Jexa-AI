@@ -4,6 +4,7 @@ import { GeminiTextAIProvider } from './gemini.provider';
 import { GeminiVoiceAIProvider } from './gemini-voice.provider';
 import { GroqTextAIProvider } from './groq.provider';
 import { ElevenLabsVoiceAIProvider } from './elevenlabs.provider';
+import { PersonalVoiceAIProvider } from './personal-voice.provider';
 import { ProviderStatus, TextProviderType, VoiceProviderType, ProviderDetail, ProviderHealthStatus } from '../../shared/types/provider';
 import { AIProvidersConfig, loadAIProvidersConfig } from './config';
 
@@ -35,13 +36,17 @@ export class AIProviderRegistry {
     // Initialize Voice Providers
     const geminiVoice = new GeminiVoiceAIProvider();
     const elevenLabsVoice = new ElevenLabsVoiceAIProvider();
+    const personalVoice = new PersonalVoiceAIProvider();
 
     this.voiceProviders.set('gemini', geminiVoice);
     this.voiceProviders.set('elevenlabs', elevenLabsVoice);
+    this.voiceProviders.set('personal', personalVoice);
 
     // Default voice provider based on config or availability
     if (this.config.voice.provider === 'elevenlabs' && elevenLabsVoice.isConfigured) {
       this.defaultVoiceType = 'elevenlabs';
+    } else if (this.config.voice.provider === 'personal' && personalVoice.isConfigured) {
+      this.defaultVoiceType = 'personal';
     } else {
       this.defaultVoiceType = 'gemini';
     }
@@ -77,7 +82,10 @@ export class AIProviderRegistry {
     if (provider) {
       return provider;
     }
-    const fallback = this.voiceProviders.get('gemini') || this.voiceProviders.get('elevenlabs');
+    const fallback =
+      this.voiceProviders.get('gemini') ||
+      this.voiceProviders.get('elevenlabs') ||
+      this.voiceProviders.get('personal');
     if (fallback) {
       return fallback;
     }
@@ -212,6 +220,7 @@ export class AIProviderRegistry {
 
     const geminiVoice = this.voiceProviders.get('gemini') as any;
     const elevenLabsVoice = this.voiceProviders.get('elevenlabs') as any;
+    const personalVoice = this.voiceProviders.get('personal') as any;
 
     const geminiTextStatus: ProviderHealthStatus = !geminiText?.isConfigured
       ? 'NOT_CONFIGURED'
@@ -236,6 +245,12 @@ export class AIProviderRegistry {
     const elevenLabsVoiceStatus: ProviderHealthStatus = elevenLabsVoice?.getStatus
       ? elevenLabsVoice.getStatus()
       : !elevenLabsVoice?.isConfigured
+      ? 'NOT_CONFIGURED'
+      : 'UNAVAILABLE';
+
+    const personalVoiceStatus: ProviderHealthStatus = personalVoice?.getStatus
+      ? personalVoice.getStatus()
+      : !personalVoice?.isConfigured
       ? 'NOT_CONFIGURED'
       : 'UNAVAILABLE';
 
@@ -283,10 +298,26 @@ export class AIProviderRegistry {
         error: elevenLabsVoice?.lastError,
         lastSuccessfulTest: elevenLabsVoice?.lastSuccessfulTest,
       },
+      {
+        type: 'personal',
+        name: 'JEXA Personal Voice',
+        isConfigured: Boolean(personalVoice?.isConfigured),
+        model: personalVoice?.modelName || 'none',
+        voiceId: personalVoice?.referenceId || (personalVoice?.referenceMetadata ? 'Sample uploaded' : 'No voice sample'),
+        description: 'Personal reference-based voice synthesis using your recorded audio',
+        status: personalVoiceStatus,
+        error: personalVoice?.lastError,
+        lastSuccessfulTest: personalVoice?.lastSuccessfulTest,
+      },
     ];
 
     const activeTextStatus = activeText.providerType === 'groq' ? groqTextStatus : geminiTextStatus;
-    const activeVoiceStatus = activeVoice.providerType === 'elevenlabs' ? elevenLabsVoiceStatus : geminiVoiceStatus;
+    const activeVoiceStatus =
+      activeVoice.providerType === 'elevenlabs'
+        ? elevenLabsVoiceStatus
+        : activeVoice.providerType === 'personal'
+        ? personalVoiceStatus
+        : geminiVoiceStatus;
 
     return {
       textProvider: {
@@ -306,9 +337,16 @@ export class AIProviderRegistry {
         voiceId:
           activeVoice.providerType === 'elevenlabs'
             ? elevenLabsVoice?.defaultVoiceId || '21m00Tcm4TlvDq8ikWAM'
+            : activeVoice.providerType === 'personal'
+            ? personalVoice?.referenceId || (personalVoice?.referenceMetadata ? 'Sample uploaded' : 'No voice sample')
             : 'Aoede / Fenrir / Kore',
         status: activeVoiceStatus,
-        description: `${activeVoice.providerType === 'elevenlabs' ? 'ElevenLabs Speech' : 'Gemini Neural Voice'} active`,
+        description:
+          activeVoice.providerType === 'elevenlabs'
+            ? 'ElevenLabs Speech active'
+            : activeVoice.providerType === 'personal'
+            ? `JEXA Personal Voice (${personalVoice?.engine || 'none'}) active`
+            : 'Gemini Neural Voice active',
         lastError: (activeVoice as any)?.lastError,
         lastSuccessfulTest: (activeVoice as any)?.lastSuccessfulTest,
       },

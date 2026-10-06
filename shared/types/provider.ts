@@ -1,14 +1,17 @@
 export type TextProviderType = 'development_mock' | 'openai' | 'anthropic' | 'gemini' | 'groq' | 'custom_http';
-export type VoiceProviderType = 'development_mock' | 'elevenlabs' | 'openai_voice' | 'browser_speech' | 'custom_tts' | 'gemini';
+export type VoiceProviderType = 'development_mock' | 'elevenlabs' | 'openai_voice' | 'browser_speech' | 'custom_tts' | 'gemini' | 'personal';
 
 export type ProviderHealthStatus =
   | 'CONNECTED'
+  | 'READY'
   | 'UNAVAILABLE'
+  | 'TEMPORARILY_UNAVAILABLE'
   | 'QUOTA_EXHAUSTED'
   | 'AUTHENTICATION_ERROR'
   | 'PAYMENT_REQUIRED'
   | 'MODEL_NOT_FOUND'
-  | 'NOT_CONFIGURED';
+  | 'NOT_CONFIGURED'
+  | 'ERROR';
 
 export interface ProviderDetail {
   type: string;
@@ -86,6 +89,29 @@ export interface VoiceSynthesisResponse {
   model?: string;
 }
 
+export interface PersonalVoiceReferenceMetadata {
+  id: string;
+  name: string;
+  format?: string;
+  durationSeconds?: number;
+  sampleRate?: number;
+  recordedAt: string;
+  sizeBytes?: number;
+  isLocalOnly?: boolean;
+}
+
+export interface PersonalVoiceStatusResponse {
+  configured: boolean;
+  engine: string;
+  referenceVoice: boolean;
+  referenceMetadata?: PersonalVoiceReferenceMetadata | null;
+  ready: boolean;
+  model?: string;
+  apiUrl?: string;
+  message: string;
+  status: ProviderHealthStatus;
+}
+
 export interface VoiceHealthResponse {
   gemini: {
     configured: boolean;
@@ -96,6 +122,12 @@ export interface VoiceHealthResponse {
     configured: boolean;
     provider: 'elevenlabs';
     model?: string;
+  };
+  personal?: {
+    configured: boolean;
+    provider: 'personal';
+    engine?: string;
+    referenceVoice?: boolean;
   };
 }
 
@@ -214,6 +246,26 @@ export function formatCleanProviderError(error: any): { cleanMessage: string; co
       cleanMessage: 'The provider is temporarily unavailable.',
       code: 'PROVIDER_UNAVAILABLE',
       statusCode: 503,
+    };
+  }
+
+  // 6. Personal Voice not configured / missing reference
+  if (
+    error?.provider === 'personal' ||
+    fullText.includes('personal voice') ||
+    fullText.includes('personal_voice')
+  ) {
+    if (fullText.includes('sample') || fullText.includes('reference')) {
+      return {
+        cleanMessage: 'Personal Voice sample not recorded yet. Record or upload your voice sample in Settings.',
+        code: 'NOT_CONFIGURED',
+        statusCode: 400,
+      };
+    }
+    return {
+      cleanMessage: 'Personal voice engine not configured.',
+      code: 'NOT_CONFIGURED',
+      statusCode: 400,
     };
   }
 

@@ -427,6 +427,20 @@ export const ChatPage: React.FC = () => {
         errMsg.includes('402') ||
         errMsg.includes('paid plan');
 
+      if (activeVoiceProvider === 'personal') {
+        const cleanPersonalMsg =
+          errMsg.includes('not configured') || errMsg.includes('not recorded')
+            ? 'Personal Voice is not configured yet.'
+            : errMsg || 'Personal Voice is not configured yet.';
+        setVoiceNotification({
+          message: cleanPersonalMsg,
+          type: 'warning',
+          actionLabel: 'Set Up Personal Voice',
+          onAction: () => setSettingsOpen(true),
+        });
+        return;
+      }
+
       if (is429) {
         // Record quota exhausted cooldown to stop spamming Gemini Voice
         safeStorage.setItem(

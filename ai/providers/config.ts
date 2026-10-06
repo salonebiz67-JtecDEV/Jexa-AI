@@ -27,6 +27,13 @@ export interface AIProvidersConfig {
     voiceId: string;
     modelId: string;
   };
+  personalVoice: {
+    engine: string;
+    model: string;
+    referenceId: string;
+    apiUrl?: string;
+    apiKey?: string;
+  };
 }
 
 export function loadAIProvidersConfig(): AIProvidersConfig {
@@ -70,6 +77,13 @@ export function loadAIProvidersConfig(): AIProvidersConfig {
       apiKey: elevenLabsApiKey,
       voiceId: elevenLabsVoiceId,
       modelId: elevenLabsModelId,
+    },
+    personalVoice: {
+      engine: (process.env.PERSONAL_VOICE_ENGINE || 'none').trim().toLowerCase(),
+      model: (process.env.PERSONAL_VOICE_MODEL || '').trim(),
+      referenceId: (process.env.PERSONAL_VOICE_REFERENCE_ID || '').trim(),
+      apiUrl: process.env.PERSONAL_VOICE_API_URL,
+      apiKey: process.env.PERSONAL_VOICE_API_KEY,
     },
   };
 }

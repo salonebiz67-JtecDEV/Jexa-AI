@@ -29,6 +29,14 @@ export interface BrainProfile {
     autoExtract: boolean;
     maxContextMemories: number;
   };
+  personalVoiceSettings?: {
+    referenceId?: string;
+    sampleName?: string;
+    durationSeconds?: number;
+    recordedAt?: string;
+    engine?: string;
+    model?: string;
+  };
 }
 
 export interface PersonalityDefinition {

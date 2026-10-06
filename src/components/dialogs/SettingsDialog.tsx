@@ -19,13 +19,17 @@ import {
   RotateCcw,
   ChevronDown,
   ChevronUp,
+  UserCheck,
+  Sliders,
+  Upload,
 } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useBrainSettings } from '../../hooks/useBrainSettings';
-import { TextProviderType, VoiceProviderType, ProviderHealthStatus } from '../../../shared/types/provider';
+import { TextProviderType, VoiceProviderType, ProviderHealthStatus, PersonalVoiceStatusResponse } from '../../../shared/types/provider';
 import { safeStorage } from '../../services/storage';
 import { ApiClient, ProviderTestResult } from '../../services/api.client';
 import { AudioPlayer } from '../../services/audioPlayer';
+import { PersonalVoiceSetupModal } from '../voice/PersonalVoiceSetupModal';
 
 import { LiveVoiceDebugStats } from '../../hooks/useLiveVoice';
 
@@ -59,7 +63,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   const [voiceProvider, setVoiceProvider] = useState<VoiceProviderType>(() => {
     const saved = safeStorage.getItem('jexa_voice_provider');
-    if (saved === 'gemini' || saved === 'elevenlabs') return saved as VoiceProviderType;
+    if (saved === 'gemini' || saved === 'elevenlabs' || saved === 'personal') return saved as VoiceProviderType;
     return 'gemini';
   });
 
@@ -76,6 +80,14 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   const [testingElevenLabsVoice, setTestingElevenLabsVoice] = useState(false);
   const [elevenLabsVoiceTestResult, setElevenLabsVoiceTestResult] = useState<ProviderTestResult | null>(null);
+
+  // JEXA Personal Voice state & modal controls
+  const [testingPersonalVoice, setTestingPersonalVoice] = useState(false);
+  const [personalVoiceTestResult, setPersonalVoiceTestResult] = useState<ProviderTestResult | null>(null);
+  const [personalVoiceStatusData, setPersonalVoiceStatusData] = useState<PersonalVoiceStatusResponse | null>(null);
+  const [personalVoiceModalOpen, setPersonalVoiceModalOpen] = useState(false);
+  const [personalModalInitialTab, setPersonalModalInitialTab] = useState<'sample' | 'engine'>('sample');
+  const [personalModalInitialMode, setPersonalModalInitialMode] = useState<'record' | 'upload'>('record');
 
   // Debug/Diagnostics panel toggle
   const [showDeveloperPanel, setShowDeveloperPanel] = useState(false);
@@ -97,9 +109,21 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     }
   }, [profile, isOpen]);
 
+  const loadPersonalVoiceStatus = async () => {
+    try {
+      const res = await ApiClient.getPersonalVoiceStatus();
+      setPersonalVoiceStatusData(res);
+    } catch (e) {
+      console.warn('[SettingsDialog] Could not load personal voice status:', e);
+    }
+  };
+
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       setNotificationStatus(Notification.permission);
+    }
+    if (isOpen) {
+      loadPersonalVoiceStatus();
     }
   }, [isOpen]);
 
@@ -233,6 +257,40 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     }
   };
 
+  const handleTestPersonalVoice = async () => {
+    setTestingPersonalVoice(true);
+    setPersonalVoiceTestResult(null);
+    try {
+      const res = await ApiClient.testPersonalVoice();
+      setPersonalVoiceTestResult(res);
+      if (res.success && (res as any).audioUrl) {
+        try {
+          await AudioPlayer.playUrl((res as any).audioUrl);
+        } catch (audioErr) {
+          console.warn('[SettingsDialog] Test audio playback error:', audioErr);
+        }
+      }
+      await refresh();
+      await loadPersonalVoiceStatus();
+    } catch (err: any) {
+      setPersonalVoiceTestResult({
+        success: false,
+        provider: 'personal',
+        code: err.code || 'NOT_CONFIGURED',
+        status: (err.code as ProviderHealthStatus) || 'NOT_CONFIGURED',
+        error: err.message || 'Personal voice engine not configured.',
+      });
+    } finally {
+      setTestingPersonalVoice(false);
+    }
+  };
+
+  const handleOpenPersonalVoiceModal = (tab: 'sample' | 'engine' = 'sample', mode: 'record' | 'upload' = 'record') => {
+    setPersonalModalInitialTab(tab);
+    setPersonalModalInitialMode(mode);
+    setPersonalVoiceModalOpen(true);
+  };
+
   if (!isOpen) return null;
 
   const handleSave = async () => {
@@ -269,6 +327,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   const geminiVoiceDetail = providerStatus?.availableVoiceProviders?.find((p) => p.type === 'gemini');
   const elevenLabsDetail = providerStatus?.availableVoiceProviders?.find((p) => p.type === 'elevenlabs');
+  const personalVoiceDetail = providerStatus?.availableVoiceProviders?.find((p) => p.type === 'personal');
 
   const isGeminiTextConfigured = geminiTextDetail?.isConfigured ?? true;
   const isGroqConfigured = groqTextDetail?.isConfigured ?? false;
@@ -276,8 +335,13 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const isGeminiVoiceConfigured = geminiVoiceDetail?.isConfigured ?? true;
   const isElevenLabsConfigured = elevenLabsDetail?.isConfigured ?? false;
 
+  const isPersonalConfigured = Boolean(personalVoiceStatusData?.configured || personalVoiceDetail?.isConfigured);
+  const hasReferenceVoice = Boolean(personalVoiceStatusData?.referenceVoice || personalVoiceDetail?.voiceId?.includes('Sample'));
+  const personalEngine = personalVoiceStatusData?.engine || (personalVoiceDetail as any)?.engine || 'none';
+  const personalModel = personalVoiceStatusData?.model || personalVoiceDetail?.model || 'none';
+
   // Resolved statuses matching exact user requirements:
-  // CONNECTED | UNAVAILABLE | QUOTA_EXHAUSTED | AUTHENTICATION_ERROR | PAYMENT_REQUIRED | MODEL_NOT_FOUND | NOT_CONFIGURED
+  // CONNECTED | READY | UNAVAILABLE | TEMPORARILY_UNAVAILABLE | QUOTA_EXHAUSTED | AUTHENTICATION_ERROR | PAYMENT_REQUIRED | MODEL_NOT_FOUND | NOT_CONFIGURED | ERROR
   const geminiTextStatus: ProviderHealthStatus = geminiTextTestResult
     ? (geminiTextTestResult.status || (geminiTextTestResult.success ? 'CONNECTED' : (geminiTextTestResult.code as ProviderHealthStatus) || 'UNAVAILABLE'))
     : (geminiTextDetail?.status || (isGeminiTextConfigured ? 'CONNECTED' : 'NOT_CONFIGURED'));
@@ -295,6 +359,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     ? (elevenLabsVoiceTestResult.status || (elevenLabsVoiceTestResult.success ? 'CONNECTED' : (elevenLabsVoiceTestResult.code as ProviderHealthStatus) || 'UNAVAILABLE'))
     : (elevenLabsDetail?.status || (isElevenLabsConfigured ? 'UNAVAILABLE' : 'NOT_CONFIGURED'));
 
+  const personalVoiceStatus: ProviderHealthStatus = personalVoiceTestResult
+    ? (personalVoiceTestResult.status || (personalVoiceTestResult.success ? 'CONNECTED' : (personalVoiceTestResult.code as ProviderHealthStatus) || 'NOT_CONFIGURED'))
+    : (personalVoiceStatusData?.status || personalVoiceDetail?.status || (isPersonalConfigured ? 'CONNECTED' : (hasReferenceVoice ? 'READY' : 'NOT_CONFIGURED')));
+
   const renderStatusBadge = (status: ProviderHealthStatus) => {
     switch (status) {
       case 'CONNECTED':
@@ -302,6 +370,13 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
             CONNECTED
+          </span>
+        );
+      case 'READY':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-teal-500/15 text-teal-300 border border-teal-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
+            READY
           </span>
         );
       case 'QUOTA_EXHAUSTED':
@@ -332,6 +407,13 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
             MODEL NOT FOUND
           </span>
         );
+      case 'ERROR':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+            ERROR
+          </span>
+        );
       case 'NOT_CONFIGURED':
         return (
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-500/15 text-slate-400 border border-white/10">
@@ -339,19 +421,21 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
             NOT CONFIGURED
           </span>
         );
+      case 'TEMPORARILY_UNAVAILABLE':
       case 'UNAVAILABLE':
       default:
         return (
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/20">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-            UNAVAILABLE
+            TEMPORARILY UNAVAILABLE
           </span>
         );
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md pt-safe pb-safe">
+    <>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md pt-safe pb-safe">
       <div className="relative w-full max-w-lg bg-[#0f1422] border border-white/[0.08] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header with Back button */}
         <div className="flex items-center justify-between px-3.5 py-3 border-b border-white/[0.06] bg-[#0b0f19]">
@@ -579,8 +663,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
               <span className="text-[10px] text-slate-500 font-mono">Independent Selection</span>
             </div>
 
-            {/* Provider Selection Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Provider Selection Cards: 3 Providers */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               {/* Google Gemini Voice Card */}
               <div
                 className={`p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between ${
@@ -778,6 +862,218 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   )}
                 </div>
               </div>
+
+              {/* 3. JEXA Personal Voice Card */}
+              <div
+                className={`p-3.5 rounded-xl border text-left transition-all relative flex flex-col justify-between ${
+                  voiceProvider === 'personal'
+                    ? 'border-emerald-500 bg-emerald-950/25 ring-1 ring-emerald-500/30'
+                    : 'border-white/[0.07] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]'
+                }`}
+              >
+                <div
+                  className="cursor-pointer"
+                  onClick={() => handleSelectVoiceProvider('personal')}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5 text-white font-semibold text-xs truncate">
+                      <UserCheck className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                      <span className="truncate">Personal Voice</span>
+                    </div>
+                    {renderStatusBadge(personalVoiceStatus)}
+                  </div>
+
+                  <div className="flex items-center gap-2 mb-2">
+                    <span
+                      className={`text-[9px] px-1.5 py-0.5 rounded font-medium border ${
+                        isPersonalConfigured
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                          : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                      }`}
+                    >
+                      {isPersonalConfigured ? 'Engine Configured' : 'Not Configured'}
+                    </span>
+                    <span className="text-[10px] font-mono text-teal-400/90 truncate">
+                      {personalEngine && personalEngine !== 'none' ? personalEngine : 'none'}
+                    </span>
+                  </div>
+
+                  <div className="text-[10px] text-slate-400 leading-tight mb-2 truncate">
+                    Ref: <span className="text-slate-300 font-mono">{hasReferenceVoice ? 'Sample recorded' : 'No sample'}</span>
+                  </div>
+
+                  <div className="text-[9px] text-slate-500 mb-3 flex items-center justify-between">
+                    <span>Engine:</span>
+                    <span className="text-slate-300 font-mono truncate">
+                      {personalEngine && personalEngine !== 'none' ? personalEngine : 'Not configured'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Quick actions for Personal Voice Card */}
+                <div className="pt-2 border-t border-white/[0.06] space-y-1.5">
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenPersonalVoiceModal('sample')}
+                      className="w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/30 text-[10px] font-semibold text-teal-200 transition-colors cursor-pointer"
+                    >
+                      <Sliders className="w-3 h-3 text-teal-400" />
+                      <span>Set Up</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestPersonalVoice}
+                      disabled={!isPersonalConfigured || !hasReferenceVoice || testingPersonalVoice}
+                      title={
+                        !isPersonalConfigured || !hasReferenceVoice
+                          ? 'Test Voice is disabled until a real voice engine and reference voice are configured.'
+                          : 'Test personal voice generation'
+                      }
+                      className="w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-[10px] font-medium text-slate-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <Play className="w-3 h-3 text-teal-400" />
+                      <span>{testingPersonalVoice ? 'Testing...' : 'Test Voice'}</span>
+                    </button>
+                  </div>
+
+                  {personalVoiceTestResult && (
+                    <div
+                      className={`text-[9px] p-1.5 rounded-lg font-medium border flex items-start gap-1 ${
+                        personalVoiceTestResult.success
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                          : 'bg-rose-500/10 text-rose-300 border-rose-500/20'
+                      }`}
+                    >
+                      {personalVoiceTestResult.success ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span className="truncate">Verified ({personalVoiceTestResult.latencyMs}ms)</span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span className="leading-snug truncate" title={personalVoiceTestResult.error}>
+                            {personalVoiceTestResult.error}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* DEDICATED JEXA PERSONAL VOICE SETTINGS SECTION */}
+            <div className="p-3.5 rounded-xl border border-teal-500/25 bg-gradient-to-br from-teal-950/20 via-black/40 to-black/20 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-teal-500/15 border border-teal-500/30 flex items-center justify-center">
+                    <UserCheck className="w-4 h-4 text-teal-400" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white tracking-wide flex items-center gap-1.5">
+                      <span>JEXA PERSONAL VOICE</span>
+                    </h4>
+                    <p className="text-[10px] text-slate-400">
+                      Use your own recorded voice for AI-generated speech
+                    </p>
+                  </div>
+                </div>
+                {renderStatusBadge(personalVoiceStatus)}
+              </div>
+
+              {/* Status and Parameters Required by Specification */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs bg-black/40 p-2.5 rounded-lg border border-white/[0.04]">
+                <div>
+                  <span className="text-[10px] text-slate-500 block mb-0.5">Voice model:</span>
+                  <span className="font-mono text-slate-200 font-medium">
+                    {personalModel && personalModel !== 'none' ? personalModel : 'Not configured'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 block mb-0.5">Reference voice:</span>
+                  <span className="text-slate-200 font-medium truncate block">
+                    {hasReferenceVoice
+                      ? personalVoiceStatusData?.referenceMetadata?.name
+                        ? `${personalVoiceStatusData.referenceMetadata.name} (${personalVoiceStatusData.referenceMetadata.durationSeconds || 'sample'}s)`
+                        : 'Sample recorded'
+                      : 'Not uploaded'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 block mb-0.5">Engine:</span>
+                  <span className="font-mono text-slate-200 font-medium">
+                    {personalEngine && personalEngine !== 'none' ? personalEngine : 'Not configured'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Action Buttons: [ Set Up Personal Voice ] [ Record Voice ] [ Upload Voice Sample ] [ Set Up Engine ] [ Test Voice ] */}
+              <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => handleOpenPersonalVoiceModal('sample')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-bold transition-all shadow-sm cursor-pointer"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  <span>Set Up Personal Voice</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleOpenPersonalVoiceModal('sample', 'record')}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-xs font-medium text-slate-200 transition-colors cursor-pointer"
+                >
+                  <Mic className="w-3.5 h-3.5 text-teal-400" />
+                  <span>Record Voice</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleOpenPersonalVoiceModal('sample', 'upload')}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-xs font-medium text-slate-200 transition-colors cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Upload Voice Sample</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleOpenPersonalVoiceModal('engine')}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-xs font-medium text-slate-200 transition-colors cursor-pointer"
+                >
+                  <Cpu className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Set Up Engine</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTestPersonalVoice}
+                  disabled={!isPersonalConfigured || !hasReferenceVoice || testingPersonalVoice}
+                  title={
+                    !isPersonalConfigured || !hasReferenceVoice
+                      ? 'The Test Voice button must remain disabled until a real voice engine and reference voice are configured.'
+                      : 'Test personal voice synthesis'
+                  }
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-xs font-medium text-slate-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed ml-auto cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5 text-teal-400" />
+                  <span>{testingPersonalVoice ? 'Testing Voice...' : 'Test Voice'}</span>
+                </button>
+              </div>
+
+              {/* Helper notice when disabled */}
+              {(!isPersonalConfigured || !hasReferenceVoice) && (
+                <div className="text-[11px] text-slate-400 bg-black/30 border border-white/[0.04] p-2.5 rounded-lg flex items-center justify-between gap-2">
+                  <span>
+                    {!hasReferenceVoice
+                      ? 'No voice sample uploaded or recorded yet. Use [Record Voice] or [Upload Voice Sample] to add your reference.'
+                      : 'Personal voice engine not configured. Backend engine is currently set to PERSONAL_VOICE_ENGINE=none.'}
+                  </span>
+                  <span className="text-[10px] text-amber-400 font-mono shrink-0">Test Voice Disabled</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -790,7 +1086,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 Voice Persona
               </label>
               <span className="text-[9px] text-slate-500 font-mono">
-                Mapped to {voiceProvider === 'elevenlabs' ? 'ElevenLabs' : 'Gemini'}
+                Mapped to {voiceProvider === 'elevenlabs' ? 'ElevenLabs' : voiceProvider === 'personal' ? 'Personal Voice Sample' : 'Gemini'}
               </span>
             </div>
             <div className="grid grid-cols-3 gap-2">
@@ -872,8 +1168,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                     <p className="text-slate-200 truncate" title={textProvider === 'groq' ? (groqTextDetail?.model || 'llama-3.3-70b-versatile') : (geminiTextDetail?.model || 'gemini-3.8-flash')}>
                       Text: {textProvider === 'groq' ? (groqTextDetail?.model || 'llama-3.3-70b-versatile') : (geminiTextDetail?.model || 'gemini-3.8-flash')}
                     </p>
-                    <p className="text-slate-200 truncate" title={voiceProvider === 'elevenlabs' ? (elevenLabsDetail?.model || 'eleven_multilingual_v2') : (geminiVoiceDetail?.model || 'gemini-3.8-flash-lite-tts')}>
-                      Voice: {voiceProvider === 'elevenlabs' ? (elevenLabsDetail?.model || 'eleven_multilingual_v2') : (geminiVoiceDetail?.model || 'gemini-3.8-flash-lite-tts')}
+                    <p className="text-slate-200 truncate" title={voiceProvider === 'elevenlabs' ? (elevenLabsDetail?.model || 'eleven_multilingual_v2') : voiceProvider === 'personal' ? (personalModel || 'Not configured') : (geminiVoiceDetail?.model || 'gemini-3.8-flash-lite-tts')}>
+                      Voice: {voiceProvider === 'elevenlabs' ? (elevenLabsDetail?.model || 'eleven_multilingual_v2') : voiceProvider === 'personal' ? (personalModel || 'Not configured') : (geminiVoiceDetail?.model || 'gemini-3.8-flash-lite-tts')}
                     </p>
                   </div>
 
@@ -932,11 +1228,14 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                       const activeVoiceTestError =
                         voiceProvider === 'gemini'
                           ? geminiVoiceTestResult?.error
+                          : voiceProvider === 'personal'
+                          ? personalVoiceTestResult?.error
                           : elevenLabsVoiceTestResult?.error;
                       const displayError =
                         liveDebugStats?.lastError ||
                         activeTextTestResult?.error ||
                         activeVoiceTestError ||
+                        personalVoiceTestResult?.error ||
                         geminiVoiceTestResult?.error ||
                         elevenLabsVoiceTestResult?.error ||
                         'None';
@@ -1161,5 +1460,26 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
         </div>
       </div>
     </div>
+
+      {/* Personal Voice Setup & Calibration Modal */}
+      <PersonalVoiceSetupModal
+        isOpen={personalVoiceModalOpen}
+        onClose={() => {
+          setPersonalVoiceModalOpen(false);
+          loadPersonalVoiceStatus();
+          refresh();
+        }}
+        onSampleSaved={async () => {
+          await loadPersonalVoiceStatus();
+          await refresh();
+        }}
+        onSampleDeleted={async () => {
+          await loadPersonalVoiceStatus();
+          await refresh();
+        }}
+        initialTab={personalModalInitialTab}
+        initialMode={personalModalInitialMode}
+      />
+    </>
   );
 };

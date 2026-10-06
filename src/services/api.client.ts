@@ -14,6 +14,8 @@ import {
   VoiceProviderType,
   VoiceHealthResponse,
   ProviderHealthStatus,
+  PersonalVoiceStatusResponse,
+  PersonalVoiceReferenceMetadata,
 } from '../../shared/types';
 
 // =========================================================================
@@ -383,6 +385,46 @@ export const ApiClient = {
         body: JSON.stringify({ provider }),
       });
     }
+  },
+
+  // Personal Voice Engine Endpoints
+  async getPersonalVoiceStatus(): Promise<PersonalVoiceStatusResponse> {
+    const res = await fetchJson<{ success: boolean; data: PersonalVoiceStatusResponse }>(
+      `${API_BASE}/voice/personal/status`
+    );
+    return res.data;
+  },
+
+  async savePersonalVoiceReference(payload: {
+    name: string;
+    audioData?: string;
+    format?: string;
+    durationSeconds?: number;
+    sampleRate?: number;
+  }): Promise<{ success: boolean; data: PersonalVoiceReferenceMetadata }> {
+    return fetchJson<{ success: boolean; data: PersonalVoiceReferenceMetadata }>(
+      `${API_BASE}/voice/personal/reference`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async deletePersonalVoiceReference(): Promise<{ success: boolean; message: string }> {
+    return fetchJson<{ success: boolean; message: string }>(
+      `${API_BASE}/voice/personal/reference`,
+      {
+        method: 'DELETE',
+      }
+    );
+  },
+
+  async testPersonalVoice(text?: string): Promise<ProviderTestResult> {
+    return fetchJson<ProviderTestResult>(`${API_BASE}/voice/personal/test`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
   },
 
   // Health
