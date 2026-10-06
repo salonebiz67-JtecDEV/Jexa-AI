@@ -23,6 +23,7 @@ export interface ChatMessage {
 
 export interface Conversation {
   id: string;
+  userId?: string;
   title: string;
   createdAt: string;
   updatedAt: string;
@@ -35,6 +36,7 @@ export interface Conversation {
 
 export interface SendMessagePayload {
   conversationId?: string;
+  userId?: string;
   message: string;
   stream?: boolean;
   personaId?: string;

@@ -33,6 +33,8 @@ class InMemoryDatabase {
   public conversations: Map<string, Conversation> = new Map();
   public messages: Map<string, ChatMessage[]> = new Map();
   public memories: Map<string, MemoryItem> = new Map();
+  public userProfiles: Map<string, any> = new Map();
+  public userBrainProfiles: Map<string, BrainProfile> = new Map();
   public brainProfile: BrainProfile;
 
   constructor() {
@@ -137,27 +139,124 @@ export class DatabaseService {
    * Ensures the user record exists in the public.users table so that foreign key constraints
    * (REFERENCES public.users(id)) never fail on insert.
    */
-  public static async ensureUserExists(userId: string): Promise<void> {
+  public static async ensureUserExists(
+    userId: string,
+    details?: { email?: string; fullName?: string; avatarUrl?: string }
+  ): Promise<void> {
     const client = getSupabaseClient();
     if (!client) return;
 
     const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
     try {
-      const { error } = await client.from('users').upsert(
-        {
-          id: validUserId,
-          full_name: 'JEXA User',
-          email: `user-${validUserId.slice(0, 8)}@jexa.local`,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'id' }
-      );
+      const payload: Record<string, any> = {
+        id: validUserId,
+        full_name: details?.fullName || 'JEXA User',
+        email: details?.email || `user-${validUserId.slice(0, 8)}@jexa.local`,
+        updated_at: new Date().toISOString(),
+      };
+      if (details?.avatarUrl) {
+        payload.avatar_url = details.avatarUrl;
+      }
+
+      const { error } = await client.from('users').upsert(payload, {
+        onConflict: 'id',
+        ignoreDuplicates: !details, // Do not overwrite real profile with default placeholder if exists
+      });
       if (error && error.code !== '42P01') {
         console.warn('[DatabaseService] Note ensuring user exists:', error.message);
       }
     } catch (err: any) {
       console.warn('[DatabaseService] User check error:', err.message);
     }
+  }
+
+  public static async getUserProfile(userId: string): Promise<{
+    id: string;
+    email?: string;
+    fullName?: string;
+    avatarUrl?: string;
+    createdAt?: string;
+    updatedAt?: string;
+  } | null> {
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data, error } = await client
+          .from('users')
+          .select('*')
+          .eq('id', validUserId)
+          .maybeSingle();
+        if (!error && data) {
+          return {
+            id: data.id,
+            email: data.email,
+            fullName: data.full_name,
+            avatarUrl: data.avatar_url,
+            createdAt: data.created_at,
+            updatedAt: data.updated_at,
+          };
+        }
+      } catch (err: any) {
+        console.warn('[DatabaseService] Error fetching user profile:', err.message);
+      }
+    }
+    const memUser = memoryStore.userProfiles.get(validUserId);
+    return memUser || {
+      id: validUserId,
+      email: 'user@jexa.local',
+      fullName: 'JEXA User',
+    };
+  }
+
+  public static async upsertUserProfile(profile: {
+    id: string;
+    email?: string;
+    fullName?: string;
+    avatarUrl?: string;
+  }): Promise<{
+    id: string;
+    email?: string;
+    fullName?: string;
+    avatarUrl?: string;
+    updatedAt: string;
+  }> {
+    const validUserId = toValidUUID(profile.id || DEFAULT_USER_ID);
+    const updated = {
+      id: validUserId,
+      email: profile.email || `user-${validUserId.slice(0, 8)}@jexa.local`,
+      full_name: profile.fullName || 'JEXA User',
+      avatar_url: profile.avatarUrl || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { error } = await client.from('users').upsert(updated, { onConflict: 'id' });
+        if (error) {
+          console.warn('[DatabaseService] Failed to upsert user profile to Supabase:', error.message);
+        }
+      } catch (err: any) {
+        console.warn('[DatabaseService] Exception upserting user profile:', err.message);
+      }
+    }
+
+    memoryStore.userProfiles.set(validUserId, {
+      id: validUserId,
+      email: updated.email,
+      fullName: updated.full_name,
+      avatarUrl: updated.avatar_url || undefined,
+      updatedAt: updated.updated_at,
+    });
+
+    return {
+      id: validUserId,
+      email: updated.email,
+      fullName: updated.full_name,
+      avatarUrl: updated.avatar_url || undefined,
+      updatedAt: updated.updated_at,
+    };
   }
 
   // =========================================================================
@@ -186,6 +285,7 @@ export class DatabaseService {
       if (data) {
         return data.map((d) => ({
           id: d.id,
+          userId: d.user_id,
           title: d.title,
           createdAt: d.created_at,
           updatedAt: d.updated_at,
@@ -197,12 +297,15 @@ export class DatabaseService {
       }
     }
 
-    return Array.from(memoryStore.conversations.values()).sort((a, b) => {
-      if (Boolean(b.pinned) !== Boolean(a.pinned)) {
-        return b.pinned ? 1 : -1;
-      }
-      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-    });
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    return Array.from(memoryStore.conversations.values())
+      .filter((c) => !userId || c.userId === validUserId || c.userId === DEFAULT_USER_ID)
+      .sort((a, b) => {
+        if (Boolean(b.pinned) !== Boolean(a.pinned)) {
+          return b.pinned ? 1 : -1;
+        }
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      });
   }
 
   public static async getConversation(id: string): Promise<Conversation | null> {
@@ -223,6 +326,7 @@ export class DatabaseService {
       if (data) {
         return {
           id: data.id,
+          userId: data.user_id,
           title: data.title,
           createdAt: data.created_at,
           updatedAt: data.updated_at,
@@ -248,6 +352,7 @@ export class DatabaseService {
 
     const newConv: Conversation = {
       id,
+      userId: targetUserId,
       title: cleanTitle,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -508,7 +613,7 @@ export class DatabaseService {
             },
             personalVoiceSettings: data.settings_json?.personalVoiceSettings || memoryStore.brainProfile.personalVoiceSettings,
           };
-          memoryStore.brainProfile = profile;
+          memoryStore.userBrainProfiles.set(targetUserId, profile);
           return profile;
         }
 
@@ -521,9 +626,12 @@ export class DatabaseService {
             .maybeSingle();
 
           if (legacyData) {
-            memoryStore.brainProfile.activePersonality = legacyData.active_personality || memoryStore.brainProfile.activePersonality;
-            if (legacyData.voice_id) memoryStore.brainProfile.voiceSettings.voiceId = legacyData.voice_id;
-            if (legacyData.memory_enabled !== undefined) memoryStore.brainProfile.memorySettings.enabled = legacyData.memory_enabled;
+            const userProf = memoryStore.userBrainProfiles.get(targetUserId) || { ...memoryStore.brainProfile };
+            userProf.activePersonality = legacyData.active_personality || userProf.activePersonality;
+            if (legacyData.voice_id) userProf.voiceSettings.voiceId = legacyData.voice_id;
+            if (legacyData.memory_enabled !== undefined) userProf.memorySettings.enabled = legacyData.memory_enabled;
+            memoryStore.userBrainProfiles.set(targetUserId, userProf);
+            return userProf;
           }
         }
       } catch (err: any) {
@@ -531,7 +639,7 @@ export class DatabaseService {
       }
     }
 
-    return memoryStore.brainProfile;
+    return memoryStore.userBrainProfiles.get(targetUserId) || memoryStore.brainProfile;
   }
 
   public static async updateBrainProfile(
@@ -563,6 +671,7 @@ export class DatabaseService {
         : memoryStore.brainProfile.personalVoiceSettings,
     };
 
+    memoryStore.userBrainProfiles.set(targetUserId, merged);
     memoryStore.brainProfile = merged;
 
     const client = getSupabaseClient();
@@ -629,13 +738,19 @@ export class DatabaseService {
   // MEMORY PERSISTENCE
   // =========================================================================
 
-  public static async getMemories(): Promise<MemoryItem[]> {
+  public static async getMemories(userId?: string): Promise<MemoryItem[]> {
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
     const client = getSupabaseClient();
     if (client) {
-      const { data, error } = await client
+      let query = client
         .from('memories')
-        .select('*')
-        .order('last_reinforced_at', { ascending: false });
+        .select('*');
+
+      if (userId && isUUID(userId)) {
+        query = query.eq('user_id', validUserId);
+      }
+
+      const { data, error } = await query.order('last_reinforced_at', { ascending: false });
 
       if (!error && data) {
         return data.map((d) => ({
@@ -651,15 +766,17 @@ export class DatabaseService {
       }
     }
 
-    return Array.from(memoryStore.memories.values()).sort(
-      (a, b) => new Date(b.lastReinforcedAt).getTime() - new Date(a.lastReinforcedAt).getTime()
-    );
+    return Array.from(memoryStore.memories.values())
+      .filter((m) => !userId || m.userId === validUserId || m.userId === DEFAULT_USER_ID)
+      .sort((a, b) => new Date(b.lastReinforcedAt).getTime() - new Date(a.lastReinforcedAt).getTime());
   }
 
-  public static async createMemory(input: MemoryCreateInput): Promise<MemoryItem> {
+  public static async createMemory(input: MemoryCreateInput, userId?: string): Promise<MemoryItem> {
     const id = crypto.randomUUID();
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
     const newMemory: MemoryItem = {
       id,
+      userId: validUserId,
       category: input.category,
       fact: input.fact,
       confidence: input.confidence ?? 0.85,
@@ -670,10 +787,10 @@ export class DatabaseService {
 
     const client = getSupabaseClient();
     if (client) {
-      await this.ensureUserExists(DEFAULT_USER_ID);
+      await this.ensureUserExists(validUserId);
       const { error } = await client.from('memories').insert({
         id: newMemory.id,
-        user_id: DEFAULT_USER_ID,
+        user_id: validUserId,
         category: newMemory.category,
         fact: newMemory.fact,
         confidence: newMemory.confidence,
@@ -690,11 +807,15 @@ export class DatabaseService {
     return newMemory;
   }
 
-  public static async deleteMemory(id: string): Promise<boolean> {
+  public static async deleteMemory(id: string, userId?: string): Promise<boolean> {
     const validId = toValidUUID(id);
     const client = getSupabaseClient();
     if (client) {
-      await client.from('memories').delete().eq('id', validId);
+      let query = client.from('memories').delete().eq('id', validId);
+      if (userId && isUUID(userId)) {
+        query = query.eq('user_id', toValidUUID(userId));
+      }
+      await query;
     }
     memoryStore.memories.delete(validId);
     memoryStore.memories.delete(id);

@@ -2,8 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { ApiClient } from '../services/api.client';
 import { BrainProfile, ProviderStatus, PersonalityStyle } from '../../shared/types';
 import { PERSONALITY_PRESETS } from '../../ai/brain/personality';
+import { useAuth } from './useAuth';
 
 export function useBrainSettings() {
+  const { user } = useAuth();
   const [profile, setProfile] = useState<BrainProfile | null>(null);
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -19,7 +21,7 @@ export function useBrainSettings() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     fetchProfile();

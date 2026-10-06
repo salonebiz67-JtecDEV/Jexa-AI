@@ -2,8 +2,10 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiClient } from '../services/api.client';
 import { ChatMessage, Conversation } from '../../shared/types';
 import { safeStorage } from '../services/storage';
+import { useAuth } from './useAuth';
 
 export function useChat() {
+  const { user } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -11,23 +13,26 @@ export function useChat() {
   const [isSending, setIsSending] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load conversations on mount
+  // Load conversations on mount or whenever authenticated user changes
   const refreshConversations = useCallback(async () => {
     try {
       const list = await ApiClient.getConversations();
       setConversations(list);
-      const savedActiveId = safeStorage.getItem('jexa_active_conv_id');
+      const savedActiveId = safeStorage.getItem(`jexa_active_conv_id_${user?.id || 'guest'}`);
       if (savedActiveId && list.some((c) => c.id === savedActiveId)) {
         setCurrentConversationId(savedActiveId);
-      } else if (list.length > 0 && !currentConversationId) {
+      } else if (list.length > 0) {
         setCurrentConversationId(list[0].id);
-        safeStorage.setItem('jexa_active_conv_id', list[0].id);
+        safeStorage.setItem(`jexa_active_conv_id_${user?.id || 'guest'}`, list[0].id);
+      } else {
+        setCurrentConversationId(null);
+        setMessages([]);
       }
     } catch (err: any) {
       console.error('[useChat] Failed to load conversations from database:', err);
       setError('Unable to sync with the server.');
     }
-  }, [currentConversationId]);
+  }, [user?.id]);
 
   useEffect(() => {
     refreshConversations();
@@ -75,9 +80,9 @@ export function useChat() {
   const selectConversation = useCallback((id: string) => {
     if (typeof id === 'string') {
       setCurrentConversationId(id);
-      safeStorage.setItem('jexa_active_conv_id', id);
+      safeStorage.setItem(`jexa_active_conv_id_${user?.id || 'guest'}`, id);
     }
-  }, []);
+  }, [user?.id]);
 
   const startNewChat = useCallback(async (personaId?: string) => {
     try {
@@ -85,7 +90,7 @@ export function useChat() {
       const newConv = await ApiClient.createConversation('New Conversation', cleanPersona);
       setConversations((prev) => [newConv, ...prev]);
       setCurrentConversationId(newConv.id);
-      safeStorage.setItem('jexa_active_conv_id', newConv.id);
+      safeStorage.setItem(`jexa_active_conv_id_${user?.id || 'guest'}`, newConv.id);
       setMessages([]);
       return newConv.id;
     } catch (err: any) {
@@ -93,7 +98,7 @@ export function useChat() {
       setError("Couldn't save. Please try again.");
       return null;
     }
-  }, []);
+  }, [user?.id]);
 
   const togglePinConversation = useCallback(
     async (id: string, pinned: boolean) => {
@@ -185,6 +190,7 @@ export function useChat() {
 
         const response = await ApiClient.sendMessage({
           conversationId: currentConversationId || undefined,
+          userId: user?.id,
           message: trimmed,
           personaId: cleanPersona,
           textProvider: savedTextProvider || undefined,
@@ -193,7 +199,7 @@ export function useChat() {
         // Set conversation ID if new conversation was formed
         if (response.isNewConversation) {
           setCurrentConversationId(response.conversationId);
-          safeStorage.setItem('jexa_active_conv_id', response.conversationId);
+          safeStorage.setItem(`jexa_active_conv_id_${user?.id || 'guest'}`, response.conversationId);
           await refreshConversations();
         }
 

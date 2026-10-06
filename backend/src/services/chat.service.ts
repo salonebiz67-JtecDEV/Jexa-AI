@@ -13,13 +13,13 @@ export class ChatService {
     // 1. Resolve or create conversation
     if (!convId) {
       const title = payload.message.slice(0, 30) || 'New Conversation';
-      const newConv = await DatabaseService.createConversation(title, payload.personaId);
+      const newConv = await DatabaseService.createConversation(title, payload.personaId, payload.userId);
       convId = newConv.id;
       isNewConversation = true;
     } else {
       const existing = await DatabaseService.getConversation(convId);
       if (!existing) {
-        const newConv = await DatabaseService.createConversation('New Conversation', payload.personaId);
+        const newConv = await DatabaseService.createConversation('New Conversation', payload.personaId, payload.userId);
         convId = newConv.id;
         isNewConversation = true;
       }
@@ -31,10 +31,10 @@ export class ChatService {
       content: payload.message,
     });
 
-    // 3. Retrieve relevant memories & brain profile
-    const profile = await DatabaseService.getBrainProfile();
+    // 3. Retrieve relevant memories & brain profile scoped to authenticated user
+    const profile = await DatabaseService.getBrainProfile(payload.userId);
     const relevantMemories = profile.memorySettings.enabled
-      ? await MemoryService.getRelevantMemories(payload.message, profile.memorySettings.maxContextMemories)
+      ? await MemoryService.getRelevantMemories(payload.message, profile.memorySettings.maxContextMemories, payload.userId)
       : [];
 
     // 4. Fetch recent conversation history for context window
@@ -112,9 +112,9 @@ export class ChatService {
       },
     });
 
-    // 8. Extract memories asynchronously if enabled
+    // 8. Extract memories asynchronously if enabled scoped to user
     if (profile.memorySettings.autoExtract) {
-      MemoryService.extractAndStoreFromMessage(payload.message, convId).catch((err) => {
+      MemoryService.extractAndStoreFromMessage(payload.message, convId, payload.userId).catch((err) => {
         console.error('[MemoryService] Background memory extraction error:', err);
       });
     }

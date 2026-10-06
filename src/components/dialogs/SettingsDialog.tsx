@@ -28,9 +28,11 @@ import {
   XCircle,
   RefreshCw,
   FileCode,
+  LogOut,
 } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useBrainSettings } from '../../hooks/useBrainSettings';
+import { useAuth } from '../../hooks/useAuth';
 import {
   TextProviderType,
   VoiceProviderType,
@@ -61,6 +63,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   liveDebugStats,
 }) => {
   const { profile, providerStatus, updateSettings, refresh } = useBrainSettings();
+  const { user, signOut } = useAuth();
 
   const [theme, setTheme] = useState<'dark' | 'midnight' | 'obsidian'>('dark');
   const [voiceName, setVoiceName] = useState('aura');
@@ -578,6 +581,48 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
         {/* Settings Body */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-6 flex-1">
+          {/* User Account & Google Profile Header */}
+          {user && (
+            <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/[0.08] flex items-center justify-between">
+              <div className="flex items-center gap-3 min-w-0 pr-3">
+                {user.avatarUrl ? (
+                  <img
+                    src={user.avatarUrl}
+                    alt={user.fullName || 'User'}
+                    className="w-10 h-10 rounded-full object-cover border border-emerald-500/40 shrink-0"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center justify-center text-sm font-bold shrink-0">
+                    {user.fullName ? user.fullName[0].toUpperCase() : 'U'}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-bold text-white truncate">{user.fullName || 'JEXA User'}</p>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-medium">
+                      {user.isGuest ? 'Sandbox Guest' : 'Google Account'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 truncate">{user.email || 'Authenticated User'}</p>
+                  <p className="text-[9px] text-slate-500 font-mono truncate">ID: {user.id}</p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  await signOut();
+                  onClose();
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-300 hover:text-rose-200 text-xs font-semibold transition-colors shrink-0 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign out</span>
+              </button>
+            </div>
+          )}
+
           {/* ============================================================== */}
           {/* SECTION 1: TEXT AI PROVIDER SELECTION                          */}
           {/* ============================================================== */}

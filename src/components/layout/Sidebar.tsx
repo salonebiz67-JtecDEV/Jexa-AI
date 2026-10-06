@@ -18,8 +18,11 @@ import {
   Share2,
   Check,
   AlertTriangle,
+  LogOut,
+  User as UserIcon,
 } from 'lucide-react';
 import { Conversation } from '../../../shared/types';
+import { useAuth } from '../../hooks/useAuth';
 
 export type ActiveNavTab = 'chat' | 'projects' | 'images' | 'remote' | 'schedule' | 'plugins';
 
@@ -58,6 +61,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSearch,
   onOpenSettings,
 }) => {
+  const { user, signOut } = useAuth();
+
   // Context Menu State (Long-press on mobile or 3-dots on desktop)
   const [menuConversation, setMenuConversation] = useState<Conversation | null>(null);
 
@@ -403,17 +408,59 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })}
         </div>
 
-        {/* Bottom Settings Trigger */}
-        <div className="p-3 border-t border-white/[0.06] bg-[#07090e]">
+        {/* Bottom User Profile & Settings Area */}
+        <div className="p-3 border-t border-white/[0.06] bg-[#07090e] space-y-2">
+          {user && (
+            <div className="flex items-center justify-between p-2 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+              <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                {user.avatarUrl ? (
+                  <img
+                    src={user.avatarUrl}
+                    alt={user.fullName || 'User'}
+                    className="w-7 h-7 rounded-full object-cover border border-emerald-500/30 shrink-0"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-7 h-7 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center justify-center text-xs font-bold shrink-0">
+                    {user.fullName ? user.fullName[0].toUpperCase() : 'U'}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold text-white truncate">
+                    {user.fullName || 'JEXA User'}
+                  </p>
+                  <p className="text-[10px] text-slate-400 truncate">
+                    {user.email || 'Authenticated Account'}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  await signOut();
+                  onClose();
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors shrink-0"
+                title="Sign out"
+                aria-label="Sign out"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           <button
             onClick={() => {
               onOpenSettings();
               onClose();
             }}
-            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/[0.04] transition-colors text-xs font-medium"
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/[0.04] transition-colors text-xs font-medium"
           >
-            <Settings className="w-4 h-4 text-slate-500" />
-            <span>Settings</span>
+            <div className="flex items-center gap-2">
+              <Settings className="w-4 h-4 text-slate-500" />
+              <span>Settings</span>
+            </div>
           </button>
         </div>
       </aside>

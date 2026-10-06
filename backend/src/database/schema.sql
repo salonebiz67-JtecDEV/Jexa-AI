@@ -143,8 +143,44 @@ CREATE TABLE IF NOT EXISTS public.database_diagnostics_test (
 );
 
 -- =========================================================================
--- 9. ROW LEVEL SECURITY (RLS) POLICIES
+-- 9. SUPABASE AUTH USER SYNCHRONIZATION TRIGGER
 -- =========================================================================
+-- Automatically mirrors new Supabase Auth users (Google OAuth) into public.users
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO public.users (id, email, full_name, avatar_url)
+    VALUES (
+        NEW.id,
+        NEW.email,
+        COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name', NEW.email),
+        COALESCE(NEW.raw_user_meta_data->>'avatar_url', NEW.raw_user_meta_data->>'picture', NULL)
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        email = EXCLUDED.email,
+        full_name = COALESCE(EXCLUDED.full_name, public.users.full_name),
+        avatar_url = COALESCE(EXCLUDED.avatar_url, public.users.avatar_url),
+        updated_at = timezone('utc'::text, now());
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Trigger runs on auth.users when a user signs in or registers via Google OAuth
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'auth') THEN
+        DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+        CREATE TRIGGER on_auth_user_created
+            AFTER INSERT OR UPDATE ON auth.users
+            FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
+    END IF;
+END $$;
+
+-- =========================================================================
+-- 10. ROW LEVEL SECURITY (RLS) POLICIES
+-- =========================================================================
+-- Strict per-user isolation: User A cannot read or modify User B's data
+-- Service role retains full administrative access for backend tasks
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
@@ -154,30 +190,66 @@ ALTER TABLE public.user_preferences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.memories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.database_diagnostics_test ENABLE ROW LEVEL SECURITY;
 
--- Permissive policies for server-side service role and client access
 DO $$
 BEGIN
-    DROP POLICY IF EXISTS "Allow all for conversations" ON public.conversations;
-    CREATE POLICY "Allow all for conversations" ON public.conversations FOR ALL USING (true) WITH CHECK (true);
+    -- 1. Users table policies
+    DROP POLICY IF EXISTS "Users can read own profile" ON public.users;
+    CREATE POLICY "Users can read own profile" ON public.users
+        FOR SELECT USING (auth.uid() = id OR auth.role() = 'service_role');
 
-    DROP POLICY IF EXISTS "Allow all for messages" ON public.messages;
-    CREATE POLICY "Allow all for messages" ON public.messages FOR ALL USING (true) WITH CHECK (true);
+    DROP POLICY IF EXISTS "Users can update own profile" ON public.users;
+    CREATE POLICY "Users can update own profile" ON public.users
+        FOR UPDATE USING (auth.uid() = id OR auth.role() = 'service_role')
+        WITH CHECK (auth.uid() = id OR auth.role() = 'service_role');
 
-    DROP POLICY IF EXISTS "Allow all for users" ON public.users;
-    CREATE POLICY "Allow all for users" ON public.users FOR ALL USING (true) WITH CHECK (true);
+    DROP POLICY IF EXISTS "Allow user insert" ON public.users;
+    CREATE POLICY "Allow user insert" ON public.users
+        FOR INSERT WITH CHECK (auth.uid() = id OR auth.role() = 'service_role');
 
-    DROP POLICY IF EXISTS "Allow all for user_settings" ON public.user_settings;
-    CREATE POLICY "Allow all for user_settings" ON public.user_settings FOR ALL USING (true) WITH CHECK (true);
+    -- 2. Conversations table policies
+    DROP POLICY IF EXISTS "Users can access own conversations" ON public.conversations;
+    CREATE POLICY "Users can access own conversations" ON public.conversations
+        FOR ALL USING (auth.uid() = user_id OR auth.role() = 'service_role')
+        WITH CHECK (auth.uid() = user_id OR auth.role() = 'service_role');
 
-    DROP POLICY IF EXISTS "Allow all for ai_settings" ON public.ai_settings;
-    CREATE POLICY "Allow all for ai_settings" ON public.ai_settings FOR ALL USING (true) WITH CHECK (true);
+    -- 3. Messages table policies
+    DROP POLICY IF EXISTS "Users can access own messages" ON public.messages;
+    CREATE POLICY "Users can access own messages" ON public.messages
+        FOR ALL USING (
+            conversation_id IN (SELECT id FROM public.conversations WHERE user_id = auth.uid())
+            OR auth.role() = 'service_role'
+        )
+        WITH CHECK (
+            conversation_id IN (SELECT id FROM public.conversations WHERE user_id = auth.uid())
+            OR auth.role() = 'service_role'
+        );
 
-    DROP POLICY IF EXISTS "Allow all for user_preferences" ON public.user_preferences;
-    CREATE POLICY "Allow all for user_preferences" ON public.user_preferences FOR ALL USING (true) WITH CHECK (true);
+    -- 4. User Settings table policies
+    DROP POLICY IF EXISTS "Users can access own settings" ON public.user_settings;
+    CREATE POLICY "Users can access own settings" ON public.user_settings
+        FOR ALL USING (auth.uid() = user_id OR auth.role() = 'service_role')
+        WITH CHECK (auth.uid() = user_id OR auth.role() = 'service_role');
 
-    DROP POLICY IF EXISTS "Allow all for memories" ON public.memories;
-    CREATE POLICY "Allow all for memories" ON public.memories FOR ALL USING (true) WITH CHECK (true);
+    -- 5. AI Settings table policies
+    DROP POLICY IF EXISTS "Users can access own ai_settings" ON public.ai_settings;
+    CREATE POLICY "Users can access own ai_settings" ON public.ai_settings
+        FOR ALL USING (auth.uid() = user_id OR auth.role() = 'service_role')
+        WITH CHECK (auth.uid() = user_id OR auth.role() = 'service_role');
 
-    DROP POLICY IF EXISTS "Allow all for diagnostics" ON public.database_diagnostics_test;
-    CREATE POLICY "Allow all for diagnostics" ON public.database_diagnostics_test FOR ALL USING (true) WITH CHECK (true);
+    -- 6. User Preferences table policies
+    DROP POLICY IF EXISTS "Users can access own user_preferences" ON public.user_preferences;
+    CREATE POLICY "Users can access own user_preferences" ON public.user_preferences
+        FOR ALL USING (auth.uid() = user_id OR auth.role() = 'service_role')
+        WITH CHECK (auth.uid() = user_id OR auth.role() = 'service_role');
+
+    -- 7. Memories table policies
+    DROP POLICY IF EXISTS "Users can access own memories" ON public.memories;
+    CREATE POLICY "Users can access own memories" ON public.memories
+        FOR ALL USING (auth.uid() = user_id OR auth.role() = 'service_role')
+        WITH CHECK (auth.uid() = user_id OR auth.role() = 'service_role');
+
+    -- 8. Diagnostics test table
+    DROP POLICY IF EXISTS "Allow diagnostics for tests" ON public.database_diagnostics_test;
+    CREATE POLICY "Allow diagnostics for tests" ON public.database_diagnostics_test
+        FOR ALL USING (true) WITH CHECK (true);
 END $$;

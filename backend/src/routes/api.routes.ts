@@ -8,8 +8,14 @@ import { BrainController } from '../controllers/brain.controller';
 import { HealthController } from '../controllers/health.controller';
 import { ProviderController } from '../controllers/provider.controller';
 import { DatabaseController } from '../controllers/database.controller';
+import { AuthController } from '../controllers/auth.controller';
 
 const router = Router();
+
+// Authentication & User Profile
+router.get('/auth/config', AuthController.getConfig);
+router.get('/auth/me', AuthController.getMe);
+router.post('/auth/profile', AuthController.syncProfile);
 
 // Database Health & Diagnostics
 router.get('/database/health', DatabaseController.getHealth);

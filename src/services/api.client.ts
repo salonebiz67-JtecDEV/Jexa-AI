@@ -21,7 +21,21 @@ import {
 } from '../../shared/types';
 import { safeStorage } from './storage';
 
+let authenticatedUserId: string | null = null;
+let authenticatedToken: string | null = null;
+
+export function setAuthenticatedUser(userId: string | null, token?: string | null): void {
+  authenticatedUserId = userId;
+  authenticatedToken = token || null;
+  if (userId) {
+    safeStorage.setItem('jexa_persistent_user_id', userId);
+  }
+}
+
 export function getClientUserId(): string {
+  if (authenticatedUserId) {
+    return authenticatedUserId;
+  }
   const STORAGE_KEY = 'jexa_persistent_user_id';
   let uid = safeStorage.getItem(STORAGE_KEY);
   if (!uid || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uid)) {
@@ -129,6 +143,9 @@ async function fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 
   const customHeaders: Record<string, string> = {
     'x-user-id': uid,
   };
+  if (authenticatedToken) {
+    customHeaders['Authorization'] = `Bearer ${authenticatedToken}`;
+  }
 
   try {
     const res = await fetch(url, {
@@ -465,6 +482,25 @@ export const ApiClient = {
 
   async getDatabaseSchema(): Promise<{ sql: string }> {
     return fetchJson<{ sql: string }>(`${API_BASE}/database/schema`);
+  },
+
+  // Authentication & User Profile
+  async getAuthConfig(): Promise<{ configured: boolean; supabaseUrl: string; supabaseAnonKey: string }> {
+    return fetchJson<{ success: boolean; data: { configured: boolean; supabaseUrl: string; supabaseAnonKey: string } }>(
+      `${API_BASE}/auth/config`
+    ).then((r) => r.data);
+  },
+
+  async syncUserProfile(profile: { id: string; email?: string; fullName?: string; avatarUrl?: string }): Promise<any> {
+    return fetchJson<{ success: boolean; data: any }>(`${API_BASE}/auth/profile`, {
+      method: 'POST',
+      body: JSON.stringify(profile),
+    }).then((r) => r.data);
+  },
+
+  async getUserProfile(userId?: string): Promise<any> {
+    const url = userId ? `${API_BASE}/auth/me?userId=${encodeURIComponent(userId)}` : `${API_BASE}/auth/me`;
+    return fetchJson<{ success: boolean; data: any }>(url).then((r) => r.data);
   },
 
   // Health
