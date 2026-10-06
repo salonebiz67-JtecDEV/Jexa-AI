@@ -26,7 +26,7 @@ export class ChatService {
     }
 
     // 2. Persist user message
-    await DatabaseService.saveMessage(convId, {
+    const userMessage = await DatabaseService.saveMessage(convId, {
       role: 'user',
       content: payload.message,
     });
@@ -121,6 +121,7 @@ export class ChatService {
 
     return {
       message: assistantMessage,
+      userMessage,
       conversationId: convId,
       isNewConversation,
       memoriesRetrieved: assembled.referencedMemoryIds,

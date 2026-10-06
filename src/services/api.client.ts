@@ -16,7 +16,20 @@ import {
   ProviderHealthStatus,
   PersonalVoiceStatusResponse,
   PersonalVoiceReferenceMetadata,
+  DatabaseHealthResponse,
+  DatabaseDiagnosticsResult,
 } from '../../shared/types';
+import { safeStorage } from './storage';
+
+export function getClientUserId(): string {
+  const STORAGE_KEY = 'jexa_persistent_user_id';
+  let uid = safeStorage.getItem(STORAGE_KEY);
+  if (!uid || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uid)) {
+    uid = '00000000-0000-0000-0000-000000000001';
+    safeStorage.setItem(STORAGE_KEY, uid);
+  }
+  return uid;
+}
 
 // =========================================================================
 // Centralized API Configuration for GitHub Pages & Render Deployment
@@ -112,9 +125,18 @@ async function fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  const uid = getClientUserId();
+  const customHeaders: Record<string, string> = {
+    'x-user-id': uid,
+  };
+
   try {
     const res = await fetch(url, {
       ...options,
+      headers: {
+        ...customHeaders,
+        ...(options?.headers || {}),
+      },
       signal: controller.signal,
     });
     return res;
@@ -366,6 +388,9 @@ export const ApiClient = {
   async selectProviders(selection: {
     textProvider?: TextProviderType;
     voiceProvider?: VoiceProviderType;
+    textModel?: string;
+    voiceModel?: string;
+    theme?: string;
   }): Promise<{ success: boolean; data: any }> {
     return fetchJson<{ success: boolean; data: any }>(`${API_BASE}/providers/select`, {
       method: 'POST',
@@ -425,6 +450,21 @@ export const ApiClient = {
       method: 'POST',
       body: JSON.stringify({ text }),
     });
+  },
+
+  // Database Health & Real Diagnostics
+  async getDatabaseHealth(): Promise<DatabaseHealthResponse> {
+    return fetchJson<DatabaseHealthResponse>(`${API_BASE}/database/health`);
+  },
+
+  async runDatabaseTest(): Promise<DatabaseDiagnosticsResult> {
+    return fetchJson<DatabaseDiagnosticsResult>(`${API_BASE}/database/test`, {
+      method: 'POST',
+    });
+  },
+
+  async getDatabaseSchema(): Promise<{ sql: string }> {
+    return fetchJson<{ sql: string }>(`${API_BASE}/database/schema`);
   },
 
   // Health

@@ -13,7 +13,7 @@ export interface BrainProfile {
   selectedTextModel?: string;
   selectedVoiceProvider?: VoiceProviderType;
   selectedVoiceModel?: string;
-  theme?: 'dark' | 'light' | 'system';
+  theme?: 'dark' | 'midnight' | 'obsidian' | 'light' | 'system';
   traits: string[];
   toneParameters: {
     warmth: number;       // 0 to 1

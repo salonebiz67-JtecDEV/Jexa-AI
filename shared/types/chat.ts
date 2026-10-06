@@ -49,6 +49,7 @@ export interface SendMessagePayload {
 
 export interface ChatResponsePayload {
   message: ChatMessage;
+  userMessage?: ChatMessage;
   conversationId: string;
   isNewConversation: boolean;
   memoriesRetrieved?: string[];

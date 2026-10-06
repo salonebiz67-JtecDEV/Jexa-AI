@@ -16,12 +16,16 @@ export function useChat() {
     try {
       const list = await ApiClient.getConversations();
       setConversations(list);
-      if (list.length > 0 && !currentConversationId) {
+      const savedActiveId = safeStorage.getItem('jexa_active_conv_id');
+      if (savedActiveId && list.some((c) => c.id === savedActiveId)) {
+        setCurrentConversationId(savedActiveId);
+      } else if (list.length > 0 && !currentConversationId) {
         setCurrentConversationId(list[0].id);
+        safeStorage.setItem('jexa_active_conv_id', list[0].id);
       }
     } catch (err: any) {
-      console.error('[useChat] Failed to load conversations:', err);
-      setError(err.message);
+      console.error('[useChat] Failed to load conversations from database:', err);
+      setError('Unable to sync with the server.');
     }
   }, [currentConversationId]);
 
@@ -71,6 +75,7 @@ export function useChat() {
   const selectConversation = useCallback((id: string) => {
     if (typeof id === 'string') {
       setCurrentConversationId(id);
+      safeStorage.setItem('jexa_active_conv_id', id);
     }
   }, []);
 
@@ -80,10 +85,12 @@ export function useChat() {
       const newConv = await ApiClient.createConversation('New Conversation', cleanPersona);
       setConversations((prev) => [newConv, ...prev]);
       setCurrentConversationId(newConv.id);
+      safeStorage.setItem('jexa_active_conv_id', newConv.id);
       setMessages([]);
       return newConv.id;
     } catch (err: any) {
       console.error('[useChat] Failed to create new conversation:', err);
+      setError("Couldn't save. Please try again.");
       return null;
     }
   }, []);
@@ -103,7 +110,8 @@ export function useChat() {
           });
         });
       } catch (err: any) {
-        console.error('[useChat] Failed to toggle pin:', err);
+        console.error('[useChat] Failed to toggle pin in database:', err);
+        setError("Couldn't save. Please try again.");
       }
     },
     []
@@ -118,7 +126,8 @@ export function useChat() {
           prev.map((c) => (c.id === id ? { ...c, title: updated.title } : c))
         );
       } catch (err: any) {
-        console.error('[useChat] Failed to rename conversation:', err);
+        console.error('[useChat] Failed to rename conversation in database:', err);
+        setError("Couldn't save. Please try again.");
       }
     },
     []
@@ -134,13 +143,16 @@ export function useChat() {
           const remaining = conversations.filter((c) => c.id !== id);
           if (remaining.length > 0) {
             setCurrentConversationId(remaining[0].id);
+            safeStorage.setItem('jexa_active_conv_id', remaining[0].id);
           } else {
             setCurrentConversationId(null);
+            safeStorage.removeItem('jexa_active_conv_id');
             setMessages([]);
           }
         }
       } catch (err: any) {
-        console.error('[useChat] Failed to delete conversation:', err);
+        console.error('[useChat] Failed to delete conversation in database:', err);
+        setError("Couldn't save. Please try again.");
       }
     },
     [conversations, currentConversationId]
@@ -181,14 +193,22 @@ export function useChat() {
         // Set conversation ID if new conversation was formed
         if (response.isNewConversation) {
           setCurrentConversationId(response.conversationId);
+          safeStorage.setItem('jexa_active_conv_id', response.conversationId);
           await refreshConversations();
         }
 
-        // Add received assistant message
-        setMessages((prev) => [...prev, response.message]);
+        // Replace optimistic user message with persisted user message if returned, and append assistant message
+        setMessages((prev) => {
+          const withoutTemp = prev.filter((m) => m.id !== tempId);
+          const finalUserMsg = response.userMessage || {
+            ...optimisticUserMsg,
+            conversationId: response.conversationId,
+          };
+          return [...withoutTemp, finalUserMsg, response.message];
+        });
       } catch (err: any) {
         console.error('[useChat] Send message failed:', err);
-        setError(err.message || 'Failed to send message.');
+        setError("Couldn't save. Please try again.");
 
         let userHelpMessage = `I encountered an issue connecting to the AI provider: ${err.message}.`;
         if (err.code === 'MODEL_NOT_FOUND') {

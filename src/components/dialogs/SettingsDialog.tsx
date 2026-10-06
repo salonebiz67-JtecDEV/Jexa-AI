@@ -22,10 +22,24 @@ import {
   UserCheck,
   Sliders,
   Upload,
+  Database,
+  Copy,
+  CheckCircle2,
+  XCircle,
+  RefreshCw,
+  FileCode,
 } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useBrainSettings } from '../../hooks/useBrainSettings';
-import { TextProviderType, VoiceProviderType, ProviderHealthStatus, PersonalVoiceStatusResponse } from '../../../shared/types/provider';
+import {
+  TextProviderType,
+  VoiceProviderType,
+  ProviderHealthStatus,
+  PersonalVoiceStatusResponse,
+  DatabaseHealthResponse,
+  DatabaseDiagnosticsResult,
+  TestStepStatus,
+} from '../../../shared/types';
 import { safeStorage } from '../../services/storage';
 import { ApiClient, ProviderTestResult } from '../../services/api.client';
 import { AudioPlayer } from '../../services/audioPlayer';
@@ -92,6 +106,20 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   // Debug/Diagnostics panel toggle
   const [showDeveloperPanel, setShowDeveloperPanel] = useState(false);
 
+  // Database Health & Real Diagnostics State
+  const [dbHealth, setDbHealth] = useState<DatabaseHealthResponse | null>(null);
+  const [dbTestResult, setDbTestResult] = useState<DatabaseDiagnosticsResult | null>(null);
+  const [isRunningDbTest, setIsRunningDbTest] = useState(false);
+  const [dbTestError, setDbTestError] = useState<string | null>(null);
+  const [showDbDiagnostics, setShowDbDiagnostics] = useState(false);
+  const [showSchemaModal, setShowSchemaModal] = useState(false);
+  const [schemaSql, setSchemaSql] = useState<string>('');
+  const [copiedSql, setCopiedSql] = useState(false);
+  const [lastDbTestDate, setLastDbTestDate] = useState<string>(() => {
+    return safeStorage.getItem('jexa_last_db_test_date') || 'October 6, 2026';
+  });
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   // Real Notification Support
   const [notificationStatus, setNotificationStatus] = useState<NotificationPermission>('default');
   const { isInstallable, isInstalled, install } = usePWAInstall();
@@ -107,6 +135,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     if (profile?.voiceSettings?.voiceId) {
       setVoiceName(profile.voiceSettings.voiceId);
     }
+    if (profile?.theme) {
+      setTheme(profile.theme as any);
+    }
   }, [profile, isOpen]);
 
   const loadPersonalVoiceStatus = async () => {
@@ -118,14 +149,67 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     }
   };
 
+  const loadDbHealth = async () => {
+    try {
+      const health = await ApiClient.getDatabaseHealth();
+      setDbHealth(health);
+    } catch (e: any) {
+      console.warn('[SettingsDialog] Could not load database health:', e.message);
+    }
+  };
+
+  const handleRunDatabaseTest = async () => {
+    setIsRunningDbTest(true);
+    setDbTestError(null);
+    try {
+      const result = await ApiClient.runDatabaseTest();
+      setDbTestResult(result);
+      const now = new Date();
+      const formattedDate = now.toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      });
+      setLastDbTestDate(formattedDate);
+      safeStorage.setItem('jexa_last_db_test_date', formattedDate);
+      setShowDbDiagnostics(true);
+      await loadDbHealth();
+    } catch (err: any) {
+      console.error('[SettingsDialog] Database test failed:', err);
+      setDbTestError(err.message || 'Database test failed.');
+      setShowDbDiagnostics(true);
+    } finally {
+      setIsRunningDbTest(false);
+    }
+  };
+
+  const handleFetchSchema = async () => {
+    try {
+      const res = await ApiClient.getDatabaseSchema();
+      setSchemaSql(res.sql);
+      setShowSchemaModal(true);
+    } catch (err: any) {
+      console.error('[SettingsDialog] Failed to fetch schema SQL:', err);
+    }
+  };
+
+  const handleCopySchema = () => {
+    if (!schemaSql) return;
+    navigator.clipboard.writeText(schemaSql);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 2000);
+  };
+
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       setNotificationStatus(Notification.permission);
     }
     if (isOpen) {
       loadPersonalVoiceStatus();
+      loadDbHealth();
     }
   }, [isOpen]);
+
 
   const handleToggleNotifications = async () => {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
@@ -297,28 +381,34 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     safeStorage.setItem('jexa_text_provider', textProvider);
     safeStorage.setItem('jexa_voice_provider', voiceProvider);
     safeStorage.setItem('jexa_voice_name', voiceName);
+    setSaveError(null);
 
     try {
-      await ApiClient.selectProviders({ textProvider, voiceProvider });
+      await ApiClient.selectProviders({
+        textProvider,
+        voiceProvider,
+        theme,
+      });
       await updateSettings({
         selectedTextProvider: textProvider,
         selectedVoiceProvider: voiceProvider,
+        theme,
         voiceSettings: {
           voiceId: voiceName,
-          speed: 1.0,
-          pitch: 1.0,
-          autoSpeak: false,
+          speed: profile?.voiceSettings?.speed ?? 1.0,
+          pitch: profile?.voiceSettings?.pitch ?? 1.0,
+          autoSpeak: profile?.voiceSettings?.autoSpeak ?? false,
         },
       });
-    } catch (err) {
-      console.error('[SettingsDialog] Failed to persist profile settings:', err);
+      setSavedSuccess(true);
+      setTimeout(() => {
+        setSavedSuccess(false);
+        onClose();
+      }, 700);
+    } catch (err: any) {
+      console.error('[SettingsDialog] Failed to persist profile settings to database:', err);
+      setSaveError("Couldn't save. Please try again.");
     }
-
-    setSavedSuccess(true);
-    setTimeout(() => {
-      setSavedSuccess(false);
-      onClose();
-    }, 600);
   };
 
   // Helper statuses from backend registry
@@ -428,6 +518,33 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/20">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
             TEMPORARILY UNAVAILABLE
+          </span>
+        );
+    }
+  };
+
+  const renderTestStepBadge = (status?: TestStepStatus) => {
+    switch (status) {
+      case 'PASS':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            PASS
+          </span>
+        );
+      case 'FAIL':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+            FAIL
+          </span>
+        );
+      case 'NOT_TESTED':
+      default:
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-500/15 text-slate-400 border border-slate-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+            NOT TESTED
           </span>
         );
     }
@@ -1277,7 +1394,183 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           </div>
 
           {/* ============================================================== */}
-          {/* SECTION 5: THEMES & SYSTEM NOTIFICATIONS                       */}
+          {/* SECTION 5: DATABASE PERSISTENCE & REAL DIAGNOSTICS            */}
+          {/* ============================================================== */}
+          <div className="space-y-3 pt-3 border-t border-white/[0.06]">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Database className="w-4 h-4 text-emerald-400" />
+                <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                  DATABASE
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={handleFetchSchema}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-[10px] text-slate-300 transition-colors"
+                title="View and copy Supabase SQL migration script"
+              >
+                <FileCode className="w-3 h-3 text-emerald-400" />
+                <span>Supabase Schema</span>
+              </button>
+            </div>
+
+            {/* Status Overview Cards: Supabase Connection, Persistence, Last Test */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {/* Card 1: Supabase Connection */}
+              <div className="p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06] flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400">Supabase</span>
+                <div className="flex items-center gap-1.5 mt-1">
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      dbHealth?.connected ? 'bg-emerald-400' : 'bg-rose-500'
+                    }`}
+                  />
+                  <span className="text-xs font-semibold text-white">
+                    {dbHealth?.connected ? 'Connected' : 'Not Connected'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Card 2: Persistence */}
+              <div className="p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06] flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400">Persistence</span>
+                <div className="flex items-center gap-1.5 mt-1">
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      dbHealth?.connected && (dbHealth?.write ?? true)
+                        ? 'bg-emerald-400'
+                        : 'bg-amber-400'
+                    }`}
+                  />
+                  <span className="text-xs font-semibold text-white">
+                    {dbHealth?.connected && (dbHealth?.write ?? true)
+                      ? 'Working'
+                      : 'In-Memory'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Card 3: Last Test */}
+              <div className="p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06] flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400">Last test</span>
+                <span className="text-xs font-semibold text-slate-200 mt-1 truncate">
+                  {lastDbTestDate || 'Not tested yet'}
+                </span>
+              </div>
+            </div>
+
+            {/* Test Database Button & Trigger */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleRunDatabaseTest}
+                disabled={isRunningDbTest}
+                className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-semibold text-xs transition-colors disabled:opacity-50"
+              >
+                {isRunningDbTest ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Executing Database Test Sequence...</span>
+                  </>
+                ) : (
+                  <>
+                    <Database className="w-3.5 h-3.5" />
+                    <span>RUN DATABASE TEST</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowDbDiagnostics(!showDbDiagnostics)}
+                className="flex items-center gap-1 px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 text-xs transition-colors"
+                title="Toggle expandable diagnostics"
+              >
+                <span>Diagnostics</span>
+                {showDbDiagnostics ? (
+                  <ChevronUp className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+
+            {/* Expandable Developer Diagnostics Section */}
+            {showDbDiagnostics && (
+              <div className="p-3 rounded-xl bg-[#080c14] border border-white/[0.08] space-y-2.5">
+                <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300 border-b border-white/[0.06] pb-1.5">
+                  <span>Diagnostic Test Sequence</span>
+                  {dbTestResult?.totalLatencyMs ? (
+                    <span className="text-[10px] text-slate-500">
+                      Latency: {dbTestResult.totalLatencyMs}ms
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between py-0.5">
+                    <span className="text-slate-300">Database Connection</span>
+                    {renderTestStepBadge(dbTestResult?.connection?.status || (dbHealth?.connected ? 'PASS' : 'FAIL'))}
+                  </div>
+                  <div className="flex items-center justify-between py-0.5">
+                    <span className="text-slate-300">CREATE</span>
+                    {renderTestStepBadge(dbTestResult?.create?.status)}
+                  </div>
+                  <div className="flex items-center justify-between py-0.5">
+                    <span className="text-slate-300">READ</span>
+                    {renderTestStepBadge(dbTestResult?.read?.status)}
+                  </div>
+                  <div className="flex items-center justify-between py-0.5">
+                    <span className="text-slate-300">UPDATE</span>
+                    {renderTestStepBadge(dbTestResult?.update?.status)}
+                  </div>
+                  <div className="flex items-center justify-between py-0.5">
+                    <span className="text-slate-300">DELETE</span>
+                    {renderTestStepBadge(dbTestResult?.delete?.status)}
+                  </div>
+                  <div className="flex items-center justify-between py-0.5">
+                    <span className="text-slate-300">Chat Persistence</span>
+                    {renderTestStepBadge(dbTestResult?.chatPersistence?.status)}
+                  </div>
+                  <div className="flex items-center justify-between py-0.5">
+                    <span className="text-slate-300">Settings Persistence</span>
+                    {renderTestStepBadge(dbTestResult?.settingsPersistence?.status)}
+                  </div>
+                </div>
+
+                {/* Actual error / diagnostics details without exposing secrets */}
+                {(dbTestError || dbTestResult?.create?.error || dbTestResult?.read?.error || dbTestResult?.update?.error || dbTestResult?.delete?.error || dbHealth?.error) && (
+                  <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[11px] space-y-1">
+                    <div className="font-semibold flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      <span>Developer Diagnostics:</span>
+                    </div>
+                    <p className="font-mono text-[10px] break-words">
+                      {dbTestError ||
+                        dbTestResult?.create?.error ||
+                        dbTestResult?.read?.error ||
+                        dbTestResult?.update?.error ||
+                        dbTestResult?.delete?.error ||
+                        dbHealth?.error}
+                    </p>
+                  </div>
+                )}
+
+                {/* Diagnostic notes */}
+                {dbTestResult?.notes && dbTestResult.notes.length > 0 && (
+                  <div className="text-[10px] text-slate-400 space-y-0.5 pt-1 border-t border-white/[0.04]">
+                    {dbTestResult.notes.map((note, idx) => (
+                      <p key={idx}>ℹ {note}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ============================================================== */}
+          {/* SECTION 6: THEMES & SYSTEM NOTIFICATIONS                       */}
           {/* ============================================================== */}
           <div className="space-y-2 pt-3 border-t border-white/[0.06]">
             <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
@@ -1437,26 +1730,35 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-white/[0.06] bg-[#0b0f19]">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors"
-          >
-            {savedSuccess ? (
-              <>
-                <Check className="w-3.5 h-3.5" />
-                <span>Saved</span>
-              </>
-            ) : (
-              <span>Save Changes</span>
+        <div className="flex items-center justify-between gap-2 px-4 py-3 border-t border-white/[0.06] bg-[#0b0f19]">
+          <div className="min-w-0">
+            {saveError && (
+              <span className="text-xs text-rose-400 font-medium truncate block">
+                {saveError}
+              </span>
             )}
-          </button>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors"
+            >
+              {savedSuccess ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Saved</span>
+                </>
+              ) : (
+                <span>Save Changes</span>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1480,6 +1782,48 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
         initialTab={personalModalInitialTab}
         initialMode={personalModalInitialMode}
       />
+
+      {/* Supabase SQL Schema Modal */}
+      {showSchemaModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md">
+          <div className="relative w-full max-w-2xl bg-[#0e1320] border border-white/[0.08] rounded-2xl shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-[#090d16]">
+              <div className="flex items-center gap-2">
+                <FileCode className="w-4 h-4 text-emerald-400" />
+                <span className="text-sm font-semibold text-white">Supabase SQL Schema Migration</span>
+              </div>
+              <button
+                onClick={() => setShowSchemaModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 flex-1 overflow-y-auto font-mono text-[11px] text-slate-300 bg-[#070a12]">
+              <pre className="whitespace-pre-wrap">{schemaSql || 'Loading schema...'}</pre>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3 border-t border-white/[0.06] bg-[#090d16]">
+              <span className="text-[11px] text-slate-400">Copy and run in Supabase SQL Editor</span>
+              <button
+                onClick={handleCopySchema}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors"
+              >
+                {copiedSql ? (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Copied SQL</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy SQL</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

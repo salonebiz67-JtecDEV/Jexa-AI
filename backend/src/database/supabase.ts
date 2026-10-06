@@ -40,6 +40,10 @@ export function getSupabaseClient(): SupabaseClient | null {
   return supabaseInstance;
 }
 
+export function setSupabaseClientForTesting(client: SupabaseClient | null): void {
+  supabaseInstance = client;
+}
+
 export async function testSupabasePing(): Promise<{ connected: boolean; latencyMs?: number; error?: string }> {
   if (!supabaseInstance) {
     return {
