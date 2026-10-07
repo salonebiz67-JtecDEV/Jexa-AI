@@ -33,6 +33,16 @@ export default defineConfig(({ mode }) => {
     base = '/';
   }
 
+  const isUrlConfigured = Boolean(process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_URL.trim());
+  const isKeyConfigured = Boolean(process.env.VITE_SUPABASE_ANON_KEY && process.env.VITE_SUPABASE_ANON_KEY.trim());
+
+  // Safe build-time diagnostic reporting (never print actual keys)
+  console.log('-----------------------------------------');
+  console.log('JEXA Build Diagnostics:');
+  console.log(`Supabase URL configured: ${isUrlConfigured}`);
+  console.log(`Supabase public key configured: ${isKeyConfigured}`);
+  console.log('-----------------------------------------');
+
   return {
     base,
     plugins: [
@@ -125,6 +135,10 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': path.resolve('.'),
       },
+    },
+    define: {
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(process.env.VITE_SUPABASE_URL || ''),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY || ''),
     },
     build: {
       outDir: 'dist',

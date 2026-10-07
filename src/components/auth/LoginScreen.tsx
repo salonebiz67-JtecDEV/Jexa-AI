@@ -87,13 +87,9 @@ export const LoginScreen: React.FC = () => {
             >
               View Configuration Diagnostics
             </button>
-            <button
-              type="button"
-              onClick={continueAsGuest}
-              className="text-slate-400 hover:text-emerald-300 transition-colors"
-            >
-              Use Sandbox Mode
-            </button>
+            <span className="text-slate-400 text-[10px]">
+              Requires VITE_SUPABASE_* variables
+            </span>
           </div>
         </div>
       );
@@ -262,18 +258,6 @@ export const LoginScreen: React.FC = () => {
               </>
             )}
           </button>
-
-          {/* Sandbox Guest Mode Option */}
-          <div className="pt-1 text-center">
-            <button
-              type="button"
-              onClick={continueAsGuest}
-              className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-emerald-300 transition-colors py-1 px-3 rounded-lg hover:bg-white/[0.04]"
-            >
-              <span>Explore as Guest / Sandbox User</span>
-              <ArrowRight className="w-3 h-3 text-slate-500" />
-            </button>
-          </div>
         </div>
 
         {/* Collapsible Safe Diagnostics Section */}
@@ -311,56 +295,56 @@ export const LoginScreen: React.FC = () => {
 
               {/* Status 1: Supabase URL */}
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Supabase URL:</span>
+                <span className="text-slate-400">Supabase URL configured:</span>
                 {diagnostics?.supabaseUrlConfigured ? (
                   <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> configured
+                    <CheckCircle2 className="w-3.5 h-3.5" /> true
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-rose-400 font-semibold text-[11px]">
-                    <XCircle className="w-3.5 h-3.5" /> missing
+                    <XCircle className="w-3.5 h-3.5" /> false
                   </span>
                 )}
               </div>
 
               {/* Status 2: Supabase Public Key */}
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Supabase public key:</span>
+                <span className="text-slate-400">Supabase public key configured:</span>
                 {diagnostics?.supabaseKeyConfigured ? (
                   <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> configured
+                    <CheckCircle2 className="w-3.5 h-3.5" /> true
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-rose-400 font-semibold text-[11px]">
-                    <XCircle className="w-3.5 h-3.5" /> missing
+                    <XCircle className="w-3.5 h-3.5" /> false
                   </span>
                 )}
               </div>
 
               {/* Status 3: Supabase Client */}
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Supabase client:</span>
+                <span className="text-slate-400">Supabase client initialized:</span>
                 {diagnostics?.supabaseClientInitialized ? (
                   <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> initialized
+                    <CheckCircle2 className="w-3.5 h-3.5" /> true
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-rose-400 font-semibold text-[11px]">
-                    <XCircle className="w-3.5 h-3.5" /> not initialized
+                    <XCircle className="w-3.5 h-3.5" /> false
                   </span>
                 )}
               </div>
 
               {/* Status 4: Auth Service */}
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Auth service:</span>
+                <span className="text-slate-400">Auth service reachable:</span>
                 {diagnostics?.authServiceReachable ? (
                   <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> reachable
+                    <CheckCircle2 className="w-3.5 h-3.5" /> true
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-amber-400 font-semibold text-[11px]">
-                    <XCircle className="w-3.5 h-3.5" /> unreachable
+                    <XCircle className="w-3.5 h-3.5" /> false
                   </span>
                 )}
               </div>

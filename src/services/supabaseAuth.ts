@@ -171,7 +171,10 @@ export async function signInWithGoogle(): Promise<{ error?: any }> {
  */
 export async function checkSupabaseDiagnostics(): Promise<SafeAuthDiagnostics> {
   const config = await fetchAuthConfig();
-  const urlConfigured = Boolean(config.supabaseUrl && config.supabaseUrl.startsWith('https://'));
+  const urlConfigured = Boolean(
+    config.supabaseUrl &&
+      (config.supabaseUrl.startsWith('https://') || config.supabaseUrl.startsWith('http://'))
+  );
   const keyConfigured = Boolean(config.supabaseAnonKey && config.supabaseAnonKey.length > 10);
   const redirectUrl = getAuthRedirectUrl();
 

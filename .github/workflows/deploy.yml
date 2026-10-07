@@ -22,6 +22,7 @@ jobs:
   build:
     name: Build & Validate Production Bundle
     runs-on: ubuntu-latest
+    environment: github-pages
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,28 +45,26 @@ jobs:
           # Optional custom base path override (defaults to dynamic /<repo-name>/ from GITHUB_REPOSITORY)
           VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH || '' }}
           # Public Supabase credentials for client-side Auth & Google OAuth
-          # Supports either GitHub Actions Variables (recommended) or Secrets
+          # Supports GitHub Actions Variables (vars) or Secrets (secrets) under Repo or github-pages Environment
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL || '' }}
           VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY || secrets.VITE_SUPABASE_ANON_KEY || '' }}
         run: |
           echo "========================================="
-          echo " GitHub Pages Build Environment Check"
+          echo " Safe Build-Time Diagnostics"
           echo "========================================="
-          if [ -z "${{ vars.VITE_API_BASE_URL }}" ]; then
-            echo "::warning::VITE_API_BASE_URL is not set in GitHub repository variables. Add VITE_API_BASE_URL in Settings -> Secrets and variables -> Actions -> Variables with your Render URL (e.g. https://your-service.onrender.com)."
-          else
-            echo "VITE_API_BASE_URL: Configured"
-          fi
           if [ -n "$VITE_SUPABASE_URL" ]; then
-            echo "VITE_SUPABASE_URL: Configured"
+            echo "Supabase URL configured: true"
           else
+            echo "Supabase URL configured: false"
             echo "::warning::VITE_SUPABASE_URL is not set in GitHub repository variables or secrets. Google OAuth on GitHub Pages requires VITE_SUPABASE_URL."
           fi
           if [ -n "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "VITE_SUPABASE_ANON_KEY: Configured"
+            echo "Supabase public key configured: true"
           else
+            echo "Supabase public key configured: false"
             echo "::warning::VITE_SUPABASE_ANON_KEY is not set in GitHub repository variables or secrets. Google OAuth on GitHub Pages requires VITE_SUPABASE_ANON_KEY."
           fi
+          echo "========================================="
           bun run build
 
       - name: Verify build artifacts & PWA compliance
@@ -124,6 +123,16 @@ jobs:
           if grep -q "http://localhost:" dist/index.html; then
             echo "::error::Production HTML contains hardcoded localhost URLs."
             exit 1
+          fi
+
+          # 6. Verify that the production build contains Supabase configuration when provided
+          if [ -n "${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL }}" ]; then
+            echo "Verifying Supabase URL presence in production bundle..."
+            if grep -rq "${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL }}" dist/assets/; then
+              echo "✓ Supabase URL successfully verified inside production bundle assets."
+            else
+              echo "::warning::VITE_SUPABASE_URL was provided to build, but could not be verified in dist/assets."
+            fi
           fi
 
           echo "✓ dist/index.html verified ($(wc -c < dist/index.html) bytes)"

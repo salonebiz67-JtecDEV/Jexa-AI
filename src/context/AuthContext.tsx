@@ -144,13 +144,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!diag.supabaseUrlConfigured || !diag.supabaseKeyConfigured) {
           setIsConfigured(false);
           setAuthStatus('config_missing');
-          // Check if user previously used sandbox mode
-          const savedGuest = safeStorage.getItem('jexa_guest_mode');
-          if (savedGuest === 'true' && mounted) {
-            setUser(DEFAULT_GUEST_USER);
-            setAuthenticatedUser(DEFAULT_GUEST_USER.id, null);
-            setAuthStatus('success');
-          }
+          setUser(null);
+          setSession(null);
           if (mounted) setIsLoading(false);
           return;
         }
@@ -162,6 +157,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (mounted) {
             setIsConfigured(false);
             setAuthStatus('config_missing');
+            setUser(null);
+            setSession(null);
             setIsLoading(false);
           }
           return;
@@ -179,20 +176,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setSession(sessionData.session);
           setAuthenticatedUser(authUser.id, sessionData.session.access_token);
           setAuthStatus('success');
-          safeStorage.removeItem('jexa_guest_mode');
 
           // Sync profile with PostgreSQL backend
           syncUserProfile(sessionData.session.user).catch((err) =>
             console.warn('[AuthContext] Profile sync error:', err)
           );
         } else {
-          // Check if previously in guest mode
-          const savedGuest = safeStorage.getItem('jexa_guest_mode');
-          if (savedGuest === 'true' && mounted) {
-            setUser(DEFAULT_GUEST_USER);
-            setAuthenticatedUser(DEFAULT_GUEST_USER.id, null);
-            setAuthStatus('success');
-          }
+          setUser(null);
+          setSession(null);
         }
 
         // 2. Subscribe to auth changes (Sign In, Sign Out, Token Refresh)
