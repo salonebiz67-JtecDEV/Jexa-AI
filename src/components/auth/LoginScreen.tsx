@@ -1,11 +1,44 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
-import { Sparkles, AlertCircle, RefreshCw, ShieldCheck, Database, ArrowRight } from 'lucide-react';
+import {
+  Sparkles,
+  AlertCircle,
+  RefreshCw,
+  ShieldCheck,
+  Database,
+  ArrowRight,
+  CheckCircle2,
+  XCircle,
+  HelpCircle,
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  Info,
+} from 'lucide-react';
 
 export const LoginScreen: React.FC = () => {
-  const { signInWithGoogle, continueAsGuest, error, clearError, isConfigured } = useAuth();
+  const {
+    signInWithGoogle,
+    continueAsGuest,
+    error,
+    clearError,
+    isConfigured,
+    authStatus,
+    diagnostics,
+    runDiagnostics,
+  } = useAuth();
+
   const [isConnecting, setIsConnecting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [isRunningCheck, setIsRunningCheck] = useState(false);
+
+  // Auto-run diagnostics on mount if not loaded yet
+  useEffect(() => {
+    if (!diagnostics) {
+      runDiagnostics().catch(console.warn);
+    }
+  }, [diagnostics, runDiagnostics]);
 
   const handleGoogleSignIn = async () => {
     setIsConnecting(true);
@@ -13,17 +46,143 @@ export const LoginScreen: React.FC = () => {
     clearError();
     try {
       await signInWithGoogle();
-      // Browser redirects to Google OAuth consent
+      // Redirects to Google consent screen
     } catch (err: any) {
       setIsConnecting(false);
-      setLocalError(
-        err?.message ||
-          'Failed to initialize Google Sign-in. Please ensure Google OAuth is enabled in your Supabase project.'
-      );
+      setLocalError(err?.message || 'Authentication could not be initiated.');
+    }
+  };
+
+  const handleRefreshDiagnostics = async () => {
+    setIsRunningCheck(true);
+    try {
+      await runDiagnostics();
+    } finally {
+      setIsRunningCheck(false);
     }
   };
 
   const displayError = localError || error;
+
+  // Determine user-friendly category guidance
+  const renderCategorizedNotice = () => {
+    if (authStatus === 'config_missing' || !isConfigured) {
+      return (
+        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-200/90 space-y-2 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 font-semibold text-amber-300">
+            <Database className="w-4 h-4 shrink-0" />
+            <span>Frontend Supabase Configuration Missing</span>
+          </div>
+          <p className="text-slate-300 leading-relaxed text-[11px]">
+            The GitHub Pages frontend requires public Supabase variables to initiate Google OAuth.
+            Add <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_URL</code> and{' '}
+            <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_ANON_KEY</code> in{' '}
+            <span className="text-white font-medium">GitHub Repo Settings → Secrets and variables → Actions → Variables</span>.
+          </p>
+          <div className="pt-1 flex items-center justify-between text-[11px]">
+            <button
+              type="button"
+              onClick={() => setShowDiagnostics(true)}
+              className="text-amber-400 hover:text-amber-200 underline font-medium"
+            >
+              View Configuration Diagnostics
+            </button>
+            <button
+              type="button"
+              onClick={continueAsGuest}
+              className="text-slate-400 hover:text-emerald-300 transition-colors"
+            >
+              Use Sandbox Mode
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (authStatus === 'oauth_not_configured') {
+      return (
+        <div className="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 text-xs text-indigo-200/90 space-y-2 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 font-semibold text-indigo-300">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>Google OAuth Not Configured in Supabase</span>
+          </div>
+          <p className="text-slate-300 leading-relaxed text-[11px]">
+            The Supabase client is connected, but Google sign-in is not enabled in your Supabase project dashboard.
+            Navigate to <span className="text-white font-medium">Authentication → Providers → Google</span> in Supabase and toggle it on.
+          </p>
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setLocalError(null);
+                clearError();
+              }}
+              className="text-[11px] text-indigo-400 hover:text-indigo-200 underline"
+            >
+              Dismiss Notice
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (authStatus === 'user_cancelled') {
+      return (
+        <div className="p-3.5 rounded-2xl bg-slate-500/10 border border-slate-500/25 text-xs text-slate-300 space-y-1.5 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 font-semibold text-slate-200">
+            <Info className="w-4 h-4 shrink-0 text-slate-400" />
+            <span>Google Sign-In Cancelled</span>
+          </div>
+          <p className="text-slate-400 leading-relaxed text-[11px]">
+            The authentication prompt was closed or declined. You can continue whenever you are ready.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setLocalError(null);
+              clearError();
+            }}
+            className="text-[11px] text-slate-400 hover:text-white underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      );
+    }
+
+    if (displayError) {
+      return (
+        <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-xs text-rose-300 space-y-1.5 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 font-semibold text-rose-200">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+            <span>Authentication Error</span>
+          </div>
+          <p className="leading-relaxed text-[11px]">{displayError}</p>
+          <div className="pt-1 flex items-center justify-between text-[11px]">
+            <button
+              type="button"
+              onClick={() => {
+                setLocalError(null);
+                clearError();
+              }}
+              className="text-rose-400 hover:text-rose-200 underline"
+            >
+              Dismiss
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowDiagnostics(!showDiagnostics)}
+              className="text-slate-400 hover:text-white underline"
+            >
+              Check Diagnostics
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return null;
+  };
 
   return (
     <div className="relative min-h-screen w-full flex items-center justify-center bg-[#070a12] text-slate-100 overflow-hidden px-4 selection:bg-emerald-500/20 selection:text-emerald-300">
@@ -38,7 +197,7 @@ export const LoginScreen: React.FC = () => {
       />
 
       {/* Centered Authentication Card */}
-      <div className="relative w-full max-w-md bg-[#0c111e]/90 backdrop-blur-2xl border border-white/[0.08] rounded-3xl p-8 sm:p-10 shadow-[0_24px_64px_rgba(0,0,0,0.6)] space-y-8 animate-in fade-in zoom-in-95 duration-300">
+      <div className="relative w-full max-w-md bg-[#0c111e]/90 backdrop-blur-2xl border border-white/[0.08] rounded-3xl p-8 sm:p-10 shadow-[0_24px_64px_rgba(0,0,0,0.6)] space-y-6 animate-in fade-in zoom-in-95 duration-300">
         {/* Brand Header */}
         <div className="text-center space-y-3">
           {/* Glowing Neural Companion Orb */}
@@ -61,28 +220,11 @@ export const LoginScreen: React.FC = () => {
           </p>
         </div>
 
-        {/* Error Notification Alert */}
-        {displayError && (
-          <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/25 flex items-start gap-3 text-xs text-rose-300 animate-in fade-in duration-200">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-            <div className="flex-1 space-y-1">
-              <p className="font-medium">{displayError}</p>
-              <button
-                type="button"
-                onClick={() => {
-                  setLocalError(null);
-                  clearError();
-                }}
-                className="text-[11px] text-rose-400 hover:text-rose-200 underline"
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        )}
+        {/* Categorized Notice (Missing Config, Not Enabled, Cancelled, Failure) */}
+        {renderCategorizedNotice()}
 
         {/* Primary Action Section */}
-        <div className="space-y-3.5">
+        <div className="space-y-3.5 pt-1">
           {/* REAL Google OAuth Button */}
           <button
             type="button"
@@ -122,7 +264,7 @@ export const LoginScreen: React.FC = () => {
           </button>
 
           {/* Sandbox Guest Mode Option */}
-          <div className="pt-2 text-center">
+          <div className="pt-1 text-center">
             <button
               type="button"
               onClick={continueAsGuest}
@@ -134,18 +276,117 @@ export const LoginScreen: React.FC = () => {
           </div>
         </div>
 
-        {/* Configuration Notice if Supabase is pending setup */}
-        {!isConfigured && (
-          <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300/90 space-y-1.5">
-            <div className="flex items-center gap-1.5 font-semibold text-amber-200">
-              <Database className="w-3.5 h-3.5" />
-              <span>Supabase Cloud Integration</span>
+        {/* Collapsible Safe Diagnostics Section */}
+        <div className="pt-2 border-t border-white/[0.06]">
+          <button
+            type="button"
+            onClick={() => setShowDiagnostics(!showDiagnostics)}
+            className="w-full flex items-center justify-between p-2 rounded-xl bg-white/[0.02] hover:bg-white/[0.04] text-xs text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Database className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Supabase Auth Diagnostics</span>
             </div>
-            <p className="text-slate-300 leading-relaxed">
-              To enable live Google OAuth and cloud persistence, configure <code className="text-amber-200 bg-amber-950/40 px-1 py-0.5 rounded">SUPABASE_URL</code> and <code className="text-amber-200 bg-amber-950/40 px-1 py-0.5 rounded">SUPABASE_ANON_KEY</code> in Render Environment or <code className="text-amber-200 bg-amber-950/40 px-1 py-0.5 rounded">.env</code>.
-            </p>
-          </div>
-        )}
+            {showDiagnostics ? (
+              <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+            )}
+          </button>
+
+          {showDiagnostics && (
+            <div className="mt-2.5 p-3.5 rounded-2xl bg-black/60 border border-white/[0.08] space-y-2.5 text-xs font-mono">
+              <div className="flex items-center justify-between text-[11px] pb-1.5 border-b border-white/[0.06]">
+                <span className="text-slate-400">Environment Verification</span>
+                <button
+                  type="button"
+                  onClick={handleRefreshDiagnostics}
+                  disabled={isRunningCheck}
+                  className="flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isRunningCheck ? 'animate-spin' : ''}`} />
+                  <span>Re-check</span>
+                </button>
+              </div>
+
+              {/* Status 1: Supabase URL */}
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Supabase URL:</span>
+                {diagnostics?.supabaseUrlConfigured ? (
+                  <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> configured
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-rose-400 font-semibold text-[11px]">
+                    <XCircle className="w-3.5 h-3.5" /> missing
+                  </span>
+                )}
+              </div>
+
+              {/* Status 2: Supabase Public Key */}
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Supabase public key:</span>
+                {diagnostics?.supabaseKeyConfigured ? (
+                  <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> configured
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-rose-400 font-semibold text-[11px]">
+                    <XCircle className="w-3.5 h-3.5" /> missing
+                  </span>
+                )}
+              </div>
+
+              {/* Status 3: Supabase Client */}
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Supabase client:</span>
+                {diagnostics?.supabaseClientInitialized ? (
+                  <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> initialized
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-rose-400 font-semibold text-[11px]">
+                    <XCircle className="w-3.5 h-3.5" /> not initialized
+                  </span>
+                )}
+              </div>
+
+              {/* Status 4: Auth Service */}
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Auth service:</span>
+                {diagnostics?.authServiceReachable ? (
+                  <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold text-[11px]">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> reachable
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-amber-400 font-semibold text-[11px]">
+                    <XCircle className="w-3.5 h-3.5" /> unreachable
+                  </span>
+                )}
+              </div>
+
+              {/* Source & Redirect URI */}
+              <div className="pt-2 border-t border-white/[0.04] text-[10px] space-y-1 text-slate-500">
+                <div className="flex items-center justify-between">
+                  <span>Source:</span>
+                  <span className="text-slate-300 capitalize">
+                    {diagnostics?.configSource === 'vite_env'
+                      ? 'Vite Build Environment (VITE_*)'
+                      : diagnostics?.configSource === 'backend_proxy'
+                      ? 'Render Backend Proxy'
+                      : 'None'}
+                  </span>
+                </div>
+                <div className="truncate">
+                  <span className="block mb-0.5">OAuth Redirect URI:</span>
+                  <span className="text-slate-300 select-all" title={diagnostics?.redirectUrl}>
+                    {diagnostics?.redirectUrl || 'Detecting...'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Security & Isolation Callout */}
         <div className="pt-2 border-t border-white/[0.06] flex items-center justify-between text-[11px] text-slate-500">
@@ -153,7 +394,7 @@ export const LoginScreen: React.FC = () => {
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400/80" />
             <span>Isolated User Memory (RLS)</span>
           </div>
-          <span className="font-mono text-[10px]">v1.0 • Supabase Auth</span>
+          <span className="font-mono text-[10px]">Supabase Auth</span>
         </div>
       </div>
     </div>

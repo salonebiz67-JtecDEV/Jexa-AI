@@ -43,9 +43,28 @@ jobs:
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || '' }}
           # Optional custom base path override (defaults to dynamic /<repo-name>/ from GITHUB_REPOSITORY)
           VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH || '' }}
+          # Public Supabase credentials for client-side Auth & Google OAuth
+          # Supports either GitHub Actions Variables (recommended) or Secrets
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL || '' }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY || secrets.VITE_SUPABASE_ANON_KEY || '' }}
         run: |
+          echo "========================================="
+          echo " GitHub Pages Build Environment Check"
+          echo "========================================="
           if [ -z "${{ vars.VITE_API_BASE_URL }}" ]; then
             echo "::warning::VITE_API_BASE_URL is not set in GitHub repository variables. Add VITE_API_BASE_URL in Settings -> Secrets and variables -> Actions -> Variables with your Render URL (e.g. https://your-service.onrender.com)."
+          else
+            echo "VITE_API_BASE_URL: Configured"
+          fi
+          if [ -n "$VITE_SUPABASE_URL" ]; then
+            echo "VITE_SUPABASE_URL: Configured"
+          else
+            echo "::warning::VITE_SUPABASE_URL is not set in GitHub repository variables or secrets. Google OAuth on GitHub Pages requires VITE_SUPABASE_URL."
+          fi
+          if [ -n "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "VITE_SUPABASE_ANON_KEY: Configured"
+          else
+            echo "::warning::VITE_SUPABASE_ANON_KEY is not set in GitHub repository variables or secrets. Google OAuth on GitHub Pages requires VITE_SUPABASE_ANON_KEY."
           fi
           bun run build
 

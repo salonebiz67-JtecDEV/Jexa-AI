@@ -6,9 +6,19 @@ import {
   signOut as supabaseSignOut,
   syncUserProfile,
   fetchAuthConfig,
+  checkSupabaseDiagnostics,
+  SafeAuthDiagnostics,
 } from '../services/supabaseAuth';
 import { setAuthenticatedUser } from '../services/api.client';
 import { safeStorage } from '../services/storage';
+
+export type AuthStatusCategory =
+  | 'idle'
+  | 'config_missing'
+  | 'oauth_not_configured'
+  | 'auth_failed'
+  | 'user_cancelled'
+  | 'success';
 
 export interface AuthUser {
   id: string;
@@ -23,7 +33,10 @@ export interface AuthContextValue {
   session: Session | null;
   isLoading: boolean;
   isConfigured: boolean;
+  authStatus: AuthStatusCategory;
   error: string | null;
+  diagnostics: SafeAuthDiagnostics | null;
+  runDiagnostics: () => Promise<SafeAuthDiagnostics>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   continueAsGuest: () => void;
@@ -45,9 +58,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isConfigured, setIsConfigured] = useState<boolean>(true);
+  const [authStatus, setAuthStatus] = useState<AuthStatusCategory>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<SafeAuthDiagnostics | null>(null);
 
-  const clearError = useCallback(() => setError(null), []);
+  const clearError = useCallback(() => {
+    setError(null);
+    setAuthStatus(user ? 'success' : isConfigured ? 'idle' : 'config_missing');
+  }, [user, isConfigured]);
+
+  const runDiagnostics = useCallback(async (): Promise<SafeAuthDiagnostics> => {
+    const diag = await checkSupabaseDiagnostics();
+    setDiagnostics(diag);
+    setIsConfigured(diag.supabaseUrlConfigured && diag.supabaseKeyConfigured);
+    return diag;
+  }, []);
 
   // Format Supabase User into AuthUser
   const mapSupabaseUser = useCallback((supabaseUser: User): AuthUser => {
@@ -67,38 +92,85 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
+  // Parse any OAuth error parameters returned in URL search or hash
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // Check search query (?error=...) and hash (#error=...)
+    const searchParams = new URLSearchParams(window.location.search);
+    const hashStr = window.location.hash.startsWith('#')
+      ? window.location.hash.substring(1)
+      : window.location.hash;
+    const hashParams = new URLSearchParams(hashStr);
+
+    const err = searchParams.get('error') || hashParams.get('error');
+    const errDesc = searchParams.get('error_description') || hashParams.get('error_description');
+
+    if (err || errDesc) {
+      console.warn('[AuthContext] OAuth redirect reported error:', err, errDesc);
+      const descLower = (errDesc || '').toLowerCase();
+
+      if (err === 'access_denied' || descLower.includes('cancel') || descLower.includes('declined')) {
+        setAuthStatus('user_cancelled');
+        setError('Google sign-in was cancelled. You can try again whenever you are ready.');
+      } else if (
+        descLower.includes('provider is not enabled') ||
+        descLower.includes('not enabled') ||
+        descLower.includes('disabled')
+      ) {
+        setAuthStatus('oauth_not_configured');
+        setError(
+          'Google OAuth is not enabled in your Supabase project. Enable Google in Supabase Dashboard -> Authentication -> Providers.'
+        );
+      } else {
+        setAuthStatus('auth_failed');
+        setError(errDesc || `Authentication failed (${err}). Please check Supabase Auth settings.`);
+      }
+
+      // Clean URL without losing path
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
   // Initial session restoration and auth state listener
   useEffect(() => {
     let mounted = true;
 
     async function initAuth() {
       try {
-        const config = await fetchAuthConfig();
-        if (mounted) {
-          setIsConfigured(config.configured);
-        }
+        const diag = await runDiagnostics();
+        if (!mounted) return;
 
-        if (!config.configured) {
-          // Check if previously in guest mode
+        if (!diag.supabaseUrlConfigured || !diag.supabaseKeyConfigured) {
+          setIsConfigured(false);
+          setAuthStatus('config_missing');
+          // Check if user previously used sandbox mode
           const savedGuest = safeStorage.getItem('jexa_guest_mode');
           if (savedGuest === 'true' && mounted) {
             setUser(DEFAULT_GUEST_USER);
             setAuthenticatedUser(DEFAULT_GUEST_USER.id, null);
+            setAuthStatus('success');
           }
           if (mounted) setIsLoading(false);
           return;
         }
 
+        setIsConfigured(true);
+
         const supabase = await getBrowserSupabase();
         if (!supabase) {
-          if (mounted) setIsLoading(false);
+          if (mounted) {
+            setIsConfigured(false);
+            setAuthStatus('config_missing');
+            setIsLoading(false);
+          }
           return;
         }
 
         // 1. Get current active session
         const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
         if (sessionErr) {
-          console.warn('[AuthContext] Session retrieval error:', sessionErr.message);
+          console.warn('[AuthContext] Session check warning:', sessionErr.message);
         }
 
         if (sessionData?.session?.user && mounted) {
@@ -106,6 +178,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(authUser);
           setSession(sessionData.session);
           setAuthenticatedUser(authUser.id, sessionData.session.access_token);
+          setAuthStatus('success');
           safeStorage.removeItem('jexa_guest_mode');
 
           // Sync profile with PostgreSQL backend
@@ -113,11 +186,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.warn('[AuthContext] Profile sync error:', err)
           );
         } else {
-          // Check if user previously chose guest mode
+          // Check if previously in guest mode
           const savedGuest = safeStorage.getItem('jexa_guest_mode');
           if (savedGuest === 'true' && mounted) {
             setUser(DEFAULT_GUEST_USER);
             setAuthenticatedUser(DEFAULT_GUEST_USER.id, null);
+            setAuthStatus('success');
           }
         }
 
@@ -133,11 +207,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setUser(authUser);
               setSession(newSession);
               setAuthenticatedUser(authUser.id, newSession.access_token);
-              safeStorage.removeItem('jexa_guest_mode');
+              setAuthStatus('success');
               setError(null);
+              safeStorage.removeItem('jexa_guest_mode');
 
               // Clean up OAuth tokens from URL if present
-              if (typeof window !== 'undefined' && (window.location.hash || window.location.search.includes('code='))) {
+              if (
+                typeof window !== 'undefined' &&
+                (window.location.hash.includes('access_token') ||
+                  window.location.search.includes('code='))
+              ) {
                 window.history.replaceState({}, document.title, window.location.pathname);
               }
 
@@ -148,6 +227,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setUser(null);
             setSession(null);
             setAuthenticatedUser(null, null);
+            setAuthStatus('idle');
             safeStorage.removeItem('jexa_guest_mode');
           }
         });
@@ -157,7 +237,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
       } catch (err: any) {
         console.error('[AuthContext] Auth initialization error:', err);
-        if (mounted) setError(err.message || 'Failed to initialize authentication.');
+        if (mounted) {
+          setError(err.message || 'Failed to initialize authentication.');
+          setAuthStatus('auth_failed');
+        }
       } finally {
         if (mounted) setIsLoading(false);
       }
@@ -168,22 +251,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       mounted = false;
     };
-  }, [mapSupabaseUser]);
+  }, [mapSupabaseUser, runDiagnostics]);
 
   // Google OAuth Sign-in Handler
   const signInWithGoogle = useCallback(async () => {
     setError(null);
     try {
+      // Re-verify diagnostics before triggering OAuth
+      const diag = await checkSupabaseDiagnostics();
+      setDiagnostics(diag);
+
+      if (!diag.supabaseUrlConfigured || !diag.supabaseKeyConfigured) {
+        setIsConfigured(false);
+        setAuthStatus('config_missing');
+        const msg =
+          'Supabase frontend configuration is missing. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in GitHub Actions or environment.';
+        setError(msg);
+        throw new Error(msg);
+      }
+
       const { error: signInErr } = await supabaseSignInGoogle();
       if (signInErr) {
+        const msgLower = (signInErr.message || '').toLowerCase();
+        if (msgLower.includes('not enabled') || msgLower.includes('provider')) {
+          setAuthStatus('oauth_not_configured');
+        } else {
+          setAuthStatus('auth_failed');
+        }
+        setError(signInErr.message);
         throw signInErr;
       }
     } catch (err: any) {
-      console.error('[AuthContext] Google sign-in error:', err);
-      setError(
-        err.message ||
-          'Failed to connect to Google OAuth. Please check Supabase Google provider configuration.'
-      );
+      console.error('[AuthContext] Google sign-in trigger error:', err);
+      const msgLower = (err?.message || '').toLowerCase();
+      if (msgLower.includes('not enabled') || msgLower.includes('provider')) {
+        setAuthStatus('oauth_not_configured');
+      }
       throw err;
     }
   }, []);
@@ -196,6 +299,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(null);
       setSession(null);
       setAuthenticatedUser(null, null);
+      setAuthStatus('idle');
       safeStorage.removeItem('jexa_guest_mode');
     } catch (err: any) {
       console.error('[AuthContext] Sign out error:', err);
@@ -208,6 +312,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(DEFAULT_GUEST_USER);
     setAuthenticatedUser(DEFAULT_GUEST_USER.id, null);
     safeStorage.setItem('jexa_guest_mode', 'true');
+    setAuthStatus('success');
     setError(null);
   }, []);
 
@@ -217,13 +322,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       session,
       isLoading,
       isConfigured,
+      authStatus,
       error,
+      diagnostics,
+      runDiagnostics,
       signInWithGoogle,
       signOut,
       continueAsGuest,
       clearError,
     }),
-    [user, session, isLoading, isConfigured, error, signInWithGoogle, signOut, continueAsGuest, clearError]
+    [
+      user,
+      session,
+      isLoading,
+      isConfigured,
+      authStatus,
+      error,
+      diagnostics,
+      runDiagnostics,
+      signInWithGoogle,
+      signOut,
+      continueAsGuest,
+      clearError,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

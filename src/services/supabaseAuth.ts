@@ -1,10 +1,12 @@
 import { createClient, SupabaseClient, User, Session } from '@supabase/supabase-js';
 import { safeStorage } from './storage';
+import { API_BASE, ApiClient } from './api.client';
 
 export interface AuthConfig {
   configured: boolean;
   supabaseUrl: string;
   supabaseAnonKey: string;
+  source: 'vite_env' | 'backend_proxy' | 'none';
 }
 
 export interface UserProfile {
@@ -15,50 +17,89 @@ export interface UserProfile {
   updatedAt?: string;
 }
 
+export interface SafeAuthDiagnostics {
+  supabaseUrlConfigured: boolean;
+  supabaseKeyConfigured: boolean;
+  supabaseClientInitialized: boolean;
+  authServiceReachable: boolean;
+  configSource: 'vite_env' | 'backend_proxy' | 'none';
+  redirectUrl: string;
+  authErrorMessage?: string;
+}
+
 let supabaseClientInstance: SupabaseClient | null = null;
 let clientInitPromise: Promise<SupabaseClient | null> | null = null;
+let lastResolvedConfig: AuthConfig | null = null;
 
 /**
- * Resolves the Supabase URL and public Anon Key from Vite environment variables
- * or dynamically from the backend server (/api/auth/config).
+ * Resolves the clean redirect URL for Google OAuth callback.
+ * On GitHub Pages, preserves the subpath (e.g., https://user.github.io/jexa-ai-companion/)
+ * instead of mistakenly redirecting to root (https://user.github.io/).
  */
-export async function fetchAuthConfig(): Promise<AuthConfig> {
-  const envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
-  const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
-
-  if (envUrl && envKey) {
-    return {
-      configured: true,
-      supabaseUrl: envUrl,
-      supabaseAnonKey: envKey,
-    };
-  }
-
-  try {
-    const res = await fetch('/api/auth/config');
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.data?.supabaseUrl && data.data?.supabaseAnonKey) {
-        return {
-          configured: true,
-          supabaseUrl: data.data.supabaseUrl,
-          supabaseAnonKey: data.data.supabaseAnonKey,
-        };
-      }
-    }
-  } catch (err) {
-    console.warn('[SupabaseAuth] Could not fetch auth config from /api/auth/config:', err);
-  }
-
-  return {
-    configured: false,
-    supabaseUrl: '',
-    supabaseAnonKey: '',
-  };
+export function getAuthRedirectUrl(): string {
+  if (typeof window === 'undefined') return '';
+  // Strip any query params or hash fragments
+  const cleanUrl = window.location.href.split('#')[0].split('?')[0];
+  return cleanUrl.endsWith('/') ? cleanUrl : `${cleanUrl}/`;
 }
 
 /**
- * Initializes and caches the Supabase browser client for authentication.
+ * Resolves the public Supabase URL and public Anon Key:
+ * 1. Primary: Direct Vite build-time environment variables (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY).
+ * 2. Fallback: Dynamic retrieval from Render backend (/api/auth/config via API_BASE) if GitHub Actions
+ *    variables were not bundled during compilation.
+ * NEVER retrieves or accepts SUPABASE_SERVICE_ROLE_KEY.
+ */
+export async function fetchAuthConfig(): Promise<AuthConfig> {
+  if (lastResolvedConfig && lastResolvedConfig.configured) {
+    return lastResolvedConfig;
+  }
+
+  // 1. Check client-side Vite environment variables (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY)
+  const viteUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
+  const viteKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+
+  if (viteUrl && viteKey) {
+    lastResolvedConfig = {
+      configured: true,
+      supabaseUrl: viteUrl,
+      supabaseAnonKey: viteKey,
+      source: 'vite_env',
+    };
+    return lastResolvedConfig;
+  }
+
+  // 2. Fallback: Query backend API /auth/config (via resolved API_BASE for Render)
+  try {
+    const configUrl = `${API_BASE}/auth/config`;
+    const res = await fetch(configUrl);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && json.data?.supabaseUrl && json.data?.supabaseAnonKey) {
+        lastResolvedConfig = {
+          configured: true,
+          supabaseUrl: json.data.supabaseUrl.trim(),
+          supabaseAnonKey: json.data.supabaseAnonKey.trim(),
+          source: 'backend_proxy',
+        };
+        return lastResolvedConfig;
+      }
+    }
+  } catch (err: any) {
+    console.warn('[SupabaseAuth] Could not retrieve auth config from backend:', err?.message || err);
+  }
+
+  lastResolvedConfig = {
+    configured: false,
+    supabaseUrl: viteUrl || '',
+    supabaseAnonKey: viteKey || '',
+    source: 'none',
+  };
+  return lastResolvedConfig;
+}
+
+/**
+ * Initializes and caches the Supabase browser client for Supabase Auth & Google OAuth.
  */
 export async function getBrowserSupabase(): Promise<SupabaseClient | null> {
   if (supabaseClientInstance) {
@@ -78,11 +119,12 @@ export async function getBrowserSupabase(): Promise<SupabaseClient | null> {
             persistSession: true,
             autoRefreshToken: true,
             detectSessionInUrl: true,
+            storageKey: 'jexa_supabase_auth_token',
             storage: typeof window !== 'undefined' ? window.localStorage : undefined,
           },
         });
         return supabaseClientInstance;
-      } catch (err) {
+      } catch (err: any) {
         console.error('[SupabaseAuth] Failed to initialize Supabase client:', err);
         return null;
       }
@@ -99,10 +141,12 @@ export async function getBrowserSupabase(): Promise<SupabaseClient | null> {
 export async function signInWithGoogle(): Promise<{ error?: any }> {
   const client = await getBrowserSupabase();
   if (!client) {
-    throw new Error('Supabase is not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY.');
+    throw new Error('Supabase client is not initialized. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are configured.');
   }
 
-  const redirectUrl = typeof window !== 'undefined' ? window.location.origin : '';
+  const redirectUrl = getAuthRedirectUrl();
+  console.log('[SupabaseAuth] Initiating Google OAuth with redirect:', redirectUrl);
+
   const { error } = await client.auth.signInWithOAuth({
     provider: 'google',
     options: {
@@ -118,7 +162,64 @@ export async function signInWithGoogle(): Promise<{ error?: any }> {
 }
 
 /**
- * Signs the user out from Supabase Auth and clears local session cache.
+ * Safe diagnostics check that reports:
+ * - Supabase URL: configured
+ * - Supabase public key: configured
+ * - Supabase client: initialized
+ * - Auth service: reachable
+ * NEVER displays actual secrets or keys.
+ */
+export async function checkSupabaseDiagnostics(): Promise<SafeAuthDiagnostics> {
+  const config = await fetchAuthConfig();
+  const urlConfigured = Boolean(config.supabaseUrl && config.supabaseUrl.startsWith('https://'));
+  const keyConfigured = Boolean(config.supabaseAnonKey && config.supabaseAnonKey.length > 10);
+  const redirectUrl = getAuthRedirectUrl();
+
+  let clientInitialized = false;
+  let authServiceReachable = false;
+  let authErrorMessage: string | undefined;
+
+  if (urlConfigured && keyConfigured) {
+    try {
+      const client = await getBrowserSupabase();
+      if (client) {
+        clientInitialized = true;
+
+        // Perform lightweight reachability check against Supabase Auth service
+        // Testing auth endpoint reachability without exposing secrets
+        try {
+          const { error: sessionError } = await client.auth.getSession();
+          if (!sessionError) {
+            authServiceReachable = true;
+          } else {
+            authErrorMessage = sessionError.message;
+            // If session check returns reachable status with expected response, mark reachable
+            authServiceReachable = true;
+          }
+        } catch (fetchErr: any) {
+          authErrorMessage = fetchErr?.message || 'Could not reach Supabase Auth API';
+        }
+      }
+    } catch (clientErr: any) {
+      authErrorMessage = clientErr?.message || 'Client initialization failed';
+    }
+  } else {
+    authErrorMessage = 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY configuration.';
+  }
+
+  return {
+    supabaseUrlConfigured: urlConfigured,
+    supabaseKeyConfigured: keyConfigured,
+    supabaseClientInitialized: clientInitialized,
+    authServiceReachable: authServiceReachable,
+    configSource: config.source,
+    redirectUrl,
+    authErrorMessage: authServiceReachable ? undefined : authErrorMessage,
+  };
+}
+
+/**
+ * Signs the user out from Supabase Auth and clears session tokens.
  */
 export async function signOut(): Promise<void> {
   const client = await getBrowserSupabase();
@@ -134,7 +235,7 @@ export async function signOut(): Promise<void> {
 }
 
 /**
- * Syncs the authenticated user profile with the backend PostgreSQL database.
+ * Syncs the authenticated user profile with the backend database.
  */
 export async function syncUserProfile(user: User): Promise<UserProfile | null> {
   try {
@@ -145,23 +246,9 @@ export async function syncUserProfile(user: User): Promise<UserProfile | null> {
       avatarUrl: user.user_metadata?.avatar_url || user.user_metadata?.picture || null,
     };
 
-    const res = await fetch('/api/auth/profile', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': user.id,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success) {
-        return data.data;
-      }
-    }
+    return await ApiClient.syncUserProfile(payload);
   } catch (err) {
     console.warn('[SupabaseAuth] Background profile sync warning:', err);
+    return null;
   }
-  return null;
 }

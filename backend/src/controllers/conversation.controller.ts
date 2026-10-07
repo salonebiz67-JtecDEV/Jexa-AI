@@ -42,7 +42,8 @@ export class ConversationController {
   public static async getById(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const conversation = await DatabaseService.getConversation(id);
+      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const conversation = await DatabaseService.getConversation(id, userId);
       if (!conversation) {
         res.status(404).json({ success: false, error: 'Conversation not found' });
         return;
@@ -118,7 +119,8 @@ export class ConversationController {
   public static async getMessages(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const messages = await DatabaseService.getMessages(id);
+      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const messages = await DatabaseService.getMessages(id, userId);
       res.status(200).json({
         success: true,
         data: messages,
@@ -136,10 +138,11 @@ export class ConversationController {
   public static async delete(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      await DatabaseService.deleteConversation(id);
+      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const deleted = await DatabaseService.deleteConversation(id, userId);
       res.status(200).json({
-        success: true,
-        data: { id, deleted: true },
+        success: deleted,
+        data: { id, deleted },
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {

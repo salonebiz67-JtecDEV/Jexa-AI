@@ -264,6 +264,7 @@ export class DatabaseService {
   // =========================================================================
 
   public static async listConversations(userId?: string): Promise<Conversation[]> {
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
     const client = getSupabaseClient();
     if (client) {
       let query = client
@@ -272,8 +273,8 @@ export class DatabaseService {
         .order('pinned', { ascending: false })
         .order('updated_at', { ascending: false });
 
-      if (userId && isUUID(userId)) {
-        query = query.eq('user_id', userId);
+      if (userId) {
+        query = query.eq('user_id', validUserId);
       }
 
       const { data, error } = await query;
@@ -297,9 +298,8 @@ export class DatabaseService {
       }
     }
 
-    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
     return Array.from(memoryStore.conversations.values())
-      .filter((c) => !userId || c.userId === validUserId || c.userId === DEFAULT_USER_ID)
+      .filter((c) => (userId ? c.userId === validUserId : c.userId === DEFAULT_USER_ID))
       .sort((a, b) => {
         if (Boolean(b.pinned) !== Boolean(a.pinned)) {
           return b.pinned ? 1 : -1;
@@ -308,15 +308,20 @@ export class DatabaseService {
       });
   }
 
-  public static async getConversation(id: string): Promise<Conversation | null> {
+  public static async getConversation(id: string, userId?: string): Promise<Conversation | null> {
     const validId = toValidUUID(id);
     const client = getSupabaseClient();
     if (client) {
-      const { data, error } = await client
+      let query = client
         .from('conversations')
         .select('*')
-        .eq('id', validId)
-        .maybeSingle();
+        .eq('id', validId);
+
+      if (userId) {
+        query = query.eq('user_id', toValidUUID(userId));
+      }
+
+      const { data, error } = await query.maybeSingle();
 
       if (error) {
         console.error('[DatabaseService] Supabase getConversation error:', error.message);
@@ -337,7 +342,11 @@ export class DatabaseService {
         };
       }
     }
-    return memoryStore.conversations.get(validId) || memoryStore.conversations.get(id) || null;
+    const conv = memoryStore.conversations.get(validId) || memoryStore.conversations.get(id);
+    if (conv && userId && conv.userId !== toValidUUID(userId)) {
+      return null;
+    }
+    return conv || null;
   }
 
   public static async createConversation(
@@ -444,10 +453,17 @@ export class DatabaseService {
     return updated;
   }
 
-  public static async deleteConversation(id: string): Promise<boolean> {
+  public static async deleteConversation(id: string, userId?: string): Promise<boolean> {
     const validId = toValidUUID(id);
     const client = getSupabaseClient();
     if (client) {
+      if (userId) {
+        const existing = await this.getConversation(validId, userId);
+        if (!existing) {
+          return false;
+        }
+      }
+
       // 1. Delete associated messages first
       const { error: msgErr } = await client.from('messages').delete().eq('conversation_id', validId);
       if (msgErr) {
@@ -455,11 +471,20 @@ export class DatabaseService {
       }
 
       // 2. Delete the conversation record
-      const { error: convErr } = await client.from('conversations').delete().eq('id', validId);
+      let query = client.from('conversations').delete().eq('id', validId);
+      if (userId) {
+        query = query.eq('user_id', toValidUUID(userId));
+      }
+      const { error: convErr } = await query;
       if (convErr) {
         console.error('[DatabaseService] Supabase deleteConversation error:', convErr.message, convErr.details);
         throw new Error(`Failed to delete conversation from Supabase: ${convErr.message}`);
       }
+    }
+
+    const existing = memoryStore.conversations.get(validId) || memoryStore.conversations.get(id);
+    if (existing && userId && existing.userId !== toValidUUID(userId)) {
+      return false;
     }
 
     memoryStore.conversations.delete(validId);
@@ -473,8 +498,15 @@ export class DatabaseService {
   // MESSAGE PERSISTENCE (Supabase Source of Truth)
   // =========================================================================
 
-  public static async getMessages(conversationId: string): Promise<ChatMessage[]> {
+  public static async getMessages(conversationId: string, userId?: string): Promise<ChatMessage[]> {
     const validConvId = toValidUUID(conversationId);
+    if (userId) {
+      const conv = await this.getConversation(validConvId, userId);
+      if (!conv) {
+        return [];
+      }
+    }
+
     const client = getSupabaseClient();
     if (client) {
       const { data, error } = await client
@@ -746,7 +778,7 @@ export class DatabaseService {
         .from('memories')
         .select('*');
 
-      if (userId && isUUID(userId)) {
+      if (userId) {
         query = query.eq('user_id', validUserId);
       }
 
@@ -767,7 +799,7 @@ export class DatabaseService {
     }
 
     return Array.from(memoryStore.memories.values())
-      .filter((m) => !userId || m.userId === validUserId || m.userId === DEFAULT_USER_ID)
+      .filter((m) => (userId ? m.userId === validUserId : m.userId === DEFAULT_USER_ID))
       .sort((a, b) => new Date(b.lastReinforcedAt).getTime() - new Date(a.lastReinforcedAt).getTime());
   }
 
@@ -812,10 +844,14 @@ export class DatabaseService {
     const client = getSupabaseClient();
     if (client) {
       let query = client.from('memories').delete().eq('id', validId);
-      if (userId && isUUID(userId)) {
+      if (userId) {
         query = query.eq('user_id', toValidUUID(userId));
       }
       await query;
+    }
+    const mem = memoryStore.memories.get(validId) || memoryStore.memories.get(id);
+    if (mem && userId && mem.userId !== toValidUUID(userId)) {
+      return false;
     }
     memoryStore.memories.delete(validId);
     memoryStore.memories.delete(id);
