@@ -8,6 +8,7 @@ import {
   fetchAuthConfig,
   checkSupabaseDiagnostics,
   SafeAuthDiagnostics,
+  purgePwaCacheAndReload,
 } from '../services/supabaseAuth';
 import { setAuthenticatedUser } from '../services/api.client';
 import { safeStorage } from '../services/storage';
@@ -40,6 +41,7 @@ export interface AuthContextValue {
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   continueAsGuest: () => void;
+  forcePurgeCache: () => Promise<void>;
   clearError: () => void;
 }
 
@@ -320,6 +322,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       signInWithGoogle,
       signOut,
       continueAsGuest,
+      forcePurgeCache: purgePwaCacheAndReload,
       clearError,
     }),
     [

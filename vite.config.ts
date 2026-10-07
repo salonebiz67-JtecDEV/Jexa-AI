@@ -36,9 +36,17 @@ export default defineConfig(({ mode }) => {
   const isUrlConfigured = Boolean(process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_URL.trim());
   const isKeyConfigured = Boolean(process.env.VITE_SUPABASE_ANON_KEY && process.env.VITE_SUPABASE_ANON_KEY.trim());
 
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 10);
+  const commitSha = process.env.GITHUB_SHA
+    ? process.env.GITHUB_SHA.slice(0, 7)
+    : 'dev';
+  const buildId = `${dateStr}-build-${commitSha}`;
+  const buildTime = now.toUTCString();
+
   // Safe build-time diagnostic reporting (never print actual keys)
   console.log('-----------------------------------------');
-  console.log('JEXA Build Diagnostics:');
+  console.log(`JEXA Build Diagnostics (${buildId}):`);
   console.log(`Supabase URL configured: ${isUrlConfigured}`);
   console.log(`Supabase public key configured: ${isKeyConfigured}`);
   console.log('-----------------------------------------');
@@ -94,6 +102,8 @@ export default defineConfig(({ mode }) => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,jpg,woff,woff2}'],
           cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
           navigateFallback: 'index.html',
           runtimeCaching: [
             {
@@ -139,6 +149,8 @@ export default defineConfig(({ mode }) => {
     define: {
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(process.env.VITE_SUPABASE_URL || ''),
       'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY || ''),
+      'import.meta.env.VITE_BUILD_ID': JSON.stringify(buildId),
+      'import.meta.env.VITE_BUILD_TIME': JSON.stringify(buildTime),
     },
     build: {
       outDir: 'dist',

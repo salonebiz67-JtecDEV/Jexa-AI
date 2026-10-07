@@ -14,18 +14,19 @@ import {
   ChevronUp,
   ExternalLink,
   Info,
+  RotateCcw,
 } from 'lucide-react';
 
 export const LoginScreen: React.FC = () => {
   const {
     signInWithGoogle,
-    continueAsGuest,
     error,
     clearError,
     isConfigured,
     authStatus,
     diagnostics,
     runDiagnostics,
+    forcePurgeCache,
   } = useAuth();
 
   const [isConnecting, setIsConnecting] = useState(false);
@@ -64,20 +65,21 @@ export const LoginScreen: React.FC = () => {
 
   const displayError = localError || error;
 
-  // Determine user-friendly category guidance
+  // Determine user-friendly diagnosis and guidance
   const renderCategorizedNotice = () => {
-    if (authStatus === 'config_missing' || !isConfigured) {
+    // Diagnosis A: Frontend variables missing
+    if (diagnostics?.diagnosis === 'frontend_variables_missing' || authStatus === 'config_missing' || !isConfigured) {
       return (
         <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-200/90 space-y-2 animate-in fade-in duration-200">
           <div className="flex items-center gap-2 font-semibold text-amber-300">
             <Database className="w-4 h-4 shrink-0" />
-            <span>Frontend Supabase Configuration Missing</span>
+            <span>Diagnosis A: Frontend Supabase Variables Missing</span>
           </div>
           <p className="text-slate-300 leading-relaxed text-[11px]">
-            The GitHub Pages frontend requires public Supabase variables to initiate Google OAuth.
+            The frontend build did not receive public Supabase variables.
             Add <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_URL</code> and{' '}
             <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_ANON_KEY</code> in{' '}
-            <span className="text-white font-medium">GitHub Repo Settings → Secrets and variables → Actions → Variables</span>.
+            <span className="text-white font-medium">GitHub Settings → Secrets and variables → Actions → Variables</span>, then trigger a new GitHub Pages deployment.
           </p>
           <div className="pt-1 flex items-center justify-between text-[11px]">
             <button
@@ -85,26 +87,90 @@ export const LoginScreen: React.FC = () => {
               onClick={() => setShowDiagnostics(true)}
               className="text-amber-400 hover:text-amber-200 underline font-medium"
             >
-              View Configuration Diagnostics
+              View Diagnostics Details
             </button>
-            <span className="text-slate-400 text-[10px]">
-              Requires VITE_SUPABASE_* variables
-            </span>
+            <button
+              type="button"
+              onClick={forcePurgeCache}
+              className="text-slate-400 hover:text-amber-300 transition-colors flex items-center gap-1"
+              title="Clears any stale PWA cache on this browser"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Purge Cache & Reload</span>
+            </button>
           </div>
         </div>
       );
     }
 
-    if (authStatus === 'oauth_not_configured') {
+    // Diagnosis B: Client Initialization Failed
+    if (diagnostics?.diagnosis === 'client_init_failed') {
+      return (
+        <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-xs text-rose-200/90 space-y-2 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 font-semibold text-rose-300">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>Diagnosis B: Supabase Client Initialization Failed</span>
+          </div>
+          <p className="text-slate-300 leading-relaxed text-[11px]">
+            The environment variables were found, but the Supabase browser SDK failed to initialize.
+            Verify that <code className="text-rose-200 bg-rose-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_URL</code> starts with <code className="text-slate-200">https://</code>.
+          </p>
+          <div className="pt-1 flex items-center justify-between text-[11px]">
+            <button
+              type="button"
+              onClick={() => setShowDiagnostics(true)}
+              className="text-rose-400 hover:text-rose-200 underline"
+            >
+              Inspect Diagnostics
+            </button>
+            <button
+              type="button"
+              onClick={handleRefreshDiagnostics}
+              className="text-slate-400 hover:text-white"
+            >
+              Retry Check
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Diagnosis C: Auth Service Unavailable / Network Error
+    if (diagnostics?.diagnosis === 'auth_service_unavailable') {
+      return (
+        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-200/90 space-y-2 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 font-semibold text-amber-300">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>Diagnosis C: Supabase Auth Service Unavailable</span>
+          </div>
+          <p className="text-slate-300 leading-relaxed text-[11px]">
+            The Supabase client is initialized, but the remote Auth API is unreachable.
+            Verify that your Supabase project is active (not paused) and check internet connectivity.
+          </p>
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => setShowDiagnostics(true)}
+              className="text-amber-400 hover:text-amber-200 underline text-[11px]"
+            >
+              View Reachability Status
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Diagnosis D: Google Provider Not Configured in Supabase
+    if (authStatus === 'oauth_not_configured' || diagnostics?.diagnosis === 'google_provider_not_configured') {
       return (
         <div className="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 text-xs text-indigo-200/90 space-y-2 animate-in fade-in duration-200">
           <div className="flex items-center gap-2 font-semibold text-indigo-300">
             <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>Google OAuth Not Configured in Supabase</span>
+            <span>Diagnosis D: Google OAuth Not Enabled in Supabase</span>
           </div>
           <p className="text-slate-300 leading-relaxed text-[11px]">
-            The Supabase client is connected, but Google sign-in is not enabled in your Supabase project dashboard.
-            Navigate to <span className="text-white font-medium">Authentication → Providers → Google</span> in Supabase and toggle it on.
+            The Supabase client is connected, but the Google provider is disabled in your Supabase dashboard.
+            Go to <span className="text-white font-medium">Supabase Dashboard → Authentication → Providers → Google</span> and toggle it ON.
           </p>
           <div className="pt-1">
             <button
@@ -130,7 +196,7 @@ export const LoginScreen: React.FC = () => {
             <span>Google Sign-In Cancelled</span>
           </div>
           <p className="text-slate-400 leading-relaxed text-[11px]">
-            The authentication prompt was closed or declined. You can continue whenever you are ready.
+            The authentication prompt was closed or declined. Click Continue with Google to try again.
           </p>
           <button
             type="button"
@@ -367,6 +433,40 @@ export const LoginScreen: React.FC = () => {
                     {diagnostics?.redirectUrl || 'Detecting...'}
                   </span>
                 </div>
+              </div>
+
+              {/* Build Version & Deployment Stamp (Requirement 6) */}
+              <div className="pt-2 border-t border-white/[0.04] text-[10px] space-y-1 text-slate-500">
+                <div className="flex items-center justify-between">
+                  <span>JEXA Build:</span>
+                  <span className="text-emerald-400 font-mono font-semibold">
+                    {diagnostics?.buildId || 'local-build'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Build Timestamp:</span>
+                  <span className="text-slate-300 font-mono text-[9px]">
+                    {diagnostics?.buildTime || 'local'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Diagnosis:</span>
+                  <span className="text-slate-300 uppercase font-mono text-[9px]">
+                    {diagnostics?.diagnosis || 'checking'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Force PWA Cache Purge button (Requirement 5) */}
+              <div className="pt-2 border-t border-white/[0.04]">
+                <button
+                  type="button"
+                  onClick={forcePurgeCache}
+                  className="w-full flex items-center justify-center gap-2 py-1.5 px-2.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white transition-colors text-[10px]"
+                >
+                  <RotateCcw className="w-3 h-3 text-emerald-400" />
+                  <span>Clear PWA Cache & Force Reload</span>
+                </button>
               </div>
             </div>
           )}

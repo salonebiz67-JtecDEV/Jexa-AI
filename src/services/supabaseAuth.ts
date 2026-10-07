@@ -17,6 +17,14 @@ export interface UserProfile {
   updatedAt?: string;
 }
 
+export type AuthDiagnosisCategory =
+  | 'ready'
+  | 'frontend_variables_missing'
+  | 'client_init_failed'
+  | 'auth_service_unavailable'
+  | 'google_provider_not_configured'
+  | 'cached_version_detected';
+
 export interface SafeAuthDiagnostics {
   supabaseUrlConfigured: boolean;
   supabaseKeyConfigured: boolean;
@@ -24,6 +32,9 @@ export interface SafeAuthDiagnostics {
   authServiceReachable: boolean;
   configSource: 'vite_env' | 'backend_proxy' | 'none';
   redirectUrl: string;
+  buildId: string;
+  buildTime: string;
+  diagnosis: AuthDiagnosisCategory;
   authErrorMessage?: string;
 }
 
@@ -210,6 +221,18 @@ export async function checkSupabaseDiagnostics(): Promise<SafeAuthDiagnostics> {
     authErrorMessage = 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY configuration.';
   }
 
+  const buildId = (import.meta.env.VITE_BUILD_ID as string) || 'dev-build';
+  const buildTime = (import.meta.env.VITE_BUILD_TIME as string) || new Date().toUTCString();
+
+  let diagnosis: AuthDiagnosisCategory = 'ready';
+  if (!urlConfigured || !keyConfigured) {
+    diagnosis = 'frontend_variables_missing';
+  } else if (!clientInitialized) {
+    diagnosis = 'client_init_failed';
+  } else if (!authServiceReachable) {
+    diagnosis = 'auth_service_unavailable';
+  }
+
   return {
     supabaseUrlConfigured: urlConfigured,
     supabaseKeyConfigured: keyConfigured,
@@ -217,8 +240,38 @@ export async function checkSupabaseDiagnostics(): Promise<SafeAuthDiagnostics> {
     authServiceReachable: authServiceReachable,
     configSource: config.source,
     redirectUrl,
+    buildId,
+    buildTime,
+    diagnosis,
     authErrorMessage: authServiceReachable ? undefined : authErrorMessage,
   };
+}
+
+/**
+ * Safely unregisters all PWA service workers and clears Workbox/browser caches,
+ * then forces a clean reload from the server.
+ */
+export async function purgePwaCacheAndReload(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const reg of registrations) {
+        await reg.unregister();
+      }
+    }
+    if ('caches' in window) {
+      const cacheNames = await caches.keys();
+      for (const name of cacheNames) {
+        await caches.delete(name);
+      }
+    }
+    sessionStorage.clear();
+  } catch (err) {
+    console.warn('[PWA] Cache purge notice:', err);
+  } finally {
+    window.location.reload();
+  }
 }
 
 /**
