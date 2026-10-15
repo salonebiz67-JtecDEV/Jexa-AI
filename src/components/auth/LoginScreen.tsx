@@ -67,6 +67,38 @@ export const LoginScreen: React.FC = () => {
 
   // Determine user-friendly diagnosis and guidance
   const renderCategorizedNotice = () => {
+    // Diagnosis E: Existing cached application version
+    if (diagnostics?.diagnosis === 'cached_version_detected') {
+      return (
+        <div className="p-3.5 rounded-2xl bg-cyan-500/10 border border-cyan-500/25 text-xs text-cyan-200/90 space-y-2 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 font-semibold text-cyan-300">
+            <RotateCcw className="w-4 h-4 shrink-0" />
+            <span>Diagnosis E: Existing Cached PWA Version Detected</span>
+          </div>
+          <p className="text-slate-300 leading-relaxed text-[11px]">
+            Your browser or device is running a cached PWA bundle from a previous deployment.
+            Click below to purge local cache storage, unregister the old worker, and load the newest build.
+          </p>
+          <div className="pt-1 flex items-center justify-between text-[11px]">
+            <button
+              type="button"
+              onClick={forcePurgeCache}
+              className="px-2.5 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 font-medium transition-colors"
+            >
+              Purge Cache & Reload
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowDiagnostics(true)}
+              className="text-cyan-400 hover:text-cyan-200 underline"
+            >
+              View Version
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     // Diagnosis A: Frontend variables missing
     if (diagnostics?.diagnosis === 'frontend_variables_missing' || authStatus === 'config_missing' || !isConfigured) {
       return (
@@ -77,8 +109,8 @@ export const LoginScreen: React.FC = () => {
           </div>
           <p className="text-slate-300 leading-relaxed text-[11px]">
             The frontend build did not receive public Supabase variables.
-            Add <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_URL</code> and{' '}
-            <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_ANON_KEY</code> in{' '}
+            Ensure <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_URL</code> and{' '}
+            <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_ANON_KEY</code> exist in{' '}
             <span className="text-white font-medium">GitHub Settings → Secrets and variables → Actions → Variables</span>, then trigger a new GitHub Pages deployment.
           </p>
           <div className="pt-1 flex items-center justify-between text-[11px]">

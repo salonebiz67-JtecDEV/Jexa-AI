@@ -1,10 +1,12 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+
   // Dynamically determine the base path for GitHub Pages and production:
   // 1. Explicit VITE_BASE_PATH environment variable (if user provided one)
   // 2. In GitHub Actions, GITHUB_REPOSITORY is automatically provided as "owner/repo"
@@ -13,8 +15,9 @@ export default defineConfig(({ mode }) => {
   // 3. Fallback to "/" for dev server, or "./" for local production preview
   let base = '/';
 
-  if (process.env.VITE_BASE_PATH) {
-    let p = process.env.VITE_BASE_PATH.trim();
+  const basePath = process.env.VITE_BASE_PATH || env.VITE_BASE_PATH;
+  if (basePath) {
+    let p = basePath.trim();
     if (!p.startsWith('/') && !p.startsWith('.')) {
       p = `/${p}`;
     }
@@ -33,8 +36,10 @@ export default defineConfig(({ mode }) => {
     base = '/';
   }
 
-  const isUrlConfigured = Boolean(process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_URL.trim());
-  const isKeyConfigured = Boolean(process.env.VITE_SUPABASE_ANON_KEY && process.env.VITE_SUPABASE_ANON_KEY.trim());
+  const supabaseUrl = (process.env.VITE_SUPABASE_URL || env.VITE_SUPABASE_URL || '').trim();
+  const supabaseAnonKey = (process.env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || '').trim();
+  const isUrlConfigured = Boolean(supabaseUrl);
+  const isKeyConfigured = Boolean(supabaseAnonKey);
 
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10);
@@ -58,7 +63,7 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        injectRegister: 'auto',
+        injectRegister: null, // Managed cleanly by registerSW in src/main.tsx with controllerchange reload
         includeAssets: [
           'favicon.svg',
           'icon.svg',
@@ -147,8 +152,8 @@ export default defineConfig(({ mode }) => {
       },
     },
     define: {
-      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(process.env.VITE_SUPABASE_URL || ''),
-      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY || ''),
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabaseUrl),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(supabaseAnonKey),
       'import.meta.env.VITE_BUILD_ID': JSON.stringify(buildId),
       'import.meta.env.VITE_BUILD_TIME': JSON.stringify(buildTime),
     },

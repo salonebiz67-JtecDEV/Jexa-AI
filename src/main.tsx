@@ -17,8 +17,8 @@ if (typeof window !== 'undefined') {
     },
     onRegistered(registration) {
       if (registration) {
-        // Check for newly deployed assets on window focus and every 10 minutes
-        setInterval(() => registration.update(), 10 * 60 * 1000);
+        // Check for newly deployed assets on window focus and every 5 minutes
+        setInterval(() => registration.update(), 5 * 60 * 1000);
         document.addEventListener('visibilitychange', () => {
           if (document.visibilityState === 'visible') {
             registration.update();
@@ -27,6 +27,18 @@ if (typeof window !== 'undefined') {
       }
     },
   });
+
+  // Listen for controlling service worker changes to reload automatically once new SW activates
+  if ('serviceWorker' in navigator) {
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!refreshing) {
+        refreshing = true;
+        console.log('[PWA] Service worker controller updated. Reloading for fresh assets...');
+        window.location.reload();
+      }
+    });
+  }
 }
 
 createRoot(document.getElementById('root')!).render(

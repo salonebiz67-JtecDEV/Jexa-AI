@@ -224,8 +224,23 @@ export async function checkSupabaseDiagnostics(): Promise<SafeAuthDiagnostics> {
   const buildId = (import.meta.env.VITE_BUILD_ID as string) || 'dev-build';
   const buildTime = (import.meta.env.VITE_BUILD_TIME as string) || new Date().toUTCString();
 
+  let isCachedPwaDetected = false;
+  if (typeof window !== 'undefined' && 'caches' in window) {
+    try {
+      const keys = await caches.keys();
+      // If service worker cache exists and variables are missing or waiting worker detected
+      if (keys.some((k) => k.includes('workbox') || k.includes('jexa')) && (!urlConfigured || !keyConfigured)) {
+        isCachedPwaDetected = true;
+      }
+    } catch {
+      // ignore cache inspection errors
+    }
+  }
+
   let diagnosis: AuthDiagnosisCategory = 'ready';
-  if (!urlConfigured || !keyConfigured) {
+  if (isCachedPwaDetected) {
+    diagnosis = 'cached_version_detected';
+  } else if (!urlConfigured || !keyConfigured) {
     diagnosis = 'frontend_variables_missing';
   } else if (!clientInitialized) {
     diagnosis = 'client_init_failed';

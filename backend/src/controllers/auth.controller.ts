@@ -10,7 +10,10 @@ export class AuthController {
    */
   public static async getConfig(_req: Request, res: Response): Promise<void> {
     try {
-      const supabaseUrl = process.env.SUPABASE_URL?.trim() || '';
+      const supabaseUrl =
+        process.env.SUPABASE_URL?.trim() ||
+        process.env.VITE_SUPABASE_URL?.trim() ||
+        '';
       const supabaseAnonKey =
         process.env.SUPABASE_ANON_KEY?.trim() ||
         process.env.VITE_SUPABASE_ANON_KEY?.trim() ||
