@@ -13,15 +13,23 @@
     --sar: env(safe-area-inset-right, 0px);
   }
 
-  html, body, #root {
-    height: 100%;
-    height: 100dvh;
+  html, body {
+    min-height: 100%;
     width: 100%;
     margin: 0;
     padding: 0;
-    overflow: hidden;
-    overscroll-behavior: none;
     -webkit-tap-highlight-color: transparent;
+  }
+
+  #root {
+    min-height: 100%;
+    height: 100%;
+    height: 100dvh;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
   }
 
   body {

@@ -9,7 +9,7 @@ const AppContent: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-[#070a12] text-slate-300">
+      <div className="min-h-[100dvh] w-full flex flex-col items-center justify-center bg-[#070a12] text-slate-300 px-4">
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shadow-[0_0_24px_rgba(16,185,129,0.2)]">
             <RefreshCw className="w-5 h-5 text-emerald-400 animate-spin" />
