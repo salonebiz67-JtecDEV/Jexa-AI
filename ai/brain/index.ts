@@ -4,3 +4,4 @@ export * from './behavior';
 export * from './conversation-style';
 export * from './response-rules';
 export * from './context-handler';
+export * from './response-cleaner';

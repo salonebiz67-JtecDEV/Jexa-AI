@@ -53,7 +53,15 @@ export function useChat() {
     ApiClient.getMessages(currentConversationId)
       .then((msgs) => {
         if (isMounted) {
-          setMessages(msgs);
+          const seen = new Set<string>();
+          const deduped: ChatMessage[] = [];
+          for (const m of msgs) {
+            if (m.id && !seen.has(m.id)) {
+              seen.add(m.id);
+              deduped.push(m);
+            }
+          }
+          setMessages(deduped);
           setIsLoading(false);
         }
       })
@@ -219,7 +227,11 @@ export function useChat() {
 
         // Replace optimistic user message with persisted user message if returned, and append assistant message
         setMessages((prev) => {
-          const withoutTemp = prev.filter((m) => m.id !== tempId);
+          const userMsgId = response.userMessage?.id;
+          const assistantMsgId = response.message?.id;
+          const withoutTemp = prev.filter(
+            (m) => m.id !== tempId && m.id !== userMsgId && m.id !== assistantMsgId
+          );
           const finalUserMsg = response.userMessage || {
             ...optimisticUserMsg,
             conversationId: response.conversationId,

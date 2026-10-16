@@ -12,6 +12,7 @@ import {
   Globe,
 } from 'lucide-react';
 import { ChatMessage, Project } from '../../../shared/types';
+import { cleanAndNormalizeResponseContent, repairUnclosedMarkdown } from '../../../ai/brain/response-cleaner';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -57,9 +58,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     setTimeout(() => setCopiedCodeIndex(null), 2000);
   };
 
-  // Helper to parse markdown links [label](url), raw URLs, and bold text into clickable interactive elements
+  // Helper to parse markdown links [label](url), raw URLs, bold, inline code, and italics
   const renderInlineFormatting = (text: string) => {
-    const tokenRegex = /(\[[^\]]+\]\(https?:\/\/[^\s\)]+\)|\*\*[^*]+\*\*|https?:\/\/[^\s<>"]+)/g;
+    // Regex matching [label](url), `inline code`, **bold**, *italic*, and raw https URLs
+    const tokenRegex = /(\[[^\]]+\]\(https?:\/\/[^\s\)]+\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|https?:\/\/[^\s<>"]+)/g;
     const parts = text.split(tokenRegex);
 
     return parts.map((part, idx) => {
@@ -83,6 +85,19 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         );
       }
 
+      // Inline code: `code`
+      if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+        const code = part.slice(1, -1);
+        return (
+          <code
+            key={idx}
+            className="px-1.5 py-0.5 rounded-md bg-white/[0.08] text-cyan-200 font-mono text-xs border border-white/[0.06]"
+          >
+            {code}
+          </code>
+        );
+      }
+
       // Bold: **text**
       if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
         const boldText = part.slice(2, -2);
@@ -90,6 +105,16 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           <strong key={idx} className="font-semibold text-white">
             {boldText}
           </strong>
+        );
+      }
+
+      // Italic: *text*
+      if (part.startsWith('*') && part.endsWith('*') && part.length >= 2 && !part.startsWith('**')) {
+        const italicText = part.slice(1, -1);
+        return (
+          <em key={idx} className="italic text-slate-200">
+            {italicText}
+          </em>
         );
       }
 
@@ -119,9 +144,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     });
   };
 
-  // Helper to parse code blocks vs regular text
+  // Helper to parse code blocks, headings, lists, blockquotes vs regular text
   const renderFormattedContent = (content: string) => {
-    const parts = content.split(/(```[\s\S]*?```)/g);
+    // Clean and repair unclosed code fences / escaped slashes for assistant responses
+    const normalized = isUser ? content : repairUnclosedMarkdown(cleanAndNormalizeResponseContent(content));
+    const parts = normalized.split(/(```[\s\S]*?```)/g);
 
     return parts.map((part, index) => {
       if (part.startsWith('```') && part.endsWith('```')) {
@@ -187,27 +214,63 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         );
       }
 
-      // Regular text paragraphs with bold, links, lists & quotes support
+      // Regular text paragraphs with headings, bold, links, lists & quotes support
       return (
         <div key={index} className="space-y-2">
           {part.split('\n\n').map((paragraph, pIdx) => {
-            if (!paragraph.trim()) return null;
+            const trimmedPara = paragraph.trim();
+            if (!trimmedPara) return null;
+
+            // Horizontal rule
+            if (trimmedPara === '---' || trimmedPara === '***' || trimmedPara === '___') {
+              return <hr key={pIdx} className="my-2.5 border-white/[0.08]" />;
+            }
+
+            // Headings
+            if (trimmedPara.startsWith('#### ')) {
+              return (
+                <h5 key={pIdx} className="text-xs font-semibold uppercase tracking-wider text-slate-300 mt-2.5 mb-1">
+                  {renderInlineFormatting(trimmedPara.replace(/^####\s+/, ''))}
+                </h5>
+              );
+            }
+            if (trimmedPara.startsWith('### ')) {
+              return (
+                <h4 key={pIdx} className="text-sm font-semibold text-cyan-200 mt-2.5 mb-1">
+                  {renderInlineFormatting(trimmedPara.replace(/^###\s+/, ''))}
+                </h4>
+              );
+            }
+            if (trimmedPara.startsWith('## ')) {
+              return (
+                <h3 key={pIdx} className="text-base font-semibold text-white mt-3 mb-1">
+                  {renderInlineFormatting(trimmedPara.replace(/^##\s+/, ''))}
+                </h3>
+              );
+            }
+            if (trimmedPara.startsWith('# ')) {
+              return (
+                <h2 key={pIdx} className="text-lg font-bold text-white mt-3.5 mb-1.5">
+                  {renderInlineFormatting(trimmedPara.replace(/^#\s+/, ''))}
+                </h2>
+              );
+            }
 
             // Blockquote
-            if (paragraph.startsWith('>')) {
+            if (trimmedPara.startsWith('>')) {
               return (
                 <blockquote
                   key={pIdx}
                   className="pl-3 border-l-2 border-slate-600 text-slate-400 italic my-2"
                 >
-                  {renderInlineFormatting(paragraph.replace(/^>\s*/, ''))}
+                  {renderInlineFormatting(trimmedPara.replace(/^>\s*/, ''))}
                 </blockquote>
               );
             }
 
             // Bullet list
-            if (paragraph.startsWith('•') || paragraph.startsWith('- ') || paragraph.startsWith('* ')) {
-              const items = paragraph.split('\n');
+            if (trimmedPara.startsWith('•') || trimmedPara.startsWith('- ') || trimmedPara.startsWith('* ')) {
+              const items = trimmedPara.split('\n');
               return (
                 <ul key={pIdx} className="space-y-1 my-1.5 list-disc list-inside text-slate-300">
                   {items.map((it, iIdx) => (
@@ -220,8 +283,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             }
 
             // Numbered list
-            if (/^\d+\.\s/.test(paragraph)) {
-              const items = paragraph.split('\n');
+            if (/^\d+\.\s/.test(trimmedPara)) {
+              const items = trimmedPara.split('\n');
               return (
                 <ol key={pIdx} className="space-y-1 my-1.5 list-decimal list-inside text-slate-300">
                   {items.map((it, iIdx) => (
@@ -236,7 +299,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             // Standard paragraph
             return (
               <p key={pIdx} className="leading-relaxed">
-                {renderInlineFormatting(paragraph)}
+                {renderInlineFormatting(trimmedPara)}
               </p>
             );
           })}

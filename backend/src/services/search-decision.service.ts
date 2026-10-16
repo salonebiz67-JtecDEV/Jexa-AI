@@ -123,7 +123,7 @@ export class SearchDecisionService {
   // --- Helper Methods ---
 
   private static isConversationalOrGreeting(text: string): boolean {
-    return /^(hi|hello|hey|yo|howdy|good\s+(morning|afternoon|evening|day)|how\s+are\s+you|what's\s+up|sup)\b[!.?]*$/i.test(text.trim());
+    return /^(hi|hello|hey|yo|howdy|good\s+(morning|afternoon|evening|day)|how\s+are\s+you|what's\s+up|sup|jexa|hey\s+jexa|yo\s+jexa|hi\s+jexa|jexa\s+bro)\b[!.?]*$/i.test(text.trim());
   }
 
   private static isIdentityOrCapabilities(text: string): boolean {

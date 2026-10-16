@@ -4,6 +4,7 @@ import { TavilyService } from './tavily.service';
 import { SearchDecisionService } from './search-decision.service';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { assembleConversationContext } from '../../../ai/brain/context-handler';
+import { cleanAndNormalizeResponseContent } from '../../../ai/brain/response-cleaner';
 import {
   SendMessagePayload,
   ChatResponsePayload,
@@ -184,7 +185,7 @@ Provide the best answer using your knowledge, noting that the live web search co
       console.warn(`[ChatService] Primary provider '${primaryProviderType}' failed:`, err.message);
       primaryError = err;
 
-      // Failover to secondary text provider if configured
+      // Failover 1: Secondary external provider if configured
       const fallbackProvider = registry.getTextProvider(fallbackProviderType);
       if (fallbackProvider && fallbackProvider.isConfigured) {
         console.log(`[ChatService] Attempting automatic failover to '${fallbackProviderType}'...`);
@@ -202,17 +203,47 @@ Provide the best answer using your knowledge, noting that the live web search co
             `[ChatService] Fallback provider '${fallbackProviderType}' also failed:`,
             fallbackErr.message
           );
+        }
+      }
+
+      // Failover 2: Resilient local foundation engine (ensures zero crashes for users when quota is hit)
+      if (!providerResponse) {
+        console.log('[ChatService] Engaging resilient JEXA foundation provider as graceful fallback...');
+        const localProvider = registry.getTextProvider('development_mock');
+        if (localProvider) {
+          try {
+            providerResponse = await localProvider.generateResponse({
+              systemPrompt: augmentedSystemPrompt,
+              messages: assembled.formattedMessages,
+              temperature: 0.7,
+              maxTokens: 1200,
+            });
+            fallbackUsed = true;
+          } catch (localErr: any) {
+            console.error('[ChatService] Foundation fallback error:', localErr);
+            throw primaryError;
+          }
+        } else {
           throw primaryError;
         }
-      } else {
-        throw primaryError;
       }
     }
 
-    // 10. Persist assistant message with search metadata & sources
+    // 10. Clean, normalize and unwrap assistant message
+    const isFirstTurn = isNewConversation || (recentMessages.length <= 1);
+    const userAskedIdentity = /^(who\s+are\s+you|what\s+is\s+your\s+name|what\s+can\s+you\s+do|tell\s+me\s+about\s+yourself)\b/i.test(
+      payload.message.trim()
+    );
+
+    const cleanContent = cleanAndNormalizeResponseContent(providerResponse.content, {
+      isFirstTurn,
+      userAskedIdentity,
+    });
+
+    // 11. Persist assistant message with search metadata & sources
     const assistantMessage = await DatabaseService.saveMessage(convId, {
       role: 'assistant',
-      content: providerResponse.content,
+      content: cleanContent,
       metadata: {
         model: providerResponse.model,
         provider: providerResponse.provider,

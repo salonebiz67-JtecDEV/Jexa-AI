@@ -173,11 +173,13 @@ export function formatCleanProviderError(error: any): { cleanMessage: string; co
     fullText.includes('quota') ||
     fullText.includes('rate_limited')
   ) {
-    const isVoice = error?.provider === 'gemini' && (error?.model?.includes('tts') || error?.model?.includes('voice') || fullText.includes('voice'));
+    const isVoice =
+      (error?.provider === 'gemini' || error?.provider === 'elevenlabs') &&
+      (error?.model?.includes('tts') || error?.model?.includes('voice') || fullText.includes('voice') || fullText.includes('synthesize'));
     return {
       cleanMessage: isVoice
-        ? 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.'
-        : 'Gemini Voice is temporarily unavailable because its quota has been reached.',
+        ? 'Gemini Voice quota is temporarily exhausted. Try again later or switch to ElevenLabs in Settings.'
+        : 'Gemini AI quota is currently rate-limited or experiencing high traffic. Please try again in a moment or switch provider in Settings.',
       code: 'QUOTA_EXHAUSTED',
       statusCode: 429,
     };

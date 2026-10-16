@@ -77,7 +77,7 @@ class InMemoryDatabase {
       title: 'Welcome to JEXA',
       createdAt: new Date(Date.now() - 3600000).toISOString(),
       updatedAt: new Date().toISOString(),
-      previewMessage: 'Greetings! I am JEXA, your AI companion powered by JOHNEY TEC.',
+      previewMessage: 'Ready to build, brainstorm, or explore ideas.',
       messageCount: 1,
       personaId: 'empathetic_companion',
     };
@@ -88,7 +88,7 @@ class InMemoryDatabase {
         id: '00000000-0000-0000-0000-000000000011',
         conversationId: starterConvId,
         role: 'assistant',
-        content: `Hello! I'm **JEXA**, your personal AI assistant powered by **JOHNEY TEC**.\n\nI can help you brainstorm ideas, write content or code, organize projects, schedule tasks, and explore questions. What would you like to work on today?`,
+        content: `Hey! I'm **JEXA**, powered by **JOHNEY TEC**.\n\nI can help you brainstorm concepts, write and debug code, organize projects, and search live web data. What are we diving into today?`,
         createdAt: new Date(Date.now() - 3600000).toISOString(),
         status: 'complete',
         metadata: {

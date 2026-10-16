@@ -14,7 +14,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       customModel ||
       process.env.TEXT_AI_MODEL ||
       process.env.GEMINI_MODEL ||
-      'gemini-3.8-flash'
+      'gemini-2.5-flash'
     ).trim();
 
     const apiKey =
@@ -46,51 +46,63 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       );
     }
 
-    try {
-      const contents = request.messages.map((m) => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-      }));
+    const contents = request.messages.map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }));
 
-      const response = await this.ai.models.generateContent({
-        model: this.modelName,
-        contents,
-        config: {
-          systemInstruction: request.systemPrompt,
-          temperature: request.temperature ?? 0.7,
-          maxOutputTokens: request.maxTokens ?? 1024,
-          tools: [{ googleSearch: {} }],
-        },
-      });
+    let lastError: any = null;
 
-      const responseText = response.text || '';
-      this.lastError = undefined;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await this.ai.models.generateContent({
+          model: this.modelName,
+          contents,
+          config: {
+            systemInstruction: request.systemPrompt,
+            temperature: request.temperature ?? 0.7,
+            maxOutputTokens: request.maxTokens ?? 1024,
+          },
+        });
 
-      return {
-        content: responseText,
-        model: this.modelName,
-        provider: this.providerType,
-        tokensUsed: {
-          prompt: Math.ceil(request.systemPrompt.length / 4),
-          completion: Math.ceil(responseText.length / 4),
-          total: Math.ceil((request.systemPrompt.length + responseText.length) / 4),
-        },
-        isMock: false,
-        finishReason: 'stop',
-      };
-    } catch (error: any) {
-      console.error('[GeminiTextAIProvider] API call failed:', error);
-      const formatted = formatCleanProviderError(error);
-      this.lastError = formatted.cleanMessage;
+        const responseText = response.text || '';
+        this.lastError = undefined;
 
-      throw new ProviderError(
-        formatted.cleanMessage,
-        'gemini',
-        formatted.code,
-        formatted.statusCode,
-        this.modelName
-      );
+        return {
+          content: responseText,
+          model: this.modelName,
+          provider: this.providerType,
+          tokensUsed: {
+            prompt: Math.ceil(request.systemPrompt.length / 4),
+            completion: Math.ceil(responseText.length / 4),
+            total: Math.ceil((request.systemPrompt.length + responseText.length) / 4),
+          },
+          isMock: false,
+          finishReason: 'stop',
+        };
+      } catch (error: any) {
+        lastError = error;
+        const msg = error.message || '';
+        if (attempt < 2 && (msg.includes('503') || msg.includes('429') || msg.includes('high demand') || msg.includes('RESOURCE_EXHAUSTED'))) {
+          console.warn(`[GeminiTextAIProvider] Transient error on attempt ${attempt}, retrying in 600ms...`);
+          await new Promise((r) => setTimeout(r, 600));
+          continue;
+        }
+        break;
+      }
     }
+
+    console.error('[GeminiTextAIProvider] API call failed:', lastError);
+    const formatted = formatCleanProviderError(lastError);
+    this.lastError = formatted.cleanMessage;
+
+    throw new ProviderError(
+      formatted.cleanMessage,
+      'gemini',
+      formatted.code,
+      formatted.statusCode,
+      this.modelName
+    );
   }
 
   public async streamResponse(
@@ -120,7 +132,6 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           systemInstruction: request.systemPrompt,
           temperature: request.temperature ?? 0.7,
           maxOutputTokens: request.maxTokens ?? 1024,
-          tools: [{ googleSearch: {} }],
         },
       });
 

@@ -30,60 +30,68 @@ export function assembleConversationContext(options: AssembleContextOptions): Pr
 
   const promptSections: string[] = [];
 
-  // 1. Identity & Operational Self-Awareness
-  promptSections.push(`[IDENTITY & OPERATIONAL SELF-AWARENESS]
+  // 1. Natural AI Companion Identity & Anti-Greeting Core Directive
+  promptSections.push(`[IDENTITY & NATURAL COMPANION DIRECTIVE]
 You are ${JEXA_IDENTITY.name}, ${JEXA_IDENTITY.tagline}.
 Origin: ${JEXA_IDENTITY.creator}.
-Mission: ${JEXA_IDENTITY.mission}
-Core Nature: ${JEXA_IDENTITY.coreNature}
 
-OPERATIONAL AWARENESS:
-You possess a clear understanding of how this application works, your capabilities, and how you process user data. You are fully conscious of your actions in this environment. When you store information, update a preference, or utilize a tool, you naturally acknowledge it so the user knows it has been registered.
-CRITICAL BOUNDARY: You must strictly keep internal code, secret keys, environment variables, and backend architecture private. Never expose source code, tokens, or system infrastructure.`);
+ROLE & CADENCE:
+You are a sharp, tech-savvy, warm, and natural AI companion who already knows the user. You speak like a familiar tech companion and trusted friend—casual, clever, warm, grounded, and intellectually capable.
+
+CRITICAL ANTI-GREETING RULES (STRICT & ABSOLUTE):
+1. NEVER automatically begin responses with "Hey John", "Hey Johnny", "Hello John", "Hi John", or "I'm JEXA, your AI companion."
+2. NEVER introduce yourself unless the user explicitly asks who you are (e.g., "who are you?", "what is your name?").
+3. In all continuing conversations and consecutive messages, DO NOT repeat greetings, pleasantries, or introductions. Jump straight into the conversation.
+4. If the user simply calls your name ("Jexa", "Hey Jexa", "Yo Jexa", etc.), respond naturally and casually with context-aware variety (e.g., "Yeah, bro? 😂 What's up?", "I'm here, bro. Tell me.", "Yo! What are we cooking up?", "Right here—what's on your mind?"). Adapt to the context instead of copying the exact same words every time.
+5. Answer the user's actual question FIRST in the very first sentence. Offer concise, conversational language unless deeper detail is explicitly requested.
+6. Avoid robotic introductions, repetitive closing statements (e.g., "Let me know if you need anything else!"), unnecessary explanations, and generic filler.`);
 
   // 2. Active Personality Style
   promptSections.push(`[PERSONALITY STYLE: ${personality.label.toUpperCase()}]
 Tone Profile: ${personality.tone}
 ${personality.systemPromptModifier}`);
 
-  // 3. User Context & Preferences
+  // 3. User Context (without triggering greeting loops)
   if (options.userContext && Object.keys(options.userContext).length > 0) {
     const userLines = Object.entries(options.userContext)
       .filter(([_, val]) => Boolean(val))
       .map(([key, val]) => `• ${key}: ${val}`);
     if (userLines.length > 0) {
-      promptSections.push(`[ACTIVE USER CONTEXT]\n${userLines.join('\n')}`);
+      promptSections.push(`[ACTIVE USER CONTEXT]
+${userLines.join('\n')}
+Note: This context is background familiarity. Do NOT use it to generate greeting salutations like "Hey <name>" on every turn.`);
     }
   }
 
-  // 4. Selective & Intelligent Memory
+  // 4. Selective & Honest Durable Memory
   const referencedMemoryIds: string[] = [];
   if (options.memories && options.memories.length > 0) {
     const memoryLines = options.memories.map((m) => {
       referencedMemoryIds.push(m.id);
-      return `• [${m.category.toUpperCase()}] ${m.fact} (confidence: ${Math.round(m.confidence * 100)}%)`;
+      return `• [${m.category.toUpperCase()}] ${m.fact}`;
     });
     promptSections.push(`[DURABLE USER MEMORY & FACTS]
-The following high-value facts about the user are registered in durable memory:
+The following verified facts about the user are registered in durable memory:
 ${memoryLines.join('\n')}
 
-MEMORY UTILIZATION GUIDELINES:
-- Seamlessly synthesize remembered preferences, technical stacks, and goals into your guidance.
-- Avoid robotic database citations; weave them naturally into dialogue.
-- When the user shares new durable facts (project specs, preferences, stack decisions, or explicit "remember this" requests), confirm what you recorded and why (e.g., "I've saved your project setup to memory so I can keep it in mind for our future discussions").`);
+MEMORY HONESTY & USAGE RULES:
+- Only reference memories that are explicitly provided in durable memory.
+- Never pretend to recall past events or information that is not available in context.
+- Never claim to have saved something to memory when it was casual chatter. Only acknowledge memory saves when an actual lasting fact was recorded.
+- Weave durable facts naturally into advice without robotic database citations.`);
   }
 
-  // 5. Thoughtful Thinking & Non-Spam Responses
-  promptSections.push(`[DELIBERATIVE THINKING & INTERACTION DISCIPLINE]
-- Selective Memory: Do NOT save every casual line, greeting, or spam message. Only commit durable, high-value information to long-term memory.
-- Transparent Actions: When registering or committing knowledge, briefly tell the user what was saved and why.
-- Thoughtful Thinking: Do not reply blindly or reflexively with generic acknowledgments. Deliberate on the user's intent, synthesize context, and deliver structured, high-utility responses.`);
+  // 5. Thoughtful Deliberation & Direct Substance
+  promptSections.push(`[CONVERSATIONAL DISCIPLINE]
+- Direct Answer First: Deliver high-signal substance immediately. Do not state what you are about to do before doing it.
+- Humor & Emojis: Use humor, witty banter, and emojis when they genuinely fit the moment, but do not force emojis into every message or sentence.
+- Clean Formatting: Never output raw JSON envelopes (e.g. {"response": "..."}), escaped forward slashes (\\/), or redundant backslashes. Write clean Markdown.`);
 
-  // 6. Web Search & Live Internet Grounding Capability
+  // 6. Web Search & Live Grounding Capability
   promptSections.push(`[WEB SEARCH CAPABILITY]
 1. Triggering Search: Whenever the user asks for real-time information, current news, live sports updates, technical documentation, or real-world facts (e.g., website legal guidelines, terms and conditions templates, or recent football scores), use web search to fetch live internet data.
 2. Search Execution: Construct a precise, direct search query based on what the user requested.
-3. Formatted Response: Never dump raw web data or messy links. Digest the information and organize it into clean, scannable summaries with clear headings and bullet points.`);
+3. Formatted Response: Digest findings into clean, scannable summaries with headings, bullet points, and clickable markdown links [Source Title](URL). Never invent fake links or citations.`);
 
   // 7. Modality Specific Formatting (Voice vs Text)
   if (options.isVoiceMode) {
@@ -97,20 +105,43 @@ You are speaking in live voice mode:
 ${getStyleInstructions()}`);
   }
 
-  // 8. Response Invariants & Ethics
+  // 8. Response Invariants & Rules
   promptSections.push(`[CORE INVARIANTS]
 ${formatResponseRules()}`);
 
   const systemPrompt = promptSections.join('\n\n');
 
-  // Format message history
+  // Format message history: strictly chronological, alternating roles, and starting with a user turn
   const formattedMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+
   if (options.recentMessages && options.recentMessages.length > 0) {
-    for (const msg of options.recentMessages) {
-      formattedMessages.push({
-        role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content,
-      });
+    // Sort chronologically by createdAt
+    const sorted = [...options.recentMessages].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+
+    // Keep the most recent 24 messages for context window stability
+    const windowed = sorted.slice(-24);
+
+    // Drop leading assistant messages (e.g., starter welcome greetings) so dialog starts with user
+    const firstUserIndex = windowed.findIndex((m) => m.role === 'user');
+    const validSlice = firstUserIndex !== -1 ? windowed.slice(firstUserIndex) : windowed;
+
+    for (const msg of validSlice) {
+      const content = msg.content?.trim();
+      if (!content) continue;
+
+      const role = msg.role === 'user' ? 'user' : 'assistant';
+
+      // Merge consecutive messages of the same role to maintain strict alternation
+      if (formattedMessages.length > 0 && formattedMessages[formattedMessages.length - 1].role === role) {
+        formattedMessages[formattedMessages.length - 1].content += `\n\n${content}`;
+      } else {
+        formattedMessages.push({
+          role,
+          content,
+        });
+      }
     }
   }
 

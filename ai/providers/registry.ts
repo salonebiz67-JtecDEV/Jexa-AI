@@ -5,6 +5,7 @@ import { GeminiVoiceAIProvider } from './gemini-voice.provider';
 import { GroqTextAIProvider } from './groq.provider';
 import { ElevenLabsVoiceAIProvider } from './elevenlabs.provider';
 import { PersonalVoiceAIProvider } from './personal-voice.provider';
+import { DevelopmentTextAIProvider } from './text-development.provider';
 import { ProviderStatus, TextProviderType, VoiceProviderType, ProviderDetail, ProviderHealthStatus } from '../../shared/types/provider';
 import { AIProvidersConfig, loadAIProvidersConfig } from './config';
 
@@ -22,9 +23,11 @@ export class AIProviderRegistry {
     // Initialize Text Providers
     const geminiText = new GeminiTextAIProvider();
     const groqText = new GroqTextAIProvider();
+    const devText = new DevelopmentTextAIProvider();
 
     this.textProviders.set('gemini', geminiText);
     this.textProviders.set('groq', groqText);
+    this.textProviders.set('development_mock', devText);
 
     // Default text provider based on config or availability
     if (this.config.text.provider === 'groq' && groqText.isConfigured) {
@@ -69,7 +72,10 @@ export class AIProviderRegistry {
     if (provider) {
       return provider;
     }
-    const fallback = this.textProviders.get('gemini') || this.textProviders.get('groq');
+    const fallback =
+      this.textProviders.get('gemini') ||
+      this.textProviders.get('groq') ||
+      this.textProviders.get('development_mock');
     if (fallback) {
       return fallback;
     }

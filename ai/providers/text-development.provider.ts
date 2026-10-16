@@ -42,17 +42,50 @@ export class DevelopmentTextAIProvider implements ITextAIProvider {
   }
 
   private craftCompanionResponse(userText: string, request: TextGenerationRequest): string {
-    const lower = userText.toLowerCase().trim();
+    const trimmed = userText.trim();
+    const lower = trimmed.toLowerCase();
     const isVoice = request.systemPrompt.includes('VOICE MODALITY DIRECTIVES');
 
-    if (lower.includes('who are you') || lower.includes('what are you') || lower.includes('your name')) {
-      return isVoice
-        ? "I'm JEXA, your intelligent assistant powered by JOHNEY TEC. How can I help you today?"
-        : "I am **JEXA**, your personal AI assistant powered by **JOHNEY TEC**.\n\nI can help you brainstorm concepts, organize projects, analyze ideas, generate creative writing, manage tasks, and synthesize complex information. What are you working on today?";
+    // 1. Live Web Search Results Grounding
+    if (request.systemPrompt.includes('=== LIVE WEB SEARCH RESULTS ===')) {
+      const matchQuery = request.systemPrompt.match(/Search Query: "([^"]+)"/);
+      const query = matchQuery ? matchQuery[1] : trimmed;
+      return `Here is the real-time breakdown for **"${query}"**:\n\nBased on live web sources, latest data has been retrieved and synthesized. You can check the clickable citations and source cards below for verified references.\n\n• **Status**: Live data fetched successfully.\n• **Follow-up**: Feel free to ask for deeper statistics, game highlights, or background details.`;
     }
 
+    // 2. Direct response to name-call ("Jexa", "Hey Jexa", "Yo Jexa", etc.)
+    const isNameCall = /^(?:hey\s+|yo\s+|hi\s+|what's\s+up\s+)?jexa[!?.]*$/i.test(lower);
+    if (isNameCall) {
+      const nameCallReplies = [
+        isVoice ? "Yeah bro, what's up?" : "Yeah, bro? 😂 What's up?",
+        isVoice ? "I'm here bro. Tell me." : "I'm here, bro. Tell me.",
+        isVoice ? "Yo, what are we working on?" : "Yo! What are we cooking up?",
+        isVoice ? "Right here, what's on your mind?" : "Right here—what's on your mind?",
+      ];
+      const randomIndex = Math.floor(Math.random() * nameCallReplies.length);
+      return nameCallReplies[randomIndex];
+    }
+
+    // 3. Explicit Identity Inquiries (only when user asks who you are)
+    if (lower.includes('who are you') || lower.includes('what are you') || lower.includes('your name')) {
+      return isVoice
+        ? "I'm JEXA, your intelligent companion powered by JOHNEY TEC. What are we tackling today?"
+        : "I am **JEXA**, your AI companion powered by **JOHNEY TEC**.\n\nI can help you build projects, debug code, brainstorm ideas, research live information, and synthesize complex work. What's on your mind?";
+    }
+
+    // 4. Casual Greeting without Repeated Name Loop
+    if (/^(hi|hello|hey|yo|sup|howdy)[!.]*$/i.test(lower)) {
+      const casualReplies = [
+        isVoice ? "Hey, what's on your mind today?" : "Hey! What are we diving into today?",
+        isVoice ? "Yo, what's up?" : "Yo! What's on your mind?",
+        isVoice ? "Hey there, ready to build." : "Hey! Ready when you are. What are we building?",
+      ];
+      return casualReplies[Math.floor(Math.random() * casualReplies.length)];
+    }
+
+    // 5. Code & Technical Questions
     if (lower.includes('code') || lower.includes('typescript') || lower.includes('function') || lower.includes('react') || lower.includes('python')) {
-      return `Here is a clean, modern implementation tailored for your requirement:
+      return `Here is a clean implementation tailored for your requirement:
 
 \`\`\`typescript
 // Utility function for processing async streams
@@ -67,52 +100,41 @@ export async function streamData<T>(
 \`\`\`
 
 ### Key Points:
-1. **Strong Typing**: Fully preserves generic type safety across iterations.
+1. **Strong Typing**: Preserves full generic type safety across iterations.
 2. **Backpressure Friendly**: Supports native async iterator semantics.
 3. **Clean Teardown**: Automatically handles stream disposal on loop termination.
 
-Let me know if you would like me to extend this or adapt it to your specific use case!`;
+Let me know if you would like to extend this or adapt it to a specific pattern!`;
     }
 
+    // 6. Project & Strategy
     if (lower.includes('project') || lower.includes('plan') || lower.includes('strategy')) {
-      return `Here is a structured approach to tackle this:
+      return `Here is a structured approach:
 
 ### 1. Objective Definition
 Clarify the core outcome and key milestones to ensure every step provides tangible leverage.
 
 ### 2. Execution Phases
-- **Phase A — Discovery & Scope**: Audit existing constraints and define the non-negotiables.
-- **Phase B — Prototyping**: Build a high-fidelity proof of concept to validate assumptions.
-- **Phase C — Polish & Delivery**: Refine edge cases, optimize performance, and launch.
+- **Phase A — Scope**: Audit existing constraints and define the non-negotiables.
+- **Phase B — Build**: Implement the core functionality and test real edge cases.
+- **Phase C — Polish**: Refine error handling, UI feedback, and deployment.
 
-### 3. Next High-Leverage Move
-Would you like me to create this inside your **Projects** workspace so we can attach reference files and track progress?`;
+Ready to build this out or attach it to one of your active workspaces?`;
     }
 
-    if (lower.includes('schedule') || lower.includes('remind') || lower.includes('routine')) {
-      return `I've prepared this schedule recommendation for you:
-
-• **Daily Morning Briefing** (8:00 AM) — Overview of priorities and scheduled tasks.
-• **Deep Work Block** (10:00 AM – 1:00 PM) — Uninterrupted focus on primary deliverables.
-• **Afternoon Review** (4:30 PM) — Quick recap of completed action items and tomorrow's roadmap.
-
-You can also view and toggle this anytime in the **Schedule** section in the sidebar.`;
-    }
-
+    // 7. Voice Mode concise output
     if (isVoice) {
-      return `I hear you. Regarding "${userText.slice(0, 35)}...", here is what I recommend: let's focus on the key priority first, and I can draft the specifics whenever you're ready.`;
+      return `Got you. Let's tackle the main priority first, and I can give you the specifics whenever you're ready.`;
     }
 
-    return `I understand. Regarding:
+    // 8. General conversational answer - direct substance first, no repetitive greetings
+    return `Regarding "${trimmed}":
 
-> *${userText}*
+Here is the direct breakdown:
 
-Here are a few thoughtful perspectives and immediate suggestions:
+1. **Core Insight**: Getting straight to the core mechanics gives us the highest leverage.
+2. **Next Step**: We can test this directly or build out the specific details right here.
 
-1. **Clarity First**: Breaking down the main objectives helps avoid unnecessary friction early on.
-2. **Iterative Progress**: Starting with a focused first draft gives us immediate material to refine.
-3. **Actionable Next Step**: We can save this note to one of your active **Projects** or continue developing the idea right here.
-
-How would you like to proceed?`;
+What angle would you like to take?`;
   }
 }
