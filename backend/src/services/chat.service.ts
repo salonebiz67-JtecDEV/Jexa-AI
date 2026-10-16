@@ -1,16 +1,38 @@
 import { DatabaseService } from '../database/db-service';
 import { MemoryService } from './memory.service';
+import { TavilyService } from './tavily.service';
+import { SearchDecisionService } from './search-decision.service';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { assembleConversationContext } from '../../../ai/brain/context-handler';
-import { SendMessagePayload, ChatResponsePayload, ChatMessage } from '../../../shared/types/chat';
-import { ProviderError, TextProviderType } from '../../../shared/types/provider';
+import {
+  SendMessagePayload,
+  ChatResponsePayload,
+  AIActivityStatus,
+  WebSearchResultItem,
+} from '../../../shared/types/chat';
+import { TextProviderType } from '../../../shared/types/provider';
+
+export type StatusUpdateCallback = (
+  status: AIActivityStatus,
+  details?: {
+    query?: string;
+    sourcesCount?: number;
+    error?: string;
+  }
+) => void;
 
 export class ChatService {
-  public static async processMessage(payload: SendMessagePayload): Promise<ChatResponsePayload> {
+  public static async processMessage(
+    payload: SendMessagePayload,
+    onStatusUpdate?: StatusUpdateCallback
+  ): Promise<ChatResponsePayload> {
+    // 1. Initial activity status
+    onStatusUpdate?.('Thinking...');
+
     let convId = payload.conversationId;
     let isNewConversation = false;
 
-    // 1. Resolve or create conversation
+    // 2. Resolve or create conversation
     if (!convId) {
       const title = payload.message.slice(0, 30) || 'New Conversation';
       const newConv = await DatabaseService.createConversation(title, payload.personaId, payload.userId);
@@ -25,22 +47,67 @@ export class ChatService {
       }
     }
 
-    // 2. Persist user message
+    // 3. Persist user message
     const userMessage = await DatabaseService.saveMessage(convId, {
       role: 'user',
       content: payload.message,
     });
 
-    // 3. Retrieve relevant memories & brain profile scoped to authenticated user
+    // 4. Planning & Intelligent Search Evaluation
+    onStatusUpdate?.('Planning...');
+
+    const searchDecision = SearchDecisionService.evaluate(payload.message);
+    let searchResults: WebSearchResultItem[] = [];
+    let searchPerformed = false;
+    let searchStatus: 'success' | 'failed' | 'missing_key' | 'unneeded' = 'unneeded';
+    let searchError: string | undefined;
+
+    if (searchDecision.shouldSearch) {
+      searchPerformed = true;
+      onStatusUpdate?.('Searching the web...', { query: searchDecision.query });
+
+      // Call Tavily Search API
+      const searchResponse = await TavilyService.search(searchDecision.query);
+
+      if (searchResponse.code === 'MISSING_TAVILY_KEY') {
+        searchStatus = 'missing_key';
+        searchError = 'TAVILY_API_KEY is not configured on the backend server.';
+        onStatusUpdate?.('Search failed — retry available', {
+          query: searchDecision.query,
+          error: searchError,
+        });
+      } else if (!searchResponse.success) {
+        searchStatus = 'failed';
+        searchError = searchResponse.error || 'Web search failed';
+        onStatusUpdate?.('Search failed — retry available', {
+          query: searchDecision.query,
+          error: searchError,
+        });
+      } else {
+        // Search succeeded
+        onStatusUpdate?.('Reading web pages...', { query: searchDecision.query });
+        searchResults = searchResponse.results;
+        searchStatus = 'success';
+        onStatusUpdate?.('Analyzing sources...', {
+          query: searchDecision.query,
+          sourcesCount: searchResults.length,
+        });
+      }
+    } else {
+      // No search needed - advance directly to information processing
+      onStatusUpdate?.('Processing information...');
+    }
+
+    // 5. Retrieve relevant memories & brain profile scoped to authenticated user
     const profile = await DatabaseService.getBrainProfile(payload.userId);
     const relevantMemories = profile.memorySettings.enabled
       ? await MemoryService.getRelevantMemories(payload.message, profile.memorySettings.maxContextMemories, payload.userId)
       : [];
 
-    // 4. Fetch recent conversation history for context window
+    // 6. Fetch recent conversation history for context window
     const recentMessages = await DatabaseService.getMessages(convId);
 
-    // 5. Assemble modular brain context
+    // 7. Assemble modular brain context
     const assembled = assembleConversationContext({
       personality: (payload.personaId as any) || profile.activePersonality,
       memories: relevantMemories,
@@ -49,7 +116,52 @@ export class ChatService {
       isVoiceMode: Boolean(payload.isVoiceMode),
     });
 
-    // 6. Execute Text AI Provider via Registry with Failover
+    // 8. Inject Live Web Search context into system prompt if applicable
+    let augmentedSystemPrompt = assembled.systemPrompt;
+
+    if (searchPerformed && searchStatus === 'success' && searchResults.length > 0) {
+      const formattedSources = searchResults
+        .map(
+          (src, idx) =>
+            `[Source ${idx + 1}]\nTitle: ${src.title}\nURL: ${src.url}\nPublished: ${
+              src.publishedDate || 'Recent'
+            }\nContent: ${src.content}`
+        )
+        .join('\n\n');
+
+      augmentedSystemPrompt += `\n\n=== LIVE WEB SEARCH RESULTS ===
+Search Query: "${searchDecision.query}"
+Retrieved at: ${new Date().toISOString()}
+
+${formattedSources}
+
+CRITICAL CITATION AND ACCURACY INSTRUCTIONS:
+1. Synthesize the live web search results above to answer the user's inquiry thoroughly and factually.
+2. Provide clickable markdown links for every cited source using the format: [Source Title](URL).
+3. Ground your statements strictly in the facts provided in the search results. Never invent, hallucinate, or fabricate URLs, sources, or claims.
+4. If the results do not fully address the question, acknowledge what is known from the sources and explain any missing details.
+=== END SEARCH RESULTS ===`;
+    } else if (searchPerformed && searchStatus === 'missing_key') {
+      augmentedSystemPrompt += `\n\n=== LIVE WEB SEARCH NOTICE ===
+The user asked a question requiring live web search (Query: "${searchDecision.query}"), but the backend server does not have TAVILY_API_KEY configured.
+INSTRUCTIONS:
+1. Briefly notify the user that live web search is not currently active because TAVILY_API_KEY is not set in Render environment variables.
+2. Instruct them that they can obtain a free key at https://tavily.com and set TAVILY_API_KEY on Render to enable real-time internet search and source links.
+3. Provide the best helpful answer you can using your baseline knowledge, while noting that real-time live data requires configuring the Tavily key.
+=== END NOTICE ===`;
+    } else if (searchPerformed && searchStatus === 'failed') {
+      augmentedSystemPrompt += `\n\n=== LIVE WEB SEARCH NOTICE ===
+The user asked a question requiring live web search, but the live search request encountered a temporary error: "${searchError}".
+Provide the best answer using your knowledge, noting that the live web search could not be completed and they can retry.
+=== END NOTICE ===`;
+    }
+
+    // 9. Execute Text AI Provider via Registry with Failover
+    onStatusUpdate?.('Preparing answer...', {
+      query: searchDecision.shouldSearch ? searchDecision.query : undefined,
+      sourcesCount: searchResults.length > 0 ? searchResults.length : undefined,
+    });
+
     const registry = AIProviderRegistry.getInstance();
     const primaryProviderType: TextProviderType =
       payload.textProvider || profile.selectedTextProvider || registry.getDefaultTextType() || 'gemini';
@@ -63,10 +175,10 @@ export class ChatService {
     try {
       const primaryProvider = registry.getTextProvider(primaryProviderType);
       providerResponse = await primaryProvider.generateResponse({
-        systemPrompt: assembled.systemPrompt,
+        systemPrompt: augmentedSystemPrompt,
         messages: assembled.formattedMessages,
         temperature: 0.7,
-        maxTokens: 1024,
+        maxTokens: 1200,
       });
     } catch (err: any) {
       console.warn(`[ChatService] Primary provider '${primaryProviderType}' failed:`, err.message);
@@ -78,10 +190,10 @@ export class ChatService {
         console.log(`[ChatService] Attempting automatic failover to '${fallbackProviderType}'...`);
         try {
           providerResponse = await fallbackProvider.generateResponse({
-            systemPrompt: assembled.systemPrompt,
+            systemPrompt: augmentedSystemPrompt,
             messages: assembled.formattedMessages,
             temperature: 0.7,
-            maxTokens: 1024,
+            maxTokens: 1200,
           });
           fallbackUsed = true;
           console.log(`[ChatService] Failover to '${fallbackProviderType}' succeeded.`);
@@ -97,7 +209,7 @@ export class ChatService {
       }
     }
 
-    // 7. Persist assistant message
+    // 10. Persist assistant message with search metadata & sources
     const assistantMessage = await DatabaseService.saveMessage(convId, {
       role: 'assistant',
       content: providerResponse.content,
@@ -109,10 +221,18 @@ export class ChatService {
         fallbackUsed,
         originalProvider: primaryProviderType,
         memoriesReferenced: assembled.referencedMemoryIds,
+        sources: searchResults.length > 0 ? searchResults : undefined,
+        searchQuery: searchPerformed ? searchDecision.query : undefined,
+        searchPerformed,
+        searchStatus,
+        searchError,
       },
     });
 
-    // 8. Extract memories asynchronously if enabled scoped to user
+    // 11. Signal answer complete
+    onStatusUpdate?.('Answer complete');
+
+    // 12. Extract memories asynchronously if enabled scoped to user
     if (profile.memorySettings.autoExtract) {
       MemoryService.extractAndStoreFromMessage(payload.message, convId, payload.userId).catch((err) => {
         console.error('[MemoryService] Background memory extraction error:', err);

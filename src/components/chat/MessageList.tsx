@@ -2,12 +2,18 @@ import React, { useEffect, useRef } from 'react';
 import { MessageItem } from './MessageItem';
 import { TypingIndicator } from './TypingIndicator';
 import { ConversationStarters } from './ConversationStarters';
-import { ChatMessage, Project } from '../../../shared/types';
+import { ChatMessage, Project, AIActivityStatus } from '../../../shared/types';
 import { ArtifactData } from '../panels/ArtifactWorkspace';
 
 interface MessageListProps {
   messages: ChatMessage[];
   isSending: boolean;
+  activityStatus?: AIActivityStatus | null;
+  activityDetails?: {
+    query?: string;
+    sourcesCount?: number;
+    error?: string;
+  } | null;
   projects?: Project[];
   onSelectPrompt: (prompt: string) => void;
   onSpeak: (text: string) => void;
@@ -16,11 +22,14 @@ interface MessageListProps {
   onPinMessage: (id: string) => void;
   onAddToProject: (text: string, projectId: string) => void;
   onOpenArtifact?: (artifact: ArtifactData) => void;
+  onRetrySearch?: () => void;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
   messages,
   isSending,
+  activityStatus,
+  activityDetails,
   projects = [],
   onSelectPrompt,
   onSpeak,
@@ -29,12 +38,13 @@ export const MessageList: React.FC<MessageListProps> = ({
   onPinMessage,
   onAddToProject,
   onOpenArtifact,
+  onRetrySearch,
 }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isSending]);
+  }, [messages, isSending, activityStatus]);
 
   if (messages.length === 0) {
     return (
@@ -60,7 +70,13 @@ export const MessageList: React.FC<MessageListProps> = ({
         />
       ))}
 
-      {isSending && <TypingIndicator />}
+      {isSending && (
+        <TypingIndicator
+          status={activityStatus}
+          details={activityDetails}
+          onRetry={onRetrySearch}
+        />
+      )}
 
       <div ref={bottomRef} className="h-4" />
     </div>

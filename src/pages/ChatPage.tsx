@@ -65,6 +65,9 @@ export const ChatPage: React.FC = () => {
     messages,
     isLoading,
     isSending,
+    activityStatus,
+    activityDetails,
+    retrySearch,
     selectConversation,
     startNewChat,
     deleteConversation,
@@ -607,6 +610,8 @@ export const ChatPage: React.FC = () => {
               <MessageList
                 messages={messages}
                 isSending={isSending}
+                activityStatus={activityStatus}
+                activityDetails={activityDetails}
                 projects={projects}
                 onSelectPrompt={(prompt) => sendMessage(prompt)}
                 onSpeak={handleSpeak}
@@ -615,6 +620,7 @@ export const ChatPage: React.FC = () => {
                 onPinMessage={() => {}}
                 onAddToProject={() => {}}
                 onOpenArtifact={(art) => setCurrentArtifact(art)}
+                onRetrySearch={retrySearch}
               />
             </main>
 

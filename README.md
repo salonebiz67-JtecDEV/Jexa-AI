@@ -73,10 +73,32 @@ The backend runs as a secure Node.js service on [Render](https://render.com).
   - `NODE_ENV`: `production`
   - `PORT`: Handled automatically by Render (binds to `0.0.0.0`)
   - `GEMINI_API_KEY` or `AI_API_KEY`: Your Gemini API Key
+  - `GROQ_API_KEY`: Your Groq API Key (optional fallback provider)
+  - `TAVILY_API_KEY`: Your Tavily Search API Key for real-time live web search and clickable citations (free at https://tavily.com)
   - `SUPABASE_URL`: Your Supabase database URL (optional, defaults to in-memory store)
   - `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase Service Role Key (server-side only)
 
-> **Security Guarantee**: Private server secrets (`GEMINI_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) are stored **exclusively** on Render and never exposed to the client or committed to GitHub.
+> **Security Guarantee**: Private server secrets (`GEMINI_API_KEY`, `TAVILY_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) are stored **exclusively** on Render and never exposed to the client or committed to GitHub.
+
+---
+
+## 🌐 Live Web Search & Dynamic AI Activity Status
+
+JEXA features intelligent real-time web search powered by the **Tavily Search API** and real-time Server-Sent Events (SSE):
+
+- **Intelligent Search Decisions**: Jexa decides whether to answer directly from baseline knowledge or fetch real-time web data for breaking news, current events, sports scores, live market rates, or documentation templates.
+- **Dynamic AI Activity Status**: The frontend displays live, actual status operations in real time near the response area:
+  - `Thinking...`
+  - `Planning...`
+  - `Searching the web...` (with live query chip)
+  - `Reading web pages...`
+  - `Analyzing sources...`
+  - `Processing information...`
+  - `Preparing answer...`
+  - `Answer complete`
+  - `Search failed — retry available` (with one-click retry)
+- **Clickable Citations & Source Cards**: Answers include clickable markdown links and an interactive **Sources & Citations** panel with domain badges and snippets.
+- **Graceful Setup Notices**: If `TAVILY_API_KEY` is not yet configured, Jexa provides a helpful setup guide without crashing.
 
 ---
 

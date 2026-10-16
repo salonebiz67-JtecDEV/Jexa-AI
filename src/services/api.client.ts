@@ -18,6 +18,8 @@ import {
   PersonalVoiceReferenceMetadata,
   DatabaseHealthResponse,
   DatabaseDiagnosticsResult,
+  AIActivityStatus,
+  StreamChatEvent,
 } from '../../shared/types';
 import { safeStorage } from './storage';
 
@@ -216,6 +218,13 @@ async function fetchJson<T>(url: string, options?: RequestInit, allowRetry = tru
   return (body.data !== undefined ? body.data : (body as unknown as T)) as T;
 }
 
+export interface SendMessageStreamOptions {
+  onStatusUpdate?: (status: AIActivityStatus, details?: { query?: string; sourcesCount?: number; error?: string }) => void;
+  onChunk?: (chunk: string) => void;
+  onComplete?: (response: ChatResponsePayload) => void;
+  onError?: (error: Error) => void;
+}
+
 export const ApiClient = {
   // Chat
   async sendMessage(payload: SendMessagePayload): Promise<ChatResponsePayload> {
@@ -224,7 +233,7 @@ export const ApiClient = {
       conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
       personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
       textProvider: payload?.textProvider,
-      stream: Boolean(payload?.stream),
+      stream: false,
       isVoiceMode: Boolean(payload?.isVoiceMode),
       userContext: payload?.userContext,
     };
@@ -232,6 +241,121 @@ export const ApiClient = {
       method: 'POST',
       body: JSON.stringify(cleanPayload),
     });
+  },
+
+  // Streaming Chat with Server-Sent Events (SSE) and Real-Time Dynamic Status
+  async sendMessageStream(
+    payload: SendMessagePayload,
+    options?: SendMessageStreamOptions
+  ): Promise<ChatResponsePayload> {
+    const cleanPayload: SendMessagePayload = {
+      message: typeof payload?.message === 'string' ? payload.message : '',
+      conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
+      personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
+      textProvider: payload?.textProvider,
+      stream: true,
+      isVoiceMode: Boolean(payload?.isVoiceMode),
+      userContext: payload?.userContext,
+    };
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream, application/json',
+    };
+    const uid = getClientUserId();
+    if (uid) {
+      headers['x-user-id'] = uid;
+    }
+    if (authenticatedToken) {
+      headers['Authorization'] = `Bearer ${authenticatedToken}`;
+    }
+
+    try {
+      const response = await fetchWithTimeout(`${API_BASE}/chat`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(cleanPayload),
+      });
+
+      if (!response.ok) {
+        let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+        try {
+          const body = await response.json();
+          errorMsg = body?.error || body?.message || errorMsg;
+        } catch {
+          // ignore
+        }
+        const err = new ApiError(errorMsg, response.status);
+        options?.onError?.(err);
+        throw err;
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('text/event-stream') && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let finalResult: ChatResponsePayload | null = null;
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('data:')) continue;
+              const dataStr = trimmed.slice(5).trim();
+              if (!dataStr) continue;
+
+              try {
+                const event: StreamChatEvent = JSON.parse(dataStr);
+                if (event.type === 'status') {
+                  options?.onStatusUpdate?.(event.status, event.details);
+                } else if (event.type === 'chunk') {
+                  options?.onChunk?.(event.chunk);
+                } else if (event.type === 'complete') {
+                  finalResult = event.data;
+                  options?.onComplete?.(event.data);
+                } else if (event.type === 'error') {
+                  const err = new Error(event.error);
+                  options?.onError?.(err);
+                  throw err;
+                }
+              } catch (parseErr) {
+                console.warn('[ApiClient] Failed to parse SSE event chunk:', dataStr, parseErr);
+              }
+            }
+          }
+        } catch (streamErr: any) {
+          options?.onError?.(streamErr);
+          throw streamErr;
+        }
+
+        if (finalResult) {
+          return finalResult;
+        }
+        throw new Error('Stream ended without receiving final payload.');
+      }
+
+      // Fallback: If server responded with application/json
+      const body = await response.json();
+      if (body.success === false) {
+        const errorMsg = body?.error || body?.message || 'Chat request failed';
+        throw new ApiError(errorMsg, response.status, body?.code, body?.provider);
+      }
+      const result: ChatResponsePayload = body.data !== undefined ? body.data : body;
+      options?.onStatusUpdate?.('Answer complete');
+      options?.onComplete?.(result);
+      return result;
+    } catch (err: any) {
+      options?.onError?.(err);
+      throw err;
+    }
   },
 
   // Voice Synthesis (handles binary audio Blob and JSON data URLs safely)

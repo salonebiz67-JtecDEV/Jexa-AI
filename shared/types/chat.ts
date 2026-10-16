@@ -2,6 +2,42 @@ import { TextProviderType } from './provider';
 
 export type Role = 'user' | 'assistant' | 'system';
 
+export type AIActivityStatus =
+  | 'Thinking...'
+  | 'Planning...'
+  | 'Searching the web...'
+  | 'Reading web pages...'
+  | 'Analyzing sources...'
+  | 'Processing information...'
+  | 'Preparing answer...'
+  | 'Answer complete'
+  | 'Search failed — retry available';
+
+export interface WebSearchResultItem {
+  title: string;
+  url: string;
+  content: string;
+  score?: number;
+  publishedDate?: string;
+}
+
+export interface ChatMessageMetadata {
+  model?: string;
+  provider?: string;
+  tokens?: number;
+  audioUrl?: string;
+  isDevelopmentMock?: boolean;
+  fallbackUsed?: boolean;
+  originalProvider?: string;
+  memoriesReferenced?: string[];
+  // Web search metadata & clickable citations
+  sources?: WebSearchResultItem[];
+  searchQuery?: string;
+  searchPerformed?: boolean;
+  searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded';
+  searchError?: string;
+}
+
 export interface ChatMessage {
   id: string;
   conversationId: string;
@@ -9,17 +45,40 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   status?: 'sending' | 'streaming' | 'complete' | 'error';
-  metadata?: {
-    model?: string;
-    provider?: string;
-    tokens?: number;
-    audioUrl?: string;
-    isDevelopmentMock?: boolean;
-    fallbackUsed?: boolean;
-    originalProvider?: string;
-    memoriesReferenced?: string[];
+  metadata?: ChatMessageMetadata;
+}
+
+export interface StreamChatStatusEvent {
+  type: 'status';
+  status: AIActivityStatus;
+  details?: {
+    query?: string;
+    sourcesCount?: number;
+    error?: string;
   };
 }
+
+export interface StreamChatChunkEvent {
+  type: 'chunk';
+  chunk: string;
+}
+
+export interface StreamChatCompleteEvent {
+  type: 'complete';
+  data: ChatResponsePayload;
+}
+
+export interface StreamChatErrorEvent {
+  type: 'error';
+  error: string;
+  status?: AIActivityStatus;
+}
+
+export type StreamChatEvent =
+  | StreamChatStatusEvent
+  | StreamChatChunkEvent
+  | StreamChatCompleteEvent
+  | StreamChatErrorEvent;
 
 export interface Conversation {
   id: string;

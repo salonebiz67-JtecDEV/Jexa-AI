@@ -9,6 +9,7 @@ import {
   MoreHorizontal,
   ExternalLink,
   AlertCircle,
+  Globe,
 } from 'lucide-react';
 import { ChatMessage, Project } from '../../../shared/types';
 
@@ -56,6 +57,68 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     setTimeout(() => setCopiedCodeIndex(null), 2000);
   };
 
+  // Helper to parse markdown links [label](url), raw URLs, and bold text into clickable interactive elements
+  const renderInlineFormatting = (text: string) => {
+    const tokenRegex = /(\[[^\]]+\]\(https?:\/\/[^\s\)]+\)|\*\*[^*]+\*\*|https?:\/\/[^\s<>"]+)/g;
+    const parts = text.split(tokenRegex);
+
+    return parts.map((part, idx) => {
+      if (!part) return null;
+
+      // Markdown link: [Title](url)
+      const linkMatch = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)$/);
+      if (linkMatch) {
+        const [, label, url] = linkMatch;
+        return (
+          <a
+            key={idx}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2 inline-flex items-center gap-0.5 font-medium transition-colors"
+          >
+            <span>{label}</span>
+            <ExternalLink className="w-3 h-3 inline-block ml-0.5 shrink-0 opacity-75" />
+          </a>
+        );
+      }
+
+      // Bold: **text**
+      if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+        const boldText = part.slice(2, -2);
+        return (
+          <strong key={idx} className="font-semibold text-white">
+            {boldText}
+          </strong>
+        );
+      }
+
+      // Raw URL: https://...
+      if (/^https?:\/\/[^\s]+$/.test(part)) {
+        let hostname = '';
+        try {
+          hostname = new URL(part).hostname.replace(/^www\./, '');
+        } catch {
+          hostname = part;
+        }
+        return (
+          <a
+            key={idx}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2 inline-flex items-center gap-0.5 font-medium transition-colors"
+          >
+            <span className="truncate max-w-[220px]">{hostname || part}</span>
+            <ExternalLink className="w-3 h-3 inline-block ml-0.5 shrink-0 opacity-75" />
+          </a>
+        );
+      }
+
+      return <span key={idx}>{part}</span>;
+    });
+  };
+
   // Helper to parse code blocks vs regular text
   const renderFormattedContent = (content: string) => {
     const parts = content.split(/(```[\s\S]*?```)/g);
@@ -89,7 +152,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                         code: codeContent,
                       })
                     }
-                    className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 transition-colors"
+                    className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer"
                     title="Open in contextual workspace"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
@@ -98,7 +161,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 )}
                 <button
                   onClick={() => handleCopyCode(codeContent, index)}
-                  className="flex items-center gap-1 hover:text-slate-200 transition-colors"
+                  className="flex items-center gap-1 hover:text-slate-200 transition-colors cursor-pointer"
                   title="Copy code"
                 >
                   {copiedCodeIndex === index ? (
@@ -124,7 +187,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         );
       }
 
-      // Regular text paragraphs with bold support
+      // Regular text paragraphs with bold, links, lists & quotes support
       return (
         <div key={index} className="space-y-2">
           {part.split('\n\n').map((paragraph, pIdx) => {
@@ -137,7 +200,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   key={pIdx}
                   className="pl-3 border-l-2 border-slate-600 text-slate-400 italic my-2"
                 >
-                  {paragraph.replace(/^>\s*/, '')}
+                  {renderInlineFormatting(paragraph.replace(/^>\s*/, ''))}
                 </blockquote>
               );
             }
@@ -149,15 +212,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 <ul key={pIdx} className="space-y-1 my-1.5 list-disc list-inside text-slate-300">
                   {items.map((it, iIdx) => (
                     <li key={iIdx}>
-                      {it.replace(/^[\s•\-\*]+/, '').split('**').map((seg, sIdx) =>
-                        sIdx % 2 === 1 ? (
-                          <strong key={sIdx} className="font-semibold text-white">
-                            {seg}
-                          </strong>
-                        ) : (
-                          seg
-                        )
-                      )}
+                      {renderInlineFormatting(it.replace(/^[\s•\-\*]+/, ''))}
                     </li>
                   ))}
                 </ul>
@@ -171,33 +226,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 <ol key={pIdx} className="space-y-1 my-1.5 list-decimal list-inside text-slate-300">
                   {items.map((it, iIdx) => (
                     <li key={iIdx}>
-                      {it.replace(/^\d+\.\s*/, '').split('**').map((seg, sIdx) =>
-                        sIdx % 2 === 1 ? (
-                          <strong key={sIdx} className="font-semibold text-white">
-                            {seg}
-                          </strong>
-                        ) : (
-                          seg
-                        )
-                      )}
+                      {renderInlineFormatting(it.replace(/^\d+\.\s*/, ''))}
                     </li>
                   ))}
                 </ol>
               );
             }
 
-            // Standard paragraph with bold formatting
+            // Standard paragraph
             return (
               <p key={pIdx} className="leading-relaxed">
-                {paragraph.split('**').map((segment, sIdx) =>
-                  sIdx % 2 === 1 ? (
-                    <strong key={sIdx} className="font-semibold text-white">
-                      {segment}
-                    </strong>
-                  ) : (
-                    segment
-                  )
-                )}
+                {renderInlineFormatting(paragraph)}
               </p>
             );
           })}
@@ -225,15 +264,77 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         ) : (
           /* AI Message Content */
           <div className="space-y-1.5 text-slate-200 text-sm">
+            {/* Live Web Search Badge if search was performed */}
+            {message.metadata?.searchQuery && (
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-[11px] font-medium text-cyan-300 mb-1">
+                <Globe className="w-3 h-3 text-cyan-400 animate-spin-slow" />
+                <span>Live Web Search:</span>
+                <span className="text-white font-mono truncate max-w-[240px]">
+                  "{message.metadata.searchQuery}"
+                </span>
+              </div>
+            )}
+
             {renderFormattedContent(message.content)}
 
-            {/* Message Actions Bar (Quiet, appears on hover or mobile tap) */}
+            {/* Dedicated Sources & Citations Section */}
+            {message.metadata?.sources && message.metadata.sources.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-white/[0.08] space-y-2">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <div className="flex items-center gap-1.5 font-medium text-slate-300">
+                    <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Sources & Citations</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                      {message.metadata.sources.length}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  {message.metadata.sources.map((src, idx) => {
+                    let hostname = '';
+                    try {
+                      hostname = new URL(src.url).hostname.replace(/^www\./, '');
+                    } catch {
+                      hostname = 'source';
+                    }
+                    return (
+                      <a
+                        key={idx}
+                        href={src.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex flex-col p-2.5 rounded-xl bg-[#090d16] hover:bg-[#0f172a] border border-white/[0.06] hover:border-cyan-500/30 transition-all text-xs group/card shadow-sm cursor-pointer"
+                        title={src.title}
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="text-[10px] font-mono text-cyan-400/90 bg-cyan-950/50 px-1.5 py-0.5 rounded border border-cyan-800/30 truncate max-w-[150px]">
+                            {hostname}
+                          </span>
+                          <ExternalLink className="w-3 h-3 text-slate-500 group-hover/card:text-cyan-400 transition-colors shrink-0" />
+                        </div>
+                        <span className="font-medium text-slate-200 group-hover/card:text-white line-clamp-1">
+                          {src.title}
+                        </span>
+                        {src.content && (
+                          <span className="text-[11px] text-slate-400 line-clamp-2 mt-1 leading-relaxed">
+                            {src.content}
+                          </span>
+                        )}
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Message Actions Bar */}
             <div className="flex items-center gap-1 pt-1 opacity-70 group-hover:opacity-100 transition-opacity text-slate-400">
               {/* Copy */}
               <button
                 onClick={handleCopyMessage}
                 title="Copy response"
-                className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors"
+                className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
                 aria-label="Copy message"
               >
                 {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -244,7 +345,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 <button
                   onClick={() => onShare(message.content)}
                   title="Share response"
-                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors"
+                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
                   aria-label="Share message"
                 >
                   <Share2 className="w-3.5 h-3.5" />
@@ -256,7 +357,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 <button
                   onClick={() => onPinMessage(message.id)}
                   title="Pin message"
-                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors"
+                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
                   aria-label="Pin message"
                 >
                   <Pin className="w-3.5 h-3.5" />
@@ -268,7 +369,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 <button
                   onClick={() => onSpeak(message.content)}
                   title="Read aloud"
-                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors"
+                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
                   aria-label="Read message aloud"
                 >
                   <Volume2 className="w-3.5 h-3.5" />
@@ -280,7 +381,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 <button
                   onClick={() => onRegenerate()}
                   title="Regenerate response"
-                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors"
+                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
                   aria-label="Regenerate response"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
@@ -293,7 +394,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   <button
                     onClick={() => setShowMoreMenu(!showMoreMenu)}
                     title="More actions"
-                    className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors"
+                    className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
                     aria-label="More actions"
                   >
                     <MoreHorizontal className="w-3.5 h-3.5" />
@@ -311,7 +412,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                             onAddToProject(message.content, proj.id);
                             setShowMoreMenu(false);
                           }}
-                          className="w-full text-left px-3 py-1.5 hover:bg-white/[0.06] text-slate-300 hover:text-white truncate"
+                          className="w-full text-left px-3 py-1.5 hover:bg-white/[0.06] text-slate-300 hover:text-white truncate cursor-pointer"
                         >
                           {proj.name}
                         </button>

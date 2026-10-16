@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiClient } from '../services/api.client';
-import { ChatMessage, Conversation } from '../../shared/types';
+import { ChatMessage, Conversation, AIActivityStatus } from '../../shared/types';
 import { safeStorage } from '../services/storage';
 import { useAuth } from './useAuth';
 
@@ -11,6 +11,8 @@ export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSending, setIsSending] = useState<boolean>(false);
+  const [activityStatus, setActivityStatus] = useState<AIActivityStatus | null>(null);
+  const [activityDetails, setActivityDetails] = useState<{ query?: string; sourcesCount?: number; error?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Load conversations on mount or whenever authenticated user changes
@@ -183,18 +185,30 @@ export function useChat() {
 
       setMessages((prev) => [...prev, optimisticUserMsg]);
       setIsSending(true);
+      setActivityStatus('Thinking...');
+      setActivityDetails(null);
       setError(null);
 
       try {
         const savedTextProvider = safeStorage.getItem('jexa_text_provider') as any;
 
-        const response = await ApiClient.sendMessage({
-          conversationId: currentConversationId || undefined,
-          userId: user?.id,
-          message: trimmed,
-          personaId: cleanPersona,
-          textProvider: savedTextProvider || undefined,
-        });
+        const response = await ApiClient.sendMessageStream(
+          {
+            conversationId: currentConversationId || undefined,
+            userId: user?.id,
+            message: trimmed,
+            personaId: cleanPersona,
+            textProvider: savedTextProvider || undefined,
+          },
+          {
+            onStatusUpdate(status, details) {
+              setActivityStatus(status);
+              if (details) {
+                setActivityDetails(details);
+              }
+            },
+          }
+        );
 
         // Set conversation ID if new conversation was formed
         if (response.isNewConversation) {
@@ -212,9 +226,19 @@ export function useChat() {
           };
           return [...withoutTemp, finalUserMsg, response.message];
         });
+
+        setActivityStatus('Answer complete');
+        // Brief smooth timeout for visual feedback
+        setTimeout(() => {
+          setIsSending(false);
+          setActivityStatus(null);
+          setActivityDetails(null);
+        }, 600);
       } catch (err: any) {
         console.error('[useChat] Send message failed:', err);
         setError("Couldn't save. Please try again.");
+        setActivityStatus('Search failed — retry available');
+        setActivityDetails({ error: err.message });
 
         let userHelpMessage = `I encountered an issue connecting to the AI provider: ${err.message}.`;
         if (err.code === 'MODEL_NOT_FOUND') {
@@ -237,12 +261,18 @@ export function useChat() {
             status: 'error',
           },
         ]);
-      } finally {
         setIsSending(false);
       }
     },
-    [currentConversationId, isSending, refreshConversations]
+    [currentConversationId, isSending, refreshConversations, user?.id]
   );
+
+  const retrySearch = useCallback(() => {
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+    if (lastUserMsg) {
+      sendMessage(lastUserMsg.content);
+    }
+  }, [messages, sendMessage]);
 
   return {
     conversations,
@@ -250,6 +280,9 @@ export function useChat() {
     messages,
     isLoading,
     isSending,
+    activityStatus,
+    activityDetails,
+    retrySearch,
     error,
     selectConversation,
     startNewChat,

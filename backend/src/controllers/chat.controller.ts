@@ -1,22 +1,76 @@
 import { Request, Response } from 'express';
 import { ChatService } from '../services/chat.service';
-import { SendMessagePayload } from '../../../shared/types/chat';
+import { SendMessagePayload, StreamChatEvent } from '../../../shared/types/chat';
 import { formatCleanProviderError } from '../../../shared/types/provider';
 
 export class ChatController {
   public static async sendMessage(req: Request, res: Response): Promise<void> {
+    const payload: SendMessagePayload = req.body || {};
+    const userId = (req.headers['x-user-id'] as string) || (payload?.userId as string);
+    if (userId) {
+      payload.userId = userId;
+    }
+
+    if (!payload.message || typeof payload.message !== 'string' || !payload.message.trim()) {
+      res.status(400).json({ success: false, error: 'A non-empty message string is required.' });
+      return;
+    }
+
+    const isStreamRequested =
+      Boolean(payload.stream) ||
+      Boolean(req.headers.accept && req.headers.accept.includes('text/event-stream'));
+
+    if (isStreamRequested) {
+      // 1. Establish Server-Sent Events (SSE) streaming connection
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no', // Disable proxy buffering on Render / Nginx
+      });
+
+      if (typeof (res as any).flushHeaders === 'function') {
+        (res as any).flushHeaders();
+      }
+
+      const sendEvent = (event: StreamChatEvent) => {
+        try {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        } catch (err) {
+          console.warn('[ChatController] Error writing SSE chunk:', err);
+        }
+      };
+
+      try {
+        const result = await ChatService.processMessage(payload, (status, details) => {
+          sendEvent({
+            type: 'status',
+            status,
+            details,
+          });
+        });
+
+        sendEvent({
+          type: 'complete',
+          data: result,
+        });
+        res.end();
+      } catch (error: any) {
+        console.error('[ChatController] Stream error processing message:', error);
+        const formatted = formatCleanProviderError(error);
+
+        sendEvent({
+          type: 'error',
+          error: formatted.cleanMessage,
+          status: 'Search failed — retry available',
+        });
+        res.end();
+      }
+      return;
+    }
+
+    // 2. Standard REST JSON flow (backward-compatible)
     try {
-      const payload: SendMessagePayload = req.body;
-      const userId = (req.headers['x-user-id'] as string) || (req.body?.userId as string);
-      if (userId) {
-        payload.userId = userId;
-      }
-
-      if (!payload.message || typeof payload.message !== 'string' || !payload.message.trim()) {
-        res.status(400).json({ success: false, error: 'A non-empty message string is required.' });
-        return;
-      }
-
       const result = await ChatService.processMessage(payload);
       res.status(200).json({
         success: true,
