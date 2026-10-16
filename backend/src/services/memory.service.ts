@@ -2,6 +2,10 @@ import { DatabaseService } from '../database/db-service';
 import { MemoryItem, MemoryCreateInput, MemorySearchResult } from '../../../shared/types/memory';
 import { searchRelevantMemories } from '../../../ai/memory/memory-retrieval';
 
+// Common casual / ephemeral words that indicate low-value chatter rather than durable memory
+const CASUAL_GREETINGS_PATTERN =
+  /^(hi|hello|hey|yo|howdy|good\s+(morning|afternoon|evening)|how\s+are\s+you|what'?s\s+up|ok|okay|cool|nice|thanks|thank\s+you|bye|see\s+ya|haha|lol)\b/i;
+
 export class MemoryService {
   /**
    * Retrieves memories belonging to the authenticated user and ranks them by relevance to the query.
@@ -17,21 +21,34 @@ export class MemoryService {
   }
 
   /**
-   * Analyzes the user's message for long-term facts, preferences, goals, and identity,
-   * saving them scoped directly to the authenticated user.
+   * Evaluates incoming user messages with selective intelligence.
+   * Discards casual chatter, greetings, and ephemeral noise.
+   * Only stores high-value, durable information: technical stacks, project specs,
+   * user preferences, key goals, and explicit memory requests.
    */
   public static async extractAndStoreFromMessage(
     userMessage: string,
     conversationId: string,
     userId?: string
   ): Promise<MemoryItem[]> {
-    const added: MemoryItem[] = [];
-    const lower = userMessage.toLowerCase().trim();
+    const trimmed = userMessage.trim();
+    if (!trimmed || trimmed.length < 8) {
+      return [];
+    }
 
-    // 1. Identity / Preferred Name
+    const lower = trimmed.toLowerCase();
+
+    // 1. Filter out pure casual greetings, spam, or ephemeral pleasantries
+    if (CASUAL_GREETINGS_PATTERN.test(lower) && trimmed.length < 35 && !lower.includes('remember')) {
+      return [];
+    }
+
+    const added: MemoryItem[] = [];
+
+    // 2. Identity / Preferred Name
     if (lower.includes('my name is') || lower.includes("i'm called") || lower.includes('call me')) {
-      const match = userMessage.match(/(?:my name is|i'm called|call me)\s+([a-zA-Z0-9_\- ]+?)(?:\.|$|,|!|\s+and|\s+remember)/i);
-      if (match && match[1]?.trim()) {
+      const match = trimmed.match(/(?:my name is|i'm called|call me)\s+([a-zA-Z0-9_\- ]+?)(?:\.|$|,|!|\s+and|\s+remember)/i);
+      if (match && match[1]?.trim() && match[1].trim().length > 1) {
         const name = match[1].trim();
         const mem = await DatabaseService.createMemory(
           {
@@ -46,16 +63,22 @@ export class MemoryService {
       }
     }
 
-    // 2. Direct "Remember that..." or "Remember:..."
-    if (lower.includes('remember that') || lower.includes('remember:') || lower.includes("don't forget that")) {
-      const match = userMessage.match(/(?:remember that|remember:|don't forget that)\s+(.+?)(?:\.|$|!)/i);
-      if (match && match[1]?.trim()) {
+    // 3. Explicit Memory Directive ("Remember that...", "Remember:", "Don't forget that...")
+    if (
+      lower.includes('remember that') ||
+      lower.includes('remember:') ||
+      lower.includes("don't forget that") ||
+      lower.includes('please remember') ||
+      lower.includes('keep in mind that')
+    ) {
+      const match = trimmed.match(/(?:remember that|remember:|don't forget that|please remember|keep in mind that)\s+(.+?)(?:\.|$|!)/i);
+      if (match && match[1]?.trim() && match[1].trim().length > 4) {
         const fact = match[1].trim();
         const mem = await DatabaseService.createMemory(
           {
             category: 'user_fact',
-            fact: `User note: "${fact.slice(0, 150)}".`,
-            confidence: 0.95,
+            fact: `User note: "${fact.slice(0, 160)}".`,
+            confidence: 0.96,
             sourceConversationId: conversationId,
           },
           userId
@@ -64,14 +87,32 @@ export class MemoryService {
       }
     }
 
-    // 3. User Preferences & Passions
-    if (lower.includes('i love') || lower.includes('my favorite') || lower.includes('i prefer')) {
-      const factClean = userMessage.replace(/^(hey|jexa|so|well)[,\s]*/i, '').trim();
+    // 4. Technical Stacks, Tools, & Engineering Choices
+    const techStackKeywords = [
+      'my stack is',
+      'our stack is',
+      'we build with',
+      'i build with',
+      'i use',
+      'we use',
+      'our tech stack',
+      'using typescript',
+      'using react',
+      'using python',
+      'using postgresql',
+      'using supabase',
+      'using docker',
+      'architecture uses',
+    ];
+
+    const hasTechStack = techStackKeywords.some((keyword) => lower.includes(keyword));
+    if (hasTechStack && trimmed.length >= 15) {
+      const cleanStack = trimmed.replace(/^(hey|jexa|so|well)[,\s]*/i, '').trim();
       const mem = await DatabaseService.createMemory(
         {
-          category: 'preference',
-          fact: `User preference: "${factClean.slice(0, 120)}".`,
-          confidence: 0.88,
+          category: 'user_fact',
+          fact: `Technical stack & tooling: "${cleanStack.slice(0, 150)}".`,
+          confidence: 0.92,
           sourceConversationId: conversationId,
         },
         userId
@@ -79,12 +120,58 @@ export class MemoryService {
       added.push(mem);
     }
 
-    // 4. Goals & Projects
-    if (lower.includes('i am working on') || lower.includes("i'm working on") || lower.includes('my goal is')) {
+    // 5. Durable User Preferences (excluding transient food/weather remarks)
+    if (
+      (lower.includes('i prefer') || lower.includes('my preference is') || lower.includes('i always like to')) &&
+      !lower.includes('eating') &&
+      !lower.includes('right now') &&
+      !lower.includes('today')
+    ) {
+      const factClean = trimmed.replace(/^(hey|jexa|so|well)[,\s]*/i, '').trim();
+      const mem = await DatabaseService.createMemory(
+        {
+          category: 'preference',
+          fact: `User preference: "${factClean.slice(0, 130)}".`,
+          confidence: 0.89,
+          sourceConversationId: conversationId,
+        },
+        userId
+      );
+      added.push(mem);
+    }
+
+    // 6. Project Specifications, Specs, & Requirements
+    if (
+      (lower.includes('i am working on') ||
+        lower.includes("i'm working on") ||
+        lower.includes('i am building') ||
+        lower.includes("i'm building") ||
+        lower.includes('the project is') ||
+        lower.includes('my project is') ||
+        lower.includes('project requirement')) &&
+      trimmed.length >= 20
+    ) {
       const mem = await DatabaseService.createMemory(
         {
           category: 'goal',
-          fact: `User goal: "${userMessage.slice(0, 120)}".`,
+          fact: `Project specification: "${trimmed.slice(0, 150)}".`,
+          confidence: 0.93,
+          sourceConversationId: conversationId,
+        },
+        userId
+      );
+      added.push(mem);
+    }
+
+    // 7. Goals, Milestones, & Objectives
+    if (
+      (lower.includes('my goal is') || lower.includes('our goal is') || lower.includes('we plan to launch')) &&
+      trimmed.length >= 15
+    ) {
+      const mem = await DatabaseService.createMemory(
+        {
+          category: 'goal',
+          fact: `User goal: "${trimmed.slice(0, 140)}".`,
           confidence: 0.9,
           sourceConversationId: conversationId,
         },

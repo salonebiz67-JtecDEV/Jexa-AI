@@ -59,6 +59,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           systemInstruction: request.systemPrompt,
           temperature: request.temperature ?? 0.7,
           maxOutputTokens: request.maxTokens ?? 1024,
+          tools: [{ googleSearch: {} }],
         },
       });
 
@@ -119,6 +120,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           systemInstruction: request.systemPrompt,
           temperature: request.temperature ?? 0.7,
           maxOutputTokens: request.maxTokens ?? 1024,
+          tools: [{ googleSearch: {} }],
         },
       });
 
