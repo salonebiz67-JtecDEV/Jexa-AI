@@ -2,10 +2,10 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { User, Session } from '@supabase/supabase-js';
 import {
   getBrowserSupabase,
-  signInWithGoogle as supabaseSignInGoogle,
+  signInWithPassword as supabaseSignInPassword,
+  signUpWithPassword as supabaseSignUpPassword,
   signOut as supabaseSignOut,
   syncUserProfile,
-  fetchAuthConfig,
   checkSupabaseDiagnostics,
   SafeAuthDiagnostics,
   purgePwaCacheAndReload,
@@ -16,9 +16,7 @@ import { safeStorage } from '../services/storage';
 export type AuthStatusCategory =
   | 'idle'
   | 'config_missing'
-  | 'oauth_not_configured'
   | 'auth_failed'
-  | 'user_cancelled'
   | 'success';
 
 export interface AuthUser {
@@ -38,7 +36,8 @@ export interface AuthContextValue {
   error: string | null;
   diagnostics: SafeAuthDiagnostics | null;
   runDiagnostics: () => Promise<SafeAuthDiagnostics>;
-  signInWithGoogle: () => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<void>;
+  signUpWithEmail: (email: string, password: string) => Promise<{ confirmationSent?: boolean }>;
   signOut: () => Promise<void>;
   continueAsGuest: () => void;
   forcePurgeCache: () => Promise<void>;
@@ -94,46 +93,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Parse any OAuth error parameters returned in URL search or hash
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    // Check search query (?error=...) and hash (#error=...)
-    const searchParams = new URLSearchParams(window.location.search);
-    const hashStr = window.location.hash.startsWith('#')
-      ? window.location.hash.substring(1)
-      : window.location.hash;
-    const hashParams = new URLSearchParams(hashStr);
-
-    const err = searchParams.get('error') || hashParams.get('error');
-    const errDesc = searchParams.get('error_description') || hashParams.get('error_description');
-
-    if (err || errDesc) {
-      console.warn('[AuthContext] OAuth redirect reported error:', err, errDesc);
-      const descLower = (errDesc || '').toLowerCase();
-
-      if (err === 'access_denied' || descLower.includes('cancel') || descLower.includes('declined')) {
-        setAuthStatus('user_cancelled');
-        setError('Google sign-in was cancelled. You can try again whenever you are ready.');
-      } else if (
-        descLower.includes('provider is not enabled') ||
-        descLower.includes('not enabled') ||
-        descLower.includes('disabled')
-      ) {
-        setAuthStatus('oauth_not_configured');
-        setError(
-          'Google OAuth is not enabled in your Supabase project. Enable Google in Supabase Dashboard -> Authentication -> Providers.'
-        );
-      } else {
-        setAuthStatus('auth_failed');
-        setError(errDesc || `Authentication failed (${err}). Please check Supabase Auth settings.`);
-      }
-
-      // Clean URL without losing path
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-  }, []);
-
   // Initial session restoration and auth state listener
   useEffect(() => {
     let mounted = true;
@@ -143,24 +102,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const diag = await runDiagnostics();
         if (!mounted) return;
 
-        if (!diag.supabaseUrlConfigured || !diag.supabaseKeyConfigured) {
-          setIsConfigured(false);
-          setAuthStatus('config_missing');
-          setUser(null);
-          setSession(null);
-          if (mounted) setIsLoading(false);
+        // Check if user previously chose Guest mode
+        const isGuestMode = safeStorage.getItem('jexa_guest_mode') === 'true';
+        if (isGuestMode) {
+          setUser(DEFAULT_GUEST_USER);
+          setAuthenticatedUser(DEFAULT_GUEST_USER.id, null);
+          setAuthStatus('success');
+          setIsLoading(false);
           return;
         }
-
-        setIsConfigured(true);
 
         const supabase = await getBrowserSupabase();
         if (!supabase) {
           if (mounted) {
-            setIsConfigured(false);
-            setAuthStatus('config_missing');
-            setUser(null);
-            setSession(null);
             setIsLoading(false);
           }
           return;
@@ -177,65 +131,67 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(authUser);
           setSession(sessionData.session);
           setAuthenticatedUser(authUser.id, sessionData.session.access_token);
+          safeStorage.setItem('jexa_auth_user', JSON.stringify(authUser));
+          safeStorage.setItem('jexa_persistent_user_id', authUser.id);
           setAuthStatus('success');
-
-          // Sync profile with PostgreSQL backend
-          syncUserProfile(sessionData.session.user).catch((err) =>
-            console.warn('[AuthContext] Profile sync error:', err)
-          );
+          // Background sync profile
+          syncUserProfile(sessionData.session.user).catch(console.warn);
         } else {
-          setUser(null);
-          setSession(null);
+          // Check cached local storage fallback
+          const cached = safeStorage.getItem('jexa_auth_user');
+          if (cached && mounted) {
+            try {
+              const parsed = JSON.parse(cached);
+              if (parsed?.id) {
+                setUser(parsed);
+                setAuthenticatedUser(parsed.id, null);
+                safeStorage.setItem('jexa_persistent_user_id', parsed.id);
+              }
+            } catch {
+              safeStorage.removeItem('jexa_auth_user');
+            }
+          }
         }
 
-        // 2. Subscribe to auth changes (Sign In, Sign Out, Token Refresh)
+        // 2. Subscribe to auth state changes
         const { data: listener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
           if (!mounted) return;
+          console.log('[AuthContext] Auth event:', event);
 
-          console.log(`[AuthContext] Auth event: ${event}`);
-
-          if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-            if (newSession?.user) {
-              const authUser = mapSupabaseUser(newSession.user);
-              setUser(authUser);
-              setSession(newSession);
-              setAuthenticatedUser(authUser.id, newSession.access_token);
-              setAuthStatus('success');
-              setError(null);
-              safeStorage.removeItem('jexa_guest_mode');
-
-              // Clean up OAuth tokens from URL if present
-              if (
-                typeof window !== 'undefined' &&
-                (window.location.hash.includes('access_token') ||
-                  window.location.search.includes('code='))
-              ) {
-                window.history.replaceState({}, document.title, window.location.pathname);
-              }
-
-              // Background profile sync
-              syncUserProfile(newSession.user).catch(console.warn);
-            }
+          if (event === 'SIGNED_IN' && newSession?.user) {
+            const authUser = mapSupabaseUser(newSession.user);
+            setUser(authUser);
+            setSession(newSession);
+            setAuthenticatedUser(authUser.id, newSession.access_token);
+            safeStorage.setItem('jexa_auth_user', JSON.stringify(authUser));
+            safeStorage.setItem('jexa_persistent_user_id', authUser.id);
+            safeStorage.removeItem('jexa_guest_mode');
+            setAuthStatus('success');
+            setError(null);
+            syncUserProfile(newSession.user).catch(console.warn);
           } else if (event === 'SIGNED_OUT') {
             setUser(null);
             setSession(null);
             setAuthenticatedUser(null, null);
-            setAuthStatus('idle');
+            safeStorage.removeItem('jexa_auth_user');
+            safeStorage.removeItem('jexa_persistent_user_id');
             safeStorage.removeItem('jexa_guest_mode');
+            setAuthStatus('idle');
+          } else if (event === 'TOKEN_REFRESHED' && newSession?.user) {
+            setSession(newSession);
+            setAuthenticatedUser(newSession.user.id, newSession.access_token);
           }
         });
 
         return () => {
-          listener.subscription.unsubscribe();
+          listener?.subscription?.unsubscribe();
         };
       } catch (err: any) {
         console.error('[AuthContext] Auth initialization error:', err);
-        if (mounted) {
-          setError(err.message || 'Failed to initialize authentication.');
-          setAuthStatus('auth_failed');
-        }
       } finally {
-        if (mounted) setIsLoading(false);
+        if (mounted) {
+          setIsLoading(false);
+        }
       }
     }
 
@@ -246,43 +202,71 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [mapSupabaseUser, runDiagnostics]);
 
-  // Google OAuth Sign-in Handler
-  const signInWithGoogle = useCallback(async () => {
+  // Email & Password Sign-in Handler
+  const signInWithEmail = useCallback(async (email: string, password: string) => {
     setError(null);
     try {
-      // Re-verify diagnostics before triggering OAuth
       const diag = await checkSupabaseDiagnostics();
       setDiagnostics(diag);
 
-      if (!diag.supabaseUrlConfigured || !diag.supabaseKeyConfigured) {
-        setIsConfigured(false);
-        setAuthStatus('config_missing');
-        const msg =
-          'Supabase frontend configuration is missing. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in GitHub Actions or environment.';
-        setError(msg);
-        throw new Error(msg);
+      const result = await supabaseSignInPassword(email, password);
+      if (result.error) {
+        setAuthStatus('auth_failed');
+        setError(result.error.message || 'Login failed. Please check your credentials.');
+        throw result.error;
       }
 
-      const { error: signInErr } = await supabaseSignInGoogle();
-      if (signInErr) {
-        const msgLower = (signInErr.message || '').toLowerCase();
-        if (msgLower.includes('not enabled') || msgLower.includes('provider')) {
-          setAuthStatus('oauth_not_configured');
-        } else {
-          setAuthStatus('auth_failed');
-        }
-        setError(signInErr.message);
-        throw signInErr;
+      if (result.user) {
+        const authUser = mapSupabaseUser(result.user);
+        setUser(authUser);
+        setSession(result.session);
+        setAuthenticatedUser(authUser.id, result.session?.access_token);
+        safeStorage.setItem('jexa_auth_user', JSON.stringify(authUser));
+        safeStorage.setItem('jexa_persistent_user_id', authUser.id);
+        safeStorage.removeItem('jexa_guest_mode');
+        setAuthStatus('success');
+        setError(null);
       }
     } catch (err: any) {
-      console.error('[AuthContext] Google sign-in trigger error:', err);
-      const msgLower = (err?.message || '').toLowerCase();
-      if (msgLower.includes('not enabled') || msgLower.includes('provider')) {
-        setAuthStatus('oauth_not_configured');
-      }
+      console.error('[AuthContext] Email sign-in error:', err);
+      setError(err?.message || 'Login failed. Please check your email and password.');
       throw err;
     }
-  }, []);
+  }, [mapSupabaseUser]);
+
+  // Email & Password Sign-up Handler
+  const signUpWithEmail = useCallback(async (email: string, password: string) => {
+    setError(null);
+    try {
+      const diag = await checkSupabaseDiagnostics();
+      setDiagnostics(diag);
+
+      const result = await supabaseSignUpPassword(email, password);
+      if (result.error) {
+        setAuthStatus('auth_failed');
+        setError(result.error.message || 'Sign up failed.');
+        throw result.error;
+      }
+
+      if (result.user && result.session) {
+        const authUser = mapSupabaseUser(result.user);
+        setUser(authUser);
+        setSession(result.session);
+        setAuthenticatedUser(authUser.id, result.session.access_token);
+        safeStorage.setItem('jexa_auth_user', JSON.stringify(authUser));
+        safeStorage.setItem('jexa_persistent_user_id', authUser.id);
+        safeStorage.removeItem('jexa_guest_mode');
+        setAuthStatus('success');
+        setError(null);
+      }
+
+      return { confirmationSent: result.confirmationSent };
+    } catch (err: any) {
+      console.error('[AuthContext] Email sign-up error:', err);
+      setError(err?.message || 'Registration failed.');
+      throw err;
+    }
+  }, [mapSupabaseUser]);
 
   // Sign out Handler
   const signOut = useCallback(async () => {
@@ -305,6 +289,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(DEFAULT_GUEST_USER);
     setAuthenticatedUser(DEFAULT_GUEST_USER.id, null);
     safeStorage.setItem('jexa_guest_mode', 'true');
+    safeStorage.setItem('jexa_persistent_user_id', DEFAULT_GUEST_USER.id);
     setAuthStatus('success');
     setError(null);
   }, []);
@@ -319,7 +304,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       error,
       diagnostics,
       runDiagnostics,
-      signInWithGoogle,
+      signInWithEmail,
+      signUpWithEmail,
       signOut,
       continueAsGuest,
       forcePurgeCache: purgePwaCacheAndReload,
@@ -334,7 +320,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       error,
       diagnostics,
       runDiagnostics,
-      signInWithGoogle,
+      signInWithEmail,
+      signUpWithEmail,
       signOut,
       continueAsGuest,
       clearError,

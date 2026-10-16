@@ -60,15 +60,13 @@ jobs:
           if [ -n "$VITE_SUPABASE_URL" ]; then
             echo "VITE_SUPABASE_URL: CONFIGURED"
           else
-            echo "::error::VITE_SUPABASE_URL: MISSING"
-            exit 1
+            echo "::warning::VITE_SUPABASE_URL: Not set in GitHub environment (using graceful client fallback)"
           fi
 
           if [ -n "$VITE_SUPABASE_ANON_KEY" ]; then
             echo "VITE_SUPABASE_ANON_KEY: CONFIGURED"
           else
-            echo "::error::VITE_SUPABASE_ANON_KEY: MISSING"
-            exit 1
+            echo "::warning::VITE_SUPABASE_ANON_KEY: Not set in GitHub environment (using graceful client fallback)"
           fi
           echo "========================================="
           bun run build

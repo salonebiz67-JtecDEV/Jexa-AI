@@ -6,20 +6,26 @@ import {
   RefreshCw,
   ShieldCheck,
   Database,
-  ArrowRight,
   CheckCircle2,
   XCircle,
-  HelpCircle,
   ChevronDown,
   ChevronUp,
-  ExternalLink,
-  Info,
   RotateCcw,
+  Mail,
+  Lock,
+  Eye,
+  EyeOff,
+  LogIn,
+  UserPlus,
+  ArrowRight,
 } from 'lucide-react';
 
 export const LoginScreen: React.FC = () => {
   const {
-    signInWithGoogle,
+    signInWithEmail,
+    signUpWithEmail,
+    signOut,
+    continueAsGuest,
     error,
     clearError,
     isConfigured,
@@ -29,8 +35,12 @@ export const LoginScreen: React.FC = () => {
     forcePurgeCache,
   } = useAuth();
 
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [email, setEmail] = useState('fatormajohn999@gmail.com');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [submittingAction, setSubmittingAction] = useState<'login' | 'signup' | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [isRunningCheck, setIsRunningCheck] = useState(false);
 
@@ -41,16 +51,59 @@ export const LoginScreen: React.FC = () => {
     }
   }, [diagnostics, runDiagnostics]);
 
-  const handleGoogleSignIn = async () => {
-    setIsConnecting(true);
+  const handleLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!email.trim()) {
+      setLocalError('Please enter your email address.');
+      return;
+    }
+    if (!password) {
+      setLocalError('Please enter your password.');
+      return;
+    }
+
+    setSubmittingAction('login');
     setLocalError(null);
+    setSuccessNotice(null);
     clearError();
+
     try {
-      await signInWithGoogle();
-      // Redirects to Google consent screen
+      await signInWithEmail(email.trim(), password);
     } catch (err: any) {
-      setIsConnecting(false);
-      setLocalError(err?.message || 'Authentication could not be initiated.');
+      setLocalError(err?.message || 'Login failed. Please verify your credentials.');
+    } finally {
+      setSubmittingAction(null);
+    }
+  };
+
+  const handleSignUp = async () => {
+    if (!email.trim()) {
+      setLocalError('Please enter an email address to register.');
+      return;
+    }
+    if (!password || password.length < 6) {
+      setLocalError('Please provide a password of at least 6 characters.');
+      return;
+    }
+
+    setSubmittingAction('signup');
+    setLocalError(null);
+    setSuccessNotice(null);
+    clearError();
+
+    try {
+      const res = await signUpWithEmail(email.trim(), password);
+      if (res?.confirmationSent) {
+        setSuccessNotice(
+          `Confirmation email sent to ${email.trim()}. Please verify your inbox, then click Log In.`
+        );
+      } else {
+        setSuccessNotice('Account created successfully! Logging you in...');
+      }
+    } catch (err: any) {
+      setLocalError(err?.message || 'Sign up failed. Please try again.');
+    } finally {
+      setSubmittingAction(null);
     }
   };
 
@@ -65,9 +118,9 @@ export const LoginScreen: React.FC = () => {
 
   const displayError = localError || error;
 
-  // Determine user-friendly diagnosis and guidance
+  // Render contextual diagnostic notices
   const renderCategorizedNotice = () => {
-    // Diagnosis E: Existing cached application version
+    // Diagnosis E: Cached PWA bundle detected
     if (diagnostics?.diagnosis === 'cached_version_detected') {
       return (
         <div className="p-3.5 rounded-2xl bg-cyan-500/10 border border-cyan-500/25 text-xs text-cyan-200/90 space-y-2 animate-in fade-in duration-200">
@@ -76,8 +129,8 @@ export const LoginScreen: React.FC = () => {
             <span>Diagnosis E: Existing Cached PWA Version Detected</span>
           </div>
           <p className="text-slate-300 leading-relaxed text-[11px]">
-            Your browser or device is running a cached PWA bundle from a previous deployment.
-            Click below to purge local cache storage, unregister the old worker, and load the newest build.
+            Your browser or device is running a cached bundle from a previous build.
+            Click below to purge local cache storage and load the newest build.
           </p>
           <div className="pt-1 flex items-center justify-between text-[11px]">
             <button
@@ -105,13 +158,12 @@ export const LoginScreen: React.FC = () => {
         <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-200/90 space-y-2 animate-in fade-in duration-200">
           <div className="flex items-center gap-2 font-semibold text-amber-300">
             <Database className="w-4 h-4 shrink-0" />
-            <span>Diagnosis A: Frontend Supabase Variables Missing</span>
+            <span>Supabase Configuration Notice</span>
           </div>
           <p className="text-slate-300 leading-relaxed text-[11px]">
-            The frontend build did not receive public Supabase variables.
-            Ensure <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_URL</code> and{' '}
-            <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_ANON_KEY</code> exist in{' '}
-            <span className="text-white font-medium">GitHub Settings → Secrets and variables → Actions → Variables</span>, then trigger a new GitHub Pages deployment.
+            Operating with graceful build fallbacks. For production authentication, ensure{' '}
+            <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_URL</code> and{' '}
+            <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_ANON_KEY</code> are set in your GitHub repository variables.
           </p>
           <div className="pt-1 flex items-center justify-between text-[11px]">
             <button
@@ -128,118 +180,21 @@ export const LoginScreen: React.FC = () => {
               title="Clears any stale PWA cache on this browser"
             >
               <RotateCcw className="w-3 h-3" />
-              <span>Purge Cache & Reload</span>
+              <span>Purge Cache</span>
             </button>
           </div>
         </div>
       );
     }
 
-    // Diagnosis B: Client Initialization Failed
-    if (diagnostics?.diagnosis === 'client_init_failed') {
+    if (successNotice) {
       return (
-        <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-xs text-rose-200/90 space-y-2 animate-in fade-in duration-200">
-          <div className="flex items-center gap-2 font-semibold text-rose-300">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>Diagnosis B: Supabase Client Initialization Failed</span>
+        <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-xs text-emerald-200 space-y-1.5 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 font-semibold text-emerald-300">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>Success</span>
           </div>
-          <p className="text-slate-300 leading-relaxed text-[11px]">
-            The environment variables were found, but the Supabase browser SDK failed to initialize.
-            Verify that <code className="text-rose-200 bg-rose-950/60 px-1 py-0.5 rounded font-mono">VITE_SUPABASE_URL</code> starts with <code className="text-slate-200">https://</code>.
-          </p>
-          <div className="pt-1 flex items-center justify-between text-[11px]">
-            <button
-              type="button"
-              onClick={() => setShowDiagnostics(true)}
-              className="text-rose-400 hover:text-rose-200 underline"
-            >
-              Inspect Diagnostics
-            </button>
-            <button
-              type="button"
-              onClick={handleRefreshDiagnostics}
-              className="text-slate-400 hover:text-white"
-            >
-              Retry Check
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    // Diagnosis C: Auth Service Unavailable / Network Error
-    if (diagnostics?.diagnosis === 'auth_service_unavailable') {
-      return (
-        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-200/90 space-y-2 animate-in fade-in duration-200">
-          <div className="flex items-center gap-2 font-semibold text-amber-300">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>Diagnosis C: Supabase Auth Service Unavailable</span>
-          </div>
-          <p className="text-slate-300 leading-relaxed text-[11px]">
-            The Supabase client is initialized, but the remote Auth API is unreachable.
-            Verify that your Supabase project is active (not paused) and check internet connectivity.
-          </p>
-          <div className="pt-1">
-            <button
-              type="button"
-              onClick={() => setShowDiagnostics(true)}
-              className="text-amber-400 hover:text-amber-200 underline text-[11px]"
-            >
-              View Reachability Status
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    // Diagnosis D: Google Provider Not Configured in Supabase
-    if (authStatus === 'oauth_not_configured' || diagnostics?.diagnosis === 'google_provider_not_configured') {
-      return (
-        <div className="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 text-xs text-indigo-200/90 space-y-2 animate-in fade-in duration-200">
-          <div className="flex items-center gap-2 font-semibold text-indigo-300">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>Diagnosis D: Google OAuth Not Enabled in Supabase</span>
-          </div>
-          <p className="text-slate-300 leading-relaxed text-[11px]">
-            The Supabase client is connected, but the Google provider is disabled in your Supabase dashboard.
-            Go to <span className="text-white font-medium">Supabase Dashboard → Authentication → Providers → Google</span> and toggle it ON.
-          </p>
-          <div className="pt-1">
-            <button
-              type="button"
-              onClick={() => {
-                setLocalError(null);
-                clearError();
-              }}
-              className="text-[11px] text-indigo-400 hover:text-indigo-200 underline"
-            >
-              Dismiss Notice
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    if (authStatus === 'user_cancelled') {
-      return (
-        <div className="p-3.5 rounded-2xl bg-slate-500/10 border border-slate-500/25 text-xs text-slate-300 space-y-1.5 animate-in fade-in duration-200">
-          <div className="flex items-center gap-2 font-semibold text-slate-200">
-            <Info className="w-4 h-4 shrink-0 text-slate-400" />
-            <span>Google Sign-In Cancelled</span>
-          </div>
-          <p className="text-slate-400 leading-relaxed text-[11px]">
-            The authentication prompt was closed or declined. Click Continue with Google to try again.
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              setLocalError(null);
-              clearError();
-            }}
-            className="text-[11px] text-slate-400 hover:text-white underline"
-          >
-            Dismiss
-          </button>
+          <p className="leading-relaxed text-[11px] text-slate-200">{successNotice}</p>
         </div>
       );
     }
@@ -249,7 +204,7 @@ export const LoginScreen: React.FC = () => {
         <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-xs text-rose-300 space-y-1.5 animate-in fade-in duration-200">
           <div className="flex items-center gap-2 font-semibold text-rose-200">
             <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-            <span>Authentication Error</span>
+            <span>Authentication Notice</span>
           </div>
           <p className="leading-relaxed text-[11px]">{displayError}</p>
           <div className="pt-1 flex items-center justify-between text-[11px]">
@@ -291,74 +246,142 @@ export const LoginScreen: React.FC = () => {
       />
 
       {/* Centered Authentication Card */}
-      <div className="relative w-full max-w-md bg-[#0c111e]/90 backdrop-blur-2xl border border-white/[0.08] rounded-3xl p-8 sm:p-10 shadow-[0_24px_64px_rgba(0,0,0,0.6)] space-y-6 animate-in fade-in zoom-in-95 duration-300">
+      <div className="relative w-full max-w-md bg-[#0c111e]/90 backdrop-blur-2xl border border-white/[0.08] rounded-3xl p-7 sm:p-9 shadow-[0_24px_64px_rgba(0,0,0,0.6)] space-y-6 animate-in fade-in zoom-in-95 duration-300">
         {/* Brand Header */}
-        <div className="text-center space-y-3">
+        <div className="text-center space-y-2.5">
           {/* Glowing Neural Companion Orb */}
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-500/20 via-cyan-500/15 to-teal-500/10 border border-emerald-500/30 shadow-[0_0_28px_rgba(16,185,129,0.25)] relative mb-2">
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-400 animate-pulse shadow-[0_0_12px_rgba(52,211,153,0.8)]" />
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-500/20 via-cyan-500/15 to-teal-500/10 border border-emerald-500/30 shadow-[0_0_28px_rgba(16,185,129,0.25)] relative mb-1">
+            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-400 animate-pulse shadow-[0_0_12px_rgba(52,211,153,0.8)]" />
             <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-emerald-500/20 to-cyan-500/20 blur-sm pointer-events-none" />
           </div>
 
-          <div className="space-y-1">
-            <h1 className="text-3xl font-extrabold tracking-tight text-white font-['Syne',sans-serif]">
+          <div className="space-y-0.5">
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white font-['Syne',sans-serif]">
               JEXA
             </h1>
-            <p className="text-xs font-semibold tracking-wider uppercase text-emerald-400/90 font-mono">
+            <p className="text-[11px] font-semibold tracking-wider uppercase text-emerald-400/90 font-mono">
               Powered by JOHNEY TEC
             </p>
           </div>
 
-          <p className="text-slate-400 text-sm font-normal pt-1">
-            Your personal AI companion.
+          <p className="text-slate-400 text-xs sm:text-sm font-normal">
+            Autonomous Cognitive AI Companion
           </p>
         </div>
 
-        {/* Categorized Notice (Missing Config, Not Enabled, Cancelled, Failure) */}
+        {/* Categorized Notice */}
         {renderCategorizedNotice()}
 
-        {/* Primary Action Section */}
-        <div className="space-y-3.5 pt-1">
-          {/* REAL Google OAuth Button */}
+        {/* Email & Password Authentication Form */}
+        <form onSubmit={handleLogin} className="space-y-4">
+          {/* Email Field */}
+          <div className="space-y-1.5 text-left">
+            <label className="block text-xs font-medium text-slate-300">
+              Email Address
+            </label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <Mail className="w-4 h-4" />
+              </div>
+              <input
+                type="email"
+                autoComplete="email"
+                autoCapitalize="none"
+                spellCheck="false"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@example.com"
+                className="w-full pl-10 pr-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.1] focus:border-emerald-500/50 focus:bg-white/[0.07] text-white placeholder-slate-500 text-sm outline-none transition-all duration-200"
+              />
+            </div>
+          </div>
+
+          {/* Password Field */}
+          <div className="space-y-1.5 text-left">
+            <label className="block text-xs font-medium text-slate-300">
+              Password
+            </label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <Lock className="w-4 h-4" />
+              </div>
+              <input
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••••••"
+                className="w-full pl-10 pr-11 py-3 rounded-xl bg-white/[0.04] border border-white/[0.1] focus:border-emerald-500/50 focus:bg-white/[0.07] text-white placeholder-slate-500 text-sm outline-none transition-all duration-200"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Action Buttons: Log In & Sign Up */}
+          <div className="pt-2 grid grid-cols-2 gap-3">
+            {/* Primary Log In Button */}
+            <button
+              type="submit"
+              disabled={submittingAction !== null}
+              className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-sm shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_25px_rgba(16,185,129,0.45)] transition-all duration-200 active:scale-[0.98] disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+            >
+              {submittingAction === 'login' ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-slate-950" />
+                  <span>Logging in...</span>
+                </>
+              ) : (
+                <>
+                  <LogIn className="w-4 h-4" />
+                  <span>Log In</span>
+                </>
+              )}
+            </button>
+
+            {/* Sign Up Button */}
+            <button
+              type="button"
+              onClick={handleSignUp}
+              disabled={submittingAction !== null}
+              className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 hover:text-white font-semibold text-sm border border-white/[0.1] transition-all duration-200 active:scale-[0.98] disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+            >
+              {submittingAction === 'signup' ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                  <span>Creating...</span>
+                </>
+              ) : (
+                <>
+                  <UserPlus className="w-4 h-4" />
+                  <span>Sign Up</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+
+        {/* Sandbox Guest Mode Option */}
+        <div className="pt-1">
           <button
             type="button"
-            onClick={handleGoogleSignIn}
-            disabled={isConnecting}
-            className="w-full flex items-center justify-center gap-3.5 px-5 py-3.5 rounded-2xl bg-white hover:bg-slate-100 text-slate-900 font-semibold text-sm shadow-[0_4px_16px_rgba(255,255,255,0.12)] hover:shadow-[0_6px_22px_rgba(255,255,255,0.2)] transition-all duration-200 active:scale-[0.98] disabled:opacity-60 cursor-pointer disabled:cursor-not-allowed group"
+            onClick={continueAsGuest}
+            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] text-slate-400 hover:text-slate-200 text-xs font-medium border border-white/[0.05] transition-all duration-200"
           >
-            {isConnecting ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin text-slate-700" />
-                <span>Connecting to Google...</span>
-              </>
-            ) : (
-              <>
-                {/* Official Google G Icon */}
-                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-                  <path
-                    fill="#4285F4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                  />
-                </svg>
-                <span>Continue with Google</span>
-              </>
-            )}
+            <span>Continue as Guest (Sandbox Mode)</span>
+            <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        {/* Collapsible Safe Diagnostics Section */}
+        {/* Collapsible Diagnostics Section */}
         <div className="pt-2 border-t border-white/[0.06]">
           <button
             type="button"
@@ -447,27 +470,23 @@ export const LoginScreen: React.FC = () => {
                 )}
               </div>
 
-              {/* Source & Redirect URI */}
+              {/* Config Source */}
               <div className="pt-2 border-t border-white/[0.04] text-[10px] space-y-1 text-slate-500">
                 <div className="flex items-center justify-between">
                   <span>Source:</span>
                   <span className="text-slate-300 capitalize">
                     {diagnostics?.configSource === 'vite_env'
-                      ? 'Vite Build Environment (VITE_*)'
+                      ? 'Vite Build Variables (VITE_*)'
                       : diagnostics?.configSource === 'backend_proxy'
                       ? 'Render Backend Proxy'
+                      : diagnostics?.configSource === 'fallback'
+                      ? 'Graceful Client Fallback'
                       : 'None'}
-                  </span>
-                </div>
-                <div className="truncate">
-                  <span className="block mb-0.5">OAuth Redirect URI:</span>
-                  <span className="text-slate-300 select-all" title={diagnostics?.redirectUrl}>
-                    {diagnostics?.redirectUrl || 'Detecting...'}
                   </span>
                 </div>
               </div>
 
-              {/* Build Version & Deployment Stamp (Requirement 6) */}
+              {/* Build Version & Deployment Stamp */}
               <div className="pt-2 border-t border-white/[0.04] text-[10px] space-y-1 text-slate-500">
                 <div className="flex items-center justify-between">
                   <span>JEXA Build:</span>
@@ -481,15 +500,9 @@ export const LoginScreen: React.FC = () => {
                     {diagnostics?.buildTime || 'local'}
                   </span>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span>Diagnosis:</span>
-                  <span className="text-slate-300 uppercase font-mono text-[9px]">
-                    {diagnostics?.diagnosis || 'checking'}
-                  </span>
-                </div>
               </div>
 
-              {/* Force PWA Cache Purge button (Requirement 5) */}
+              {/* Force PWA Cache Purge button */}
               <div className="pt-2 border-t border-white/[0.04]">
                 <button
                   type="button"
