@@ -32,7 +32,13 @@ export const ShareDialog: React.FC<ShareDialogProps> = ({
 
   const handleCopyMarkdown = () => {
     const md = messages
-      .map((m) => `### ${m.role === 'user' ? 'User' : 'JEXA'}\n\n${m.content}\n`)
+      .map((m) => {
+        let text = `### ${m.role === 'user' ? 'User' : 'JEXA'}\n\n${m.content}\n`;
+        if (m.metadata?.sources && m.metadata.sources.length > 0) {
+          text += `\n**Sources:**\n` + m.metadata.sources.map((s) => `- [${s.title}](${s.url}) (${s.domain || 'source'})`).join('\n') + `\n`;
+        }
+        return text;
+      })
       .join('\n---\n\n');
     navigator.clipboard.writeText(md);
     setCopiedMarkdown(true);

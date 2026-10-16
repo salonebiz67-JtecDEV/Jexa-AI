@@ -19,6 +19,8 @@ export interface WebSearchResultItem {
   content: string;
   score?: number;
   publishedDate?: string;
+  domain?: string;
+  faviconUrl?: string;
 }
 
 export interface ChatMessageMetadata {

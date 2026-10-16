@@ -54,8 +54,11 @@ CREATE TABLE IF NOT EXISTS public.messages (
     tokens INT,
     audio_url TEXT,
     is_development_mock BOOLEAN DEFAULT false,
+    metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON public.messages(conversation_id, created_at ASC);
 

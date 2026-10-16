@@ -10,9 +10,12 @@ import {
   ExternalLink,
   AlertCircle,
   Globe,
+  ThumbsUp,
+  ThumbsDown,
 } from 'lucide-react';
 import { ChatMessage, Project } from '../../../shared/types';
 import { cleanAndNormalizeResponseContent, repairUnclosedMarkdown } from '../../../ai/brain/response-cleaner';
+import { MessageSources } from './MessageSources';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -43,8 +46,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const [copied, setCopied] = useState(false);
   const [copiedCodeIndex, setCopiedCodeIndex] = useState<number | null>(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [feedback, setFeedback] = useState<'liked' | 'disliked' | null>(null);
 
   const isUser = message.role === 'user';
+
+  const handleLike = () => {
+    setFeedback((prev) => (prev === 'liked' ? null : 'liked'));
+  };
+
+  const handleDislike = () => {
+    setFeedback((prev) => (prev === 'disliked' ? null : 'disliked'));
+  };
 
   const handleCopyMessage = () => {
     navigator.clipboard.writeText(message.content);
@@ -340,57 +352,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
             {renderFormattedContent(message.content)}
 
-            {/* Dedicated Sources & Citations Section */}
-            {message.metadata?.sources && message.metadata.sources.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-white/[0.08] space-y-2">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <div className="flex items-center gap-1.5 font-medium text-slate-300">
-                    <Globe className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Sources & Citations</span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-                      {message.metadata.sources.length}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                  {message.metadata.sources.map((src, idx) => {
-                    let hostname = '';
-                    try {
-                      hostname = new URL(src.url).hostname.replace(/^www\./, '');
-                    } catch {
-                      hostname = 'source';
-                    }
-                    return (
-                      <a
-                        key={idx}
-                        href={src.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex flex-col p-2.5 rounded-xl bg-[#090d16] hover:bg-[#0f172a] border border-white/[0.06] hover:border-cyan-500/30 transition-all text-xs group/card shadow-sm cursor-pointer"
-                        title={src.title}
-                      >
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <span className="text-[10px] font-mono text-cyan-400/90 bg-cyan-950/50 px-1.5 py-0.5 rounded border border-cyan-800/30 truncate max-w-[150px]">
-                            {hostname}
-                          </span>
-                          <ExternalLink className="w-3 h-3 text-slate-500 group-hover/card:text-cyan-400 transition-colors shrink-0" />
-                        </div>
-                        <span className="font-medium text-slate-200 group-hover/card:text-white line-clamp-1">
-                          {src.title}
-                        </span>
-                        {src.content && (
-                          <span className="text-[11px] text-slate-400 line-clamp-2 mt-1 leading-relaxed">
-                            {src.content}
-                          </span>
-                        )}
-                      </a>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
             {/* Message Actions Bar */}
             <div className="flex items-center gap-1 pt-1 opacity-70 group-hover:opacity-100 transition-opacity text-slate-400">
               {/* Copy */}
@@ -439,6 +400,34 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 </button>
               )}
 
+              {/* Like */}
+              <button
+                onClick={handleLike}
+                title={feedback === 'liked' ? 'Liked' : 'Good response'}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                  feedback === 'liked'
+                    ? 'text-emerald-400 bg-emerald-500/15'
+                    : 'hover:text-white hover:bg-white/[0.06]'
+                }`}
+                aria-label="Like response"
+              >
+                <ThumbsUp className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Dislike */}
+              <button
+                onClick={handleDislike}
+                title={feedback === 'disliked' ? 'Disliked' : 'Poor response'}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                  feedback === 'disliked'
+                    ? 'text-rose-400 bg-rose-500/15'
+                    : 'hover:text-white hover:bg-white/[0.06]'
+                }`}
+                aria-label="Dislike response"
+              >
+                <ThumbsDown className="w-3.5 h-3.5" />
+              </button>
+
               {/* Regenerate */}
               {onRegenerate && (
                 <button
@@ -485,6 +474,12 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Sources section directly underneath assistant answer & action buttons */}
+            <MessageSources
+              sources={message.metadata?.sources}
+              searchQuery={message.metadata?.searchQuery}
+            />
           </div>
         )}
       </div>

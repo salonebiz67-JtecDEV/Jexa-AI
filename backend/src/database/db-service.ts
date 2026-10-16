@@ -35,6 +35,7 @@ class InMemoryDatabase {
   public memories: Map<string, MemoryItem> = new Map();
   public userProfiles: Map<string, any> = new Map();
   public userBrainProfiles: Map<string, BrainProfile> = new Map();
+  public messageMetadata: Map<string, any> = new Map();
   public brainProfile: BrainProfile;
 
   constructor() {
@@ -521,20 +522,27 @@ export class DatabaseService {
       }
 
       if (data) {
-        return data.map((m) => ({
-          id: m.id,
-          conversationId: m.conversation_id,
-          role: m.role,
-          content: m.content,
-          createdAt: m.created_at,
-          status: 'complete',
-          metadata: {
-            model: m.model,
-            tokens: m.tokens,
-            audioUrl: m.audio_url,
-            isDevelopmentMock: m.is_development_mock,
-          },
-        }));
+        return data.map((m) => {
+          const cachedMeta = memoryStore.messageMetadata.get(m.id) || {};
+          const dbMeta = (m.metadata && typeof m.metadata === 'object' ? m.metadata : {}) ||
+                         (m.metadata_json && typeof m.metadata_json === 'object' ? m.metadata_json : {});
+          return {
+            id: m.id,
+            conversationId: m.conversation_id,
+            role: m.role,
+            content: m.content,
+            createdAt: m.created_at,
+            status: 'complete',
+            metadata: {
+              model: m.model,
+              tokens: m.tokens,
+              audioUrl: m.audio_url,
+              isDevelopmentMock: m.is_development_mock,
+              ...dbMeta,
+              ...cachedMeta,
+            },
+          };
+        });
       }
     }
 
@@ -557,6 +565,10 @@ export class DatabaseService {
       metadata: message.metadata,
     };
 
+    if (fullMessage.metadata) {
+      memoryStore.messageMetadata.set(fullMessage.id, fullMessage.metadata);
+    }
+
     const client = getSupabaseClient();
     if (client) {
       // Ensure target conversation exists in Supabase before saving message
@@ -565,7 +577,7 @@ export class DatabaseService {
         await this.createConversation('New Conversation', undefined, DEFAULT_USER_ID);
       }
 
-      const { error } = await client.from('messages').insert({
+      const insertPayload: Record<string, any> = {
         id: fullMessage.id,
         conversation_id: validConvId,
         role: fullMessage.role,
@@ -575,7 +587,18 @@ export class DatabaseService {
         audio_url: message.metadata?.audioUrl || null,
         is_development_mock: message.metadata?.isDevelopmentMock ?? false,
         created_at: fullMessage.createdAt,
-      });
+      };
+
+      if (message.metadata) {
+        insertPayload.metadata = message.metadata;
+      }
+
+      let { error } = await client.from('messages').insert(insertPayload);
+      if (error && (error.message?.includes('metadata') || (error as any).code === '42703')) {
+        delete insertPayload.metadata;
+        const retry = await client.from('messages').insert(insertPayload);
+        error = retry.error;
+      }
 
       if (error) {
         console.error('[DatabaseService] Supabase saveMessage error:', error.message, error.details);

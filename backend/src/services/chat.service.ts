@@ -124,7 +124,7 @@ export class ChatService {
       const formattedSources = searchResults
         .map(
           (src, idx) =>
-            `[Source ${idx + 1}]\nTitle: ${src.title}\nURL: ${src.url}\nPublished: ${
+            `[Source ${idx + 1}]\nTitle: ${src.title}\nDomain: ${src.domain || ''}\nURL: ${src.url}\nPublished: ${
               src.publishedDate || 'Recent'
             }\nContent: ${src.content}`
         )
@@ -136,11 +136,12 @@ Retrieved at: ${new Date().toISOString()}
 
 ${formattedSources}
 
-CRITICAL CITATION AND ACCURACY INSTRUCTIONS:
+CRITICAL CITATION AND MULTI-SOURCE INSTRUCTIONS:
 1. Synthesize the live web search results above to answer the user's inquiry thoroughly and factually.
-2. Provide clickable markdown links for every cited source using the format: [Source Title](URL).
-3. Ground your statements strictly in the facts provided in the search results. Never invent, hallucinate, or fabricate URLs, sources, or claims.
-4. If the results do not fully address the question, acknowledge what is known from the sources and explain any missing details.
+2. If using information from multiple websites, ensure the factual claims in your answer are directly supported by these retrieved sources.
+3. Provide clickable markdown links for cited sources using the format: [Source Title](URL).
+4. Ground your statements strictly in the facts provided in the search results. Never invent, hallucinate, or fabricate URLs, sources, or claims.
+5. If the results do not fully address the question, acknowledge what is known from the sources and explain any missing details.
 === END SEARCH RESULTS ===`;
     } else if (searchPerformed && searchStatus === 'missing_key') {
       augmentedSystemPrompt += `\n\n=== LIVE WEB SEARCH NOTICE ===

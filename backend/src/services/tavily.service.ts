@@ -103,13 +103,30 @@ export class TavilyService {
       const data = await response.json();
       const rawResults = Array.isArray(data.results) ? data.results : [];
 
-      const sanitizedResults: WebSearchResultItem[] = rawResults.map((item: any) => ({
-        title: (item.title || 'Web Result').trim(),
-        url: (item.url || '').trim(),
-        content: (item.content || item.snippet || '').trim(),
-        score: typeof item.score === 'number' ? item.score : undefined,
-        publishedDate: item.published_date || item.publishedDate,
-      })).filter((item: WebSearchResultItem) => item.url && item.title);
+      const sanitizedResults: WebSearchResultItem[] = rawResults
+        .map((item: any) => {
+          const rawUrl = (item.url || '').trim();
+          let domain = '';
+          try {
+            domain = new URL(rawUrl).hostname.replace(/^www\./, '');
+          } catch {
+            domain = '';
+          }
+          const faviconUrl = domain
+            ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`
+            : undefined;
+
+          return {
+            title: (item.title || domain || 'Web Result').trim(),
+            url: rawUrl,
+            content: (item.content || item.snippet || item.raw_content || '').trim(),
+            score: typeof item.score === 'number' ? item.score : undefined,
+            publishedDate: item.published_date || item.publishedDate,
+            domain: domain || undefined,
+            faviconUrl,
+          };
+        })
+        .filter((item: WebSearchResultItem) => item.url && item.title);
 
       return {
         success: true,
