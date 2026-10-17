@@ -657,7 +657,7 @@ export const ChatPage: React.FC = () => {
               )}
 
               <Composer
-                onSendMessage={(text) => sendMessage(text)}
+                onSendMessage={(text, attachments) => sendMessage(text, undefined, attachments)}
                 onOpenLive={liveVoice.startLiveMode}
                 liveStatus={liveVoice.isOpen ? liveVoice.status : 'idle'}
                 disabled={isSending}

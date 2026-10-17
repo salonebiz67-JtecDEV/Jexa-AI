@@ -11,6 +11,8 @@ import {
   AlertTriangle,
   RotateCcw,
   Compass,
+  Brain,
+  BookmarkCheck,
 } from 'lucide-react';
 import { AIActivityStatus } from '../../../shared/types';
 
@@ -20,6 +22,8 @@ export interface TypingIndicatorProps {
     query?: string;
     sourcesCount?: number;
     error?: string;
+    memoryFact?: string;
+    memoryAction?: string;
   } | null;
   onRetry?: () => void;
 }
@@ -63,6 +67,53 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           dotColor: 'bg-teal-400',
           glow: 'shadow-[0_0_12px_rgba(45,212,191,0.25)]',
           pulseIcon: true,
+        };
+      case 'Checking relevant memories...':
+        return {
+          icon: Brain,
+          color: 'text-purple-400',
+          bg: 'bg-purple-500/10',
+          border: 'border-purple-500/30',
+          dotColor: 'bg-purple-400',
+          glow: 'shadow-[0_0_12px_rgba(168,85,247,0.25)]',
+          pulseIcon: true,
+        };
+      case 'Saving memory...':
+        return {
+          icon: Sparkles,
+          color: 'text-cyan-400',
+          bg: 'bg-cyan-500/10',
+          border: 'border-cyan-500/30',
+          dotColor: 'bg-cyan-400',
+          glow: 'shadow-[0_0_12px_rgba(6,182,212,0.25)]',
+          spinIcon: true,
+        };
+      case 'Memory saved':
+        return {
+          icon: CheckCircle2,
+          color: 'text-emerald-400',
+          bg: 'bg-emerald-500/20',
+          border: 'border-emerald-500/40',
+          dotColor: 'bg-emerald-400',
+          glow: 'shadow-[0_0_14px_rgba(16,185,129,0.35)]',
+        };
+      case 'Memory updated':
+        return {
+          icon: CheckCircle2,
+          color: 'text-teal-400',
+          bg: 'bg-teal-500/20',
+          border: 'border-teal-500/40',
+          dotColor: 'bg-teal-400',
+          glow: 'shadow-[0_0_14px_rgba(20,184,166,0.35)]',
+        };
+      case 'Memory unavailable':
+        return {
+          icon: AlertTriangle,
+          color: 'text-amber-400',
+          bg: 'bg-amber-500/10',
+          border: 'border-amber-500/30',
+          dotColor: 'bg-amber-400',
+          glow: 'shadow-[0_0_12px_rgba(245,158,11,0.25)]',
         };
       case 'Planning...':
         return {
@@ -223,6 +274,30 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           >
             <span className="text-slate-500 uppercase text-[9px] tracking-wider shrink-0 font-sans">Query:</span>
             <span className="truncate max-w-[260px] sm:max-w-xs text-cyan-300">"{details.query}"</span>
+          </motion.div>
+        )}
+
+        {/* Detailed Memory Fact Chip */}
+        {details?.memoryFact && (currentStatus === 'Saving memory...' || currentStatus === 'Memory saved' || currentStatus === 'Memory updated') && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            className="mt-1.5 pt-1.5 border-t border-white/[0.05] flex items-center gap-1.5 text-[11px] font-mono text-emerald-300/90 truncate"
+          >
+            <span className="text-slate-500 uppercase text-[9px] tracking-wider shrink-0 font-sans">Memory:</span>
+            <span className="truncate max-w-[260px] sm:max-w-xs text-emerald-300">"{details.memoryFact}"</span>
+          </motion.div>
+        )}
+
+        {/* Memory Error Chip if persistence failed */}
+        {details?.error && currentStatus === 'Memory unavailable' && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            className="mt-1.5 pt-1.5 border-t border-white/[0.05] flex items-center gap-1.5 text-[11px] font-mono text-amber-300/90 truncate"
+          >
+            <span className="text-amber-500 uppercase text-[9px] tracking-wider shrink-0 font-sans">Notice:</span>
+            <span className="truncate max-w-[260px] sm:max-w-xs text-amber-200">{details.error}</span>
           </motion.div>
         )}
       </div>

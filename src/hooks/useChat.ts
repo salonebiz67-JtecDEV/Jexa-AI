@@ -174,10 +174,23 @@ export function useChat() {
   );
 
   const sendMessage = useCallback(
-    async (text: string, personaId?: string) => {
-      if (typeof text !== 'string' || !text.trim() || isSending) return;
+    async (
+      text: string,
+      personaId?: string,
+      attachments?: { id: string; name: string; type: 'image' | 'file'; size?: string; url?: string }[]
+    ) => {
+      let finalMessage = (typeof text === 'string' ? text : '').trim();
+      if (attachments && attachments.length > 0) {
+        const attachList = attachments
+          .map((a) => `📎 ${a.type === 'image' ? 'Image' : 'File'}: ${a.name}${a.size ? ` (${a.size})` : ''}`)
+          .join('\n');
+        finalMessage = finalMessage
+          ? `${finalMessage}\n\n${attachList}`
+          : `[Attached ${attachments.length > 1 ? 'Files' : 'File'}]\n${attachList}`;
+      }
 
-      const trimmed = text.trim();
+      if (!finalMessage || isSending) return;
+
       const cleanPersona = typeof personaId === 'string' ? personaId : undefined;
       const tempId = `temp-${Date.now()}`;
 
@@ -186,7 +199,7 @@ export function useChat() {
         id: tempId,
         conversationId: currentConversationId || 'pending',
         role: 'user',
-        content: trimmed,
+        content: finalMessage,
         createdAt: new Date().toISOString(),
         status: 'complete',
       };
@@ -204,7 +217,7 @@ export function useChat() {
           {
             conversationId: currentConversationId || undefined,
             userId: user?.id,
-            message: trimmed,
+            message: finalMessage,
             personaId: cleanPersona,
             textProvider: savedTextProvider || undefined,
           },

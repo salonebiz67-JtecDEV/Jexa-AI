@@ -799,15 +799,17 @@ export class DatabaseService {
     if (client) {
       let query = client
         .from('memories')
-        .select('*');
-
-      if (userId) {
-        query = query.eq('user_id', validUserId);
-      }
+        .select('*')
+        .eq('user_id', validUserId);
 
       const { data, error } = await query.order('last_reinforced_at', { ascending: false });
 
-      if (!error && data) {
+      if (error) {
+        console.error('[DatabaseService] Supabase getMemories error:', error.message);
+        throw new Error(`Failed to retrieve memories from Supabase: ${error.message}`);
+      }
+
+      if (data) {
         return data.map((d) => ({
           id: d.id,
           userId: d.user_id,
@@ -854,7 +856,8 @@ export class DatabaseService {
         created_at: newMemory.createdAt,
       });
       if (error) {
-        console.warn('[DatabaseService] Failed to insert memory to Supabase:', error.message);
+        console.error('[DatabaseService] Failed to insert memory to Supabase:', error.message);
+        throw new Error(`Failed to persist memory to Supabase: ${error.message}`);
       }
     }
 
@@ -862,18 +865,78 @@ export class DatabaseService {
     return newMemory;
   }
 
+  public static async updateMemory(
+    id: string,
+    updates: Partial<MemoryItem>,
+    userId?: string
+  ): Promise<MemoryItem> {
+    const validId = toValidUUID(id);
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    const client = getSupabaseClient();
+
+    const updatePayload: Record<string, any> = {
+      last_reinforced_at: new Date().toISOString(),
+    };
+    if (updates.fact) updatePayload.fact = updates.fact;
+    if (updates.category) updatePayload.category = updates.category;
+    if (updates.confidence !== undefined) updatePayload.confidence = updates.confidence;
+
+    if (client) {
+      let query = client.from('memories').update(updatePayload).eq('id', validId);
+      if (userId) {
+        query = query.eq('user_id', validUserId);
+      }
+      const { data, error } = await query.select().single();
+      if (error) {
+        console.error('[DatabaseService] Failed to update memory in Supabase:', error.message);
+        throw new Error(`Failed to update memory in Supabase: ${error.message}`);
+      }
+      if (data) {
+        const updatedItem: MemoryItem = {
+          id: data.id,
+          userId: data.user_id,
+          category: data.category,
+          fact: data.fact,
+          confidence: parseFloat(data.confidence || '0.85'),
+          sourceConversationId: data.source_conversation_id,
+          lastReinforcedAt: data.last_reinforced_at,
+          createdAt: data.created_at,
+        };
+        memoryStore.memories.set(validId, updatedItem);
+        return updatedItem;
+      }
+    }
+
+    const existing = memoryStore.memories.get(validId) || memoryStore.memories.get(id);
+    if (!existing) {
+      throw new Error(`Memory ${id} not found.`);
+    }
+    const updated: MemoryItem = {
+      ...existing,
+      ...updates,
+      lastReinforcedAt: new Date().toISOString(),
+    };
+    memoryStore.memories.set(validId, updated);
+    return updated;
+  }
+
   public static async deleteMemory(id: string, userId?: string): Promise<boolean> {
     const validId = toValidUUID(id);
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
     const client = getSupabaseClient();
     if (client) {
       let query = client.from('memories').delete().eq('id', validId);
       if (userId) {
-        query = query.eq('user_id', toValidUUID(userId));
+        query = query.eq('user_id', validUserId);
       }
-      await query;
+      const { error } = await query;
+      if (error) {
+        console.error('[DatabaseService] Failed to delete memory from Supabase:', error.message);
+        throw new Error(`Failed to delete memory from Supabase: ${error.message}`);
+      }
     }
     const mem = memoryStore.memories.get(validId) || memoryStore.memories.get(id);
-    if (mem && userId && mem.userId !== toValidUUID(userId)) {
+    if (mem && userId && mem.userId !== validUserId) {
       return false;
     }
     memoryStore.memories.delete(validId);

@@ -4,6 +4,7 @@ export * from './memory';
 export * from './provider';
 export * from './features';
 export * from './database';
+export * from './diagnostics';
 
 export interface ApiResponse<T = any> {
   success: boolean;
