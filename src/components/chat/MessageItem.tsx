@@ -3,7 +3,6 @@ import {
   Copy,
   Check,
   Share2,
-  Pin,
   RefreshCw,
   Volume2,
   MoreHorizontal,
@@ -39,7 +38,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   onRegenerate,
   onSpeak,
   onShare,
-  onPinMessage,
   onAddToProject,
   onOpenArtifact,
 }) => {
@@ -70,9 +68,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     setTimeout(() => setCopiedCodeIndex(null), 2000);
   };
 
-  // Helper to parse markdown links [label](url), raw URLs, bold, inline code, and italics
+  // Helper to parse inline markdown: [label](url), raw URLs, bold, inline code, and italics
   const renderInlineFormatting = (text: string) => {
-    // Regex matching [label](url), `inline code`, **bold**, *italic*, and raw https URLs
     const tokenRegex = /(\[[^\]]+\]\(https?:\/\/[^\s\)]+\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|https?:\/\/[^\s<>"]+)/g;
     const parts = text.split(tokenRegex);
 
@@ -89,7 +86,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2 inline-flex items-center gap-0.5 font-medium transition-colors"
+            className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2 inline-flex items-center gap-0.5 font-medium transition-colors break-all"
           >
             <span>{label}</span>
             <ExternalLink className="w-3 h-3 inline-block ml-0.5 shrink-0 opacity-75" />
@@ -103,7 +100,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         return (
           <code
             key={idx}
-            className="px-1.5 py-0.5 rounded-md bg-white/[0.08] text-cyan-200 font-mono text-xs border border-white/[0.06]"
+            className="px-1.5 py-0.5 rounded-md bg-white/[0.08] text-cyan-200 font-mono text-[12px] border border-white/[0.06] break-all"
           >
             {code}
           </code>
@@ -144,9 +141,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             href={part}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2 inline-flex items-center gap-0.5 font-medium transition-colors"
+            className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2 inline-flex items-center gap-0.5 font-medium transition-colors break-all"
           >
-            <span className="truncate max-w-[220px]">{hostname || part}</span>
+            <span className="truncate max-w-[200px]">{hostname || part}</span>
             <ExternalLink className="w-3 h-3 inline-block ml-0.5 shrink-0 opacity-75" />
           </a>
         );
@@ -156,30 +153,37 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     });
   };
 
-  // Helper to parse code blocks, headings, lists, blockquotes vs regular text
+  // Robust line-by-line block markdown parser that prevents headings from running into paragraphs
   const renderFormattedContent = (content: string) => {
-    // Clean and repair unclosed code fences / escaped slashes for assistant responses
-    const normalized = isUser ? content : repairUnclosedMarkdown(cleanAndNormalizeResponseContent(content));
-    const parts = normalized.split(/(```[\s\S]*?```)/g);
+    const normalized = isUser
+      ? content
+      : repairUnclosedMarkdown(cleanAndNormalizeResponseContent(content));
 
-    return parts.map((part, index) => {
-      if (part.startsWith('```') && part.endsWith('```')) {
-        const lines = part.slice(3, -3).trim().split('\n');
+    // Split out code blocks first
+    const codeBlockTokens = normalized.split(/(```[\s\S]*?```)/g);
+
+    return codeBlockTokens.map((segment, segIdx) => {
+      // Code block
+      if (segment.startsWith('```') && segment.endsWith('```')) {
+        const lines = segment.slice(3, -3).trim().split('\n');
         const firstLine = lines[0].trim();
         const hasLang = /^[a-zA-Z0-9_-]+$/.test(firstLine);
         const language = hasLang ? firstLine : 'code';
         const codeContent = hasLang ? lines.slice(1).join('\n') : lines.join('\n');
 
-        const canPreview = ['html', 'svg', 'react', 'tsx', 'jsx', 'markdown', 'md'].includes(language.toLowerCase());
+        const canPreview = ['html', 'svg', 'react', 'tsx', 'jsx', 'markdown', 'md'].includes(
+          language.toLowerCase()
+        );
 
         return (
           <div
-            key={index}
-            className="my-3 rounded-xl overflow-hidden border border-white/[0.08] bg-[#06080e] shadow-sm"
+            key={segIdx}
+            className="my-3 rounded-2xl overflow-hidden border border-white/[0.08] bg-[#06080e] shadow-md"
           >
-            {/* Code Block Header */}
-            <div className="flex items-center justify-between px-3 py-1.5 bg-[#0b0f19] border-b border-white/[0.06] text-[11px] text-slate-400 font-mono">
-              <span className="uppercase tracking-wider">{language}</span>
+            <div className="flex items-center justify-between px-3.5 py-2 bg-[#0b0f1a] border-b border-white/[0.06] text-[11px] text-slate-400 font-mono">
+              <span className="uppercase tracking-wider font-semibold text-slate-300">
+                {language}
+              </span>
               <div className="flex items-center gap-2">
                 {canPreview && onOpenArtifact && (
                   <button
@@ -187,11 +191,16 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                       onOpenArtifact({
                         id: `art-${Date.now()}`,
                         title: `${language.toUpperCase()} Artifact`,
-                        type: language.toLowerCase() === 'html' ? 'html' : language.toLowerCase() === 'svg' ? 'svg' : 'markdown',
+                        type:
+                          language.toLowerCase() === 'html'
+                            ? 'html'
+                            : language.toLowerCase() === 'svg'
+                            ? 'svg'
+                            : 'markdown',
                         code: codeContent,
                       })
                     }
-                    className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer"
+                    className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer text-xs"
                     title="Open in contextual workspace"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
@@ -199,14 +208,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   </button>
                 )}
                 <button
-                  onClick={() => handleCopyCode(codeContent, index)}
-                  className="flex items-center gap-1 hover:text-slate-200 transition-colors cursor-pointer"
+                  onClick={() => handleCopyCode(codeContent, segIdx)}
+                  className="flex items-center gap-1 hover:text-slate-200 transition-colors cursor-pointer text-xs"
                   title="Copy code"
                 >
-                  {copiedCodeIndex === index ? (
+                  {copiedCodeIndex === segIdx ? (
                     <>
                       <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="text-emerald-400">Copied</span>
+                      <span className="text-emerald-400 font-medium">Copied</span>
                     </>
                   ) : (
                     <>
@@ -218,118 +227,207 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               </div>
             </div>
 
-            {/* Code Body */}
-            <pre className="p-3 text-xs font-mono text-slate-200 overflow-x-auto leading-relaxed">
+            <pre className="p-3.5 text-xs font-mono text-slate-200 overflow-x-auto leading-relaxed select-text">
               <code>{codeContent}</code>
             </pre>
           </div>
         );
       }
 
-      // Regular text paragraphs with headings, bold, links, lists & quotes support
-      return (
-        <div key={index} className="space-y-2">
-          {part.split('\n\n').map((paragraph, pIdx) => {
-            const trimmedPara = paragraph.trim();
-            if (!trimmedPara) return null;
+      // Non-code text segment: parse into discrete block types
+      const lines = segment.split('\n');
+      const blocks: React.ReactNode[] = [];
+      let currentParagraph: string[] = [];
+      let currentList: { type: 'ul' | 'ol'; items: string[] } | null = null;
+      let blockCounter = 0;
 
-            // Horizontal rule
-            if (trimmedPara === '---' || trimmedPara === '***' || trimmedPara === '___') {
-              return <hr key={pIdx} className="my-2.5 border-white/[0.08]" />;
-            }
-
-            // Headings
-            if (trimmedPara.startsWith('#### ')) {
-              return (
-                <h5 key={pIdx} className="text-xs font-semibold uppercase tracking-wider text-slate-300 mt-2.5 mb-1">
-                  {renderInlineFormatting(trimmedPara.replace(/^####\s+/, ''))}
-                </h5>
-              );
-            }
-            if (trimmedPara.startsWith('### ')) {
-              return (
-                <h4 key={pIdx} className="text-sm font-semibold text-cyan-200 mt-2.5 mb-1">
-                  {renderInlineFormatting(trimmedPara.replace(/^###\s+/, ''))}
-                </h4>
-              );
-            }
-            if (trimmedPara.startsWith('## ')) {
-              return (
-                <h3 key={pIdx} className="text-base font-semibold text-white mt-3 mb-1">
-                  {renderInlineFormatting(trimmedPara.replace(/^##\s+/, ''))}
-                </h3>
-              );
-            }
-            if (trimmedPara.startsWith('# ')) {
-              return (
-                <h2 key={pIdx} className="text-lg font-bold text-white mt-3.5 mb-1.5">
-                  {renderInlineFormatting(trimmedPara.replace(/^#\s+/, ''))}
-                </h2>
-              );
-            }
-
-            // Blockquote
-            if (trimmedPara.startsWith('>')) {
-              return (
-                <blockquote
-                  key={pIdx}
-                  className="pl-3 border-l-2 border-slate-600 text-slate-400 italic my-2"
-                >
-                  {renderInlineFormatting(trimmedPara.replace(/^>\s*/, ''))}
-                </blockquote>
-              );
-            }
-
-            // Bullet list
-            if (trimmedPara.startsWith('•') || trimmedPara.startsWith('- ') || trimmedPara.startsWith('* ')) {
-              const items = trimmedPara.split('\n');
-              return (
-                <ul key={pIdx} className="space-y-1 my-1.5 list-disc list-inside text-slate-300">
-                  {items.map((it, iIdx) => (
-                    <li key={iIdx}>
-                      {renderInlineFormatting(it.replace(/^[\s•\-\*]+/, ''))}
-                    </li>
-                  ))}
-                </ul>
-              );
-            }
-
-            // Numbered list
-            if (/^\d+\.\s/.test(trimmedPara)) {
-              const items = trimmedPara.split('\n');
-              return (
-                <ol key={pIdx} className="space-y-1 my-1.5 list-decimal list-inside text-slate-300">
-                  {items.map((it, iIdx) => (
-                    <li key={iIdx}>
-                      {renderInlineFormatting(it.replace(/^\d+\.\s*/, ''))}
-                    </li>
-                  ))}
-                </ol>
-              );
-            }
-
-            // Standard paragraph
-            return (
-              <p key={pIdx} className="leading-relaxed">
-                {renderInlineFormatting(trimmedPara)}
+      const flushParagraph = () => {
+        if (currentParagraph.length > 0) {
+          const text = currentParagraph.join(' ').trim();
+          if (text) {
+            blocks.push(
+              <p
+                key={`p-${segIdx}-${blockCounter++}`}
+                className="leading-relaxed text-slate-100 text-[14.5px] sm:text-[15px] break-words my-2"
+              >
+                {renderInlineFormatting(text)}
               </p>
             );
-          })}
+          }
+          currentParagraph = [];
+        }
+      };
+
+      const flushList = () => {
+        if (currentList && currentList.items.length > 0) {
+          if (currentList.type === 'ul') {
+            blocks.push(
+              <ul
+                key={`ul-${segIdx}-${blockCounter++}`}
+                className="space-y-2 my-2.5 pl-0.5 text-slate-200 text-[14.5px] sm:text-[15px]"
+              >
+                {currentList.items.map((it, idx) => (
+                  <li key={idx} className="flex items-start gap-2.5 leading-relaxed">
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 mt-2 shrink-0 shadow-[0_0_6px_rgba(6,182,212,0.4)]" />
+                    <span className="flex-1 min-w-0 break-words">{renderInlineFormatting(it)}</span>
+                  </li>
+                ))}
+              </ul>
+            );
+          } else {
+            blocks.push(
+              <ol
+                key={`ol-${segIdx}-${blockCounter++}`}
+                className="space-y-2 my-2.5 pl-0.5 text-slate-200 text-[14.5px] sm:text-[15px]"
+              >
+                {currentList.items.map((it, idx) => (
+                  <li key={idx} className="flex items-start gap-2.5 leading-relaxed">
+                    <span className="w-5 h-5 rounded-md bg-white/[0.07] border border-white/[0.08] text-cyan-300 font-mono text-[11px] font-medium flex items-center justify-center shrink-0 mt-0.5">
+                      {idx + 1}
+                    </span>
+                    <span className="flex-1 min-w-0 break-words">{renderInlineFormatting(it)}</span>
+                  </li>
+                ))}
+              </ol>
+            );
+          }
+          currentList = null;
+        }
+      };
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+
+        // Empty line flushes current blocks
+        if (!trimmed) {
+          flushParagraph();
+          flushList();
+          continue;
+        }
+
+        // Horizontal Rule
+        if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
+          flushParagraph();
+          flushList();
+          blocks.push(<hr key={`hr-${segIdx}-${blockCounter++}`} className="my-3 border-white/[0.08]" />);
+          continue;
+        }
+
+        // Headings: ALWAYS flushed as separate blocks
+        if (trimmed.startsWith('# ') || trimmed.startsWith('## ') || trimmed.startsWith('### ') || trimmed.startsWith('#### ')) {
+          flushParagraph();
+          flushList();
+
+          if (trimmed.startsWith('# ')) {
+            blocks.push(
+              <h2
+                key={`h1-${segIdx}-${blockCounter++}`}
+                className="text-lg sm:text-xl font-bold font-['Syne',sans-serif] text-white mt-4 mb-2 tracking-tight"
+              >
+                {renderInlineFormatting(trimmed.replace(/^#\s+/, ''))}
+              </h2>
+            );
+          } else if (trimmed.startsWith('## ')) {
+            blocks.push(
+              <h3
+                key={`h2-${segIdx}-${blockCounter++}`}
+                className="text-base sm:text-lg font-bold font-['Syne',sans-serif] text-cyan-200 mt-4 mb-1.5 tracking-tight"
+              >
+                {renderInlineFormatting(trimmed.replace(/^##\s+/, ''))}
+              </h3>
+            );
+          } else if (trimmed.startsWith('### ')) {
+            blocks.push(
+              <h4
+                key={`h3-${segIdx}-${blockCounter++}`}
+                className="text-[15px] sm:text-base font-bold font-['Syne',sans-serif] text-white mt-3.5 mb-1.5 flex items-center gap-1.5 tracking-tight"
+              >
+                {renderInlineFormatting(trimmed.replace(/^###\s+/, ''))}
+              </h4>
+            );
+          } else {
+            blocks.push(
+              <h5
+                key={`h4-${segIdx}-${blockCounter++}`}
+                className="text-xs font-semibold uppercase tracking-wider text-slate-300 mt-3 mb-1"
+              >
+                {renderInlineFormatting(trimmed.replace(/^####\s+/, ''))}
+              </h5>
+            );
+          }
+          continue;
+        }
+
+        // Blockquotes
+        if (trimmed.startsWith('>')) {
+          flushParagraph();
+          flushList();
+          blocks.push(
+            <blockquote
+              key={`bq-${segIdx}-${blockCounter++}`}
+              className="pl-3.5 py-1 border-l-2 border-cyan-500/50 bg-white/[0.02] rounded-r-lg text-slate-300 italic my-2 text-[14px]"
+            >
+              {renderInlineFormatting(trimmed.replace(/^>\s*/, ''))}
+            </blockquote>
+          );
+          continue;
+        }
+
+        // Unordered list item
+        if (/^[\*\-•]\s+/.test(trimmed)) {
+          flushParagraph();
+          const cleanItem = trimmed.replace(/^[\*\-•]\s+/, '');
+          if (currentList && currentList.type === 'ul') {
+            currentList.items.push(cleanItem);
+          } else {
+            flushList();
+            currentList = { type: 'ul', items: [cleanItem] };
+          }
+          continue;
+        }
+
+        // Ordered list item
+        if (/^\d+[\.\)]\s+/.test(trimmed)) {
+          flushParagraph();
+          const cleanItem = trimmed.replace(/^\d+[\.\)]\s+/, '');
+          if (currentList && currentList.type === 'ol') {
+            currentList.items.push(cleanItem);
+          } else {
+            flushList();
+            currentList = { type: 'ol', items: [cleanItem] };
+          }
+          continue;
+        }
+
+        // Regular line part of paragraph
+        if (currentList) {
+          flushList();
+        }
+        currentParagraph.push(trimmed);
+      }
+
+      flushParagraph();
+      flushList();
+
+      return (
+        <div key={segIdx} className="space-y-1">
+          {blocks}
         </div>
       );
     });
   };
 
   return (
-    <div className={`py-2 px-3 sm:px-4 group ${isUser ? 'flex justify-end' : 'flex justify-start'}`}>
-      <div className={`max-w-[90%] sm:max-w-[80%] space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
+    <div className={`py-2 px-2.5 sm:px-4 group ${isUser ? 'flex justify-end' : 'flex justify-start'}`}>
+      <div className={`max-w-[94%] sm:max-w-[85%] space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
         {/* User Message Bubble */}
         {isUser ? (
-          <div className="bg-[#1a2234] text-slate-100 px-3.5 py-2.5 rounded-2xl rounded-tr-sm border border-white/[0.08] shadow-sm text-sm">
-            <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+          <div className="bg-[#172133] text-slate-100 px-4 py-2.5 rounded-2xl rounded-tr-md border border-white/[0.09] shadow-sm text-[14.5px] sm:text-[15px]">
+            <p className="whitespace-pre-wrap leading-relaxed break-words">{message.content}</p>
           </div>
         ) : message.status === 'error' ? (
-          <div className="p-3.5 rounded-2xl bg-rose-950/25 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2.5 shadow-sm max-w-lg">
+          <div className="p-3.5 rounded-2xl bg-rose-950/30 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2.5 shadow-sm max-w-lg">
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
             <div className="space-y-1">
               <div className="font-semibold text-rose-300">AI Provider Notice</div>
@@ -337,32 +435,45 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             </div>
           </div>
         ) : (
-          /* AI Message Content */
-          <div className="space-y-1.5 text-slate-200 text-sm">
-            {/* Live Web Search Badge if search was performed */}
+          /* Assistant Message Content */
+          <div className="space-y-1 text-slate-200 text-[14.5px] sm:text-[15px]">
+            {/* Live Web Search indicator chip */}
             {message.metadata?.searchQuery && (
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-[11px] font-medium text-cyan-300 mb-1">
-                <Globe className="w-3 h-3 text-cyan-400 animate-spin-slow" />
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-[11px] font-medium text-cyan-300 mb-1.5">
+                <Globe className="w-3 h-3 text-cyan-400" />
                 <span>Live Web Search:</span>
-                <span className="text-white font-mono truncate max-w-[240px]">
+                <span className="text-white font-mono truncate max-w-[220px]">
                   "{message.metadata.searchQuery}"
                 </span>
               </div>
             )}
 
+            {/* Rendered Markdown Body */}
             {renderFormattedContent(message.content)}
 
-            {/* Message Actions Bar */}
-            <div className="flex items-center gap-1 pt-1 opacity-70 group-hover:opacity-100 transition-opacity text-slate-400">
+            {/* Action Buttons Bar */}
+            <div className="flex items-center gap-1 pt-1.5 opacity-80 group-hover:opacity-100 transition-opacity text-slate-400 text-xs">
               {/* Copy */}
               <button
                 onClick={handleCopyMessage}
                 title="Copy response"
                 className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
-                aria-label="Copy message"
+                aria-label="Copy response"
               >
                 {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
               </button>
+
+              {/* Text-to-Speech */}
+              {onSpeak && (
+                <button
+                  onClick={() => onSpeak(message.content)}
+                  title="Read aloud"
+                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
+                  aria-label="Read response aloud"
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                </button>
+              )}
 
               {/* Share */}
               {onShare && (
@@ -370,33 +481,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   onClick={() => onShare(message.content)}
                   title="Share response"
                   className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
-                  aria-label="Share message"
+                  aria-label="Share response"
                 >
                   <Share2 className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              {/* Pin */}
-              {onPinMessage && (
-                <button
-                  onClick={() => onPinMessage(message.id)}
-                  title="Pin message"
-                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
-                  aria-label="Pin message"
-                >
-                  <Pin className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              {/* Speak */}
-              {onSpeak && (
-                <button
-                  onClick={() => onSpeak(message.content)}
-                  title="Read aloud"
-                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
-                  aria-label="Read message aloud"
-                >
-                  <Volume2 className="w-3.5 h-3.5" />
                 </button>
               )}
 
@@ -440,7 +527,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 </button>
               )}
 
-              {/* More / Add to Project */}
+              {/* Add to Project */}
               {projects.length > 0 && onAddToProject && (
                 <div className="relative">
                   <button
@@ -475,7 +562,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               )}
             </div>
 
-            {/* Sources section directly underneath assistant answer & action buttons */}
+            {/* Collapsible ChatGPT-style Sources section directly underneath answer and action buttons */}
             <MessageSources
               sources={message.metadata?.sources}
               searchQuery={message.metadata?.searchQuery}

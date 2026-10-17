@@ -102,31 +102,78 @@ export class TavilyService {
 
       const data = await response.json();
       const rawResults = Array.isArray(data.results) ? data.results : [];
+      const seenUrls = new Set<string>();
+      const seenTitles = new Set<string>();
 
-      const sanitizedResults: WebSearchResultItem[] = rawResults
-        .map((item: any) => {
-          const rawUrl = (item.url || '').trim();
-          let domain = '';
-          try {
-            domain = new URL(rawUrl).hostname.replace(/^www\./, '');
-          } catch {
-            domain = '';
-          }
-          const faviconUrl = domain
-            ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`
-            : undefined;
+      const boilerplatePatterns = [
+        /enable\s+javascript/i,
+        /skip\s+to\s+(main\s+)?content/i,
+        /checking\s+your\s+browser/i,
+        /verify\s+you\s+are\s+(a\s+)?human/i,
+        /cloudflare\s+ray/i,
+        /access\s+denied/i,
+        /403\s+forbidden/i,
+        /page\s+not\s+found/i,
+      ];
 
-          return {
-            title: (item.title || domain || 'Web Result').trim(),
-            url: rawUrl,
-            content: (item.content || item.snippet || item.raw_content || '').trim(),
-            score: typeof item.score === 'number' ? item.score : undefined,
-            publishedDate: item.published_date || item.publishedDate,
-            domain: domain || undefined,
-            faviconUrl,
-          };
-        })
-        .filter((item: WebSearchResultItem) => item.url && item.title);
+      const sanitizedResults: WebSearchResultItem[] = [];
+
+      for (const item of rawResults) {
+        const rawUrl = (item.url || '').trim();
+        if (!rawUrl) continue;
+
+        // Normalize URL for deduplication
+        let normalizedUrl = rawUrl;
+        let domain = '';
+        try {
+          const parsed = new URL(rawUrl);
+          domain = parsed.hostname.replace(/^www\./, '');
+          parsed.searchParams.delete('utm_source');
+          parsed.searchParams.delete('utm_medium');
+          parsed.searchParams.delete('utm_campaign');
+          parsed.searchParams.delete('utm_term');
+          parsed.searchParams.delete('utm_content');
+          parsed.hash = '';
+          normalizedUrl = parsed.toString().replace(/\/+$/, '');
+        } catch {
+          domain = '';
+        }
+
+        if (seenUrls.has(normalizedUrl)) continue;
+        seenUrls.add(normalizedUrl);
+
+        let title = (item.title || domain || 'Web Result').trim();
+        // Strip trailing site brand duplicate (e.g. "Headline - BBC News" when domain is bbc.com)
+        if (domain) {
+          const siteName = domain.split('.')[0];
+          const brandRegex = new RegExp(`\\s*[-|–—:]\\s*${siteName}.*$`, 'i');
+          title = title.replace(brandRegex, '').trim() || title;
+        }
+
+        const titleKey = title.toLowerCase().slice(0, 40);
+        if (seenTitles.has(titleKey)) continue;
+        seenTitles.add(titleKey);
+
+        let content = (item.content || item.snippet || item.raw_content || '').trim();
+        const hasBoilerplate = boilerplatePatterns.some((pattern) => pattern.test(content));
+        if (hasBoilerplate && content.length < 120) {
+          content = '';
+        }
+
+        const faviconUrl = domain
+          ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`
+          : undefined;
+
+        sanitizedResults.push({
+          title,
+          url: rawUrl,
+          content,
+          score: typeof item.score === 'number' ? item.score : undefined,
+          publishedDate: item.published_date || item.publishedDate,
+          domain: domain || undefined,
+          faviconUrl,
+        });
+      }
 
       return {
         success: true,

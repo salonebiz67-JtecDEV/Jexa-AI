@@ -625,7 +625,7 @@ export const ChatPage: React.FC = () => {
             </main>
 
             {/* ONE Primary Compact Floating Composer */}
-            <footer className="shrink-0 bg-gradient-to-t from-[#07090e] via-[#07090e]/80 to-transparent">
+            <footer className="sticky bottom-0 z-20 shrink-0 bg-gradient-to-t from-[#07090e] via-[#07090e]/95 to-transparent pt-1">
               {/* Voice Engine Fallback & Notification Pill */}
               {voiceNotification && (
                 <div className="max-w-3xl mx-auto px-4 sm:px-6 mb-2">

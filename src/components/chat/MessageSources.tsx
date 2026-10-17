@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Globe, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
+import { Globe, ExternalLink, ChevronDown, ChevronUp, Calendar } from 'lucide-react';
 import { WebSearchResultItem } from '../../../shared/types/chat';
 
 interface MessageSourcesProps {
@@ -8,67 +8,120 @@ interface MessageSourcesProps {
   searchQuery?: string;
 }
 
-const DEFAULT_VISIBLE_COUNT = 4;
-
 export const MessageSources: React.FC<MessageSourcesProps> = ({ sources, searchQuery }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
+  // Collapsed by default on mobile for clean ChatGPT feel, expandable on tap
+  const [isOpen, setIsOpen] = useState(false);
 
-  // Requirement 7: Never display empty section if no web search sources exist
+  // Requirement: Never display empty section if no web search sources exist
   if (!sources || sources.length === 0) {
     return null;
   }
 
-  const hasOverflow = sources.length > DEFAULT_VISIBLE_COUNT;
-  const displayedSources = isExpanded ? sources : sources.slice(0, DEFAULT_VISIBLE_COUNT);
+  // Deduplicate sources by URL and domain
+  const deduplicatedSources = React.useMemo(() => {
+    const seen = new Set<string>();
+    const list: WebSearchResultItem[] = [];
+    for (const s of sources) {
+      if (!s.url) continue;
+      const key = s.url.toLowerCase().replace(/\/+$/, '');
+      if (!seen.has(key)) {
+        seen.add(key);
+        list.push(s);
+      }
+    }
+    return list;
+  }, [sources]);
+
+  // Distinct domains for compact preview bar
+  const previewDomains = React.useMemo(() => {
+    const domains: string[] = [];
+    for (const s of deduplicatedSources) {
+      let d = s.domain;
+      if (!d) {
+        try {
+          d = new URL(s.url).hostname.replace(/^www\./, '');
+        } catch {
+          d = '';
+        }
+      }
+      if (d && !domains.includes(d)) {
+        domains.push(d);
+      }
+    }
+    return domains.slice(0, 3);
+  }, [deduplicatedSources]);
 
   return (
-    <div className="mt-3 pt-2.5 border-t border-white/[0.08] space-y-2">
-      {/* Header bar */}
-      <div className="flex items-center justify-between text-xs text-slate-400">
-        <div className="flex items-center gap-1.5 font-medium text-slate-300">
-          <div className="w-5 h-5 rounded-md bg-cyan-500/10 border border-cyan-500/25 flex items-center justify-center text-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.15)]">
+    <div className="mt-3 pt-2.5 border-t border-white/[0.08] select-none">
+      {/* Clickable Collapsible Bar Header (ChatGPT style) */}
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between p-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] hover:border-cyan-500/25 transition-all duration-150 cursor-pointer text-left group"
+        aria-expanded={isOpen}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-5 h-5 rounded-md bg-cyan-500/10 border border-cyan-500/25 flex items-center justify-center text-cyan-400 shrink-0 shadow-[0_0_8px_rgba(6,182,212,0.15)]">
             <Globe className="w-3 h-3" />
           </div>
-          <span className="font-['Syne',sans-serif] tracking-wide text-white text-[12px]">Sources</span>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-            {sources.length} {sources.length === 1 ? 'source' : 'sources'}
-          </span>
+
+          <div className="flex items-center gap-1.5 truncate">
+            <span className="font-['Syne',sans-serif] font-bold text-white text-xs tracking-wide">
+              Sources
+            </span>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shrink-0">
+              {deduplicatedSources.length} {deduplicatedSources.length === 1 ? 'source' : 'sources'}
+            </span>
+
+            {/* Quick domain preview when collapsed */}
+            {!isOpen && previewDomains.length > 0 && (
+              <span className="text-[11px] text-slate-400 hidden sm:inline truncate ml-1 font-mono">
+                • {previewDomains.join(', ')}
+                {deduplicatedSources.length > previewDomains.length && ` +${deduplicatedSources.length - previewDomains.length} more`}
+              </span>
+            )}
+          </div>
         </div>
 
-        {searchQuery && (
-          <span className="text-[11px] text-slate-500 hidden sm:inline truncate max-w-[200px]" title={searchQuery}>
-            query: "{searchQuery}"
+        <div className="flex items-center gap-1.5 text-xs text-slate-400 group-hover:text-cyan-300 shrink-0 ml-2">
+          <span className="text-[11px] hidden xs:inline">
+            {isOpen ? 'Collapse' : 'View sources'}
           </span>
-        )}
-      </div>
-
-      {/* Sources Grid: mobile 1 col, tablet/desktop 2 cols */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-        <AnimatePresence initial={false}>
-          {displayedSources.map((src, idx) => (
-            <SourceCard key={`${src.url}-${idx}`} source={src} index={idx} />
-          ))}
-        </AnimatePresence>
-      </div>
-
-      {/* Expand / Collapse toggle if there are many sources */}
-      {hasOverflow && (
-        <button
-          type="button"
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.08] hover:border-cyan-500/30 text-xs text-slate-300 hover:text-cyan-300 font-medium transition-all duration-150 cursor-pointer group"
-          aria-expanded={isExpanded}
-        >
-          <span>
-            {isExpanded ? 'Show fewer sources' : `View all ${sources.length} sources`}
-          </span>
-          {isExpanded ? (
-            <ChevronUp className="w-3.5 h-3.5 text-slate-400 group-hover:text-cyan-300 transition-colors" />
+          {isOpen ? (
+            <ChevronUp className="w-4 h-4 text-cyan-400 transition-transform" />
           ) : (
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400 group-hover:text-cyan-300 transition-colors" />
+            <ChevronDown className="w-4 h-4 text-slate-400 group-hover:text-cyan-400 transition-transform" />
           )}
-        </button>
-      )}
+        </div>
+      </button>
+
+      {/* Expanded Sources Grid */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="pt-2 space-y-2">
+              {searchQuery && (
+                <div className="text-[10px] text-slate-500 font-mono px-1">
+                  Verified query: "{searchQuery}"
+                </div>
+              )}
+
+              {/* Grid: 1 col on mobile, 2 cols on tablet/desktop */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {deduplicatedSources.map((src, idx) => (
+                  <SourceCard key={`${src.url}-${idx}`} source={src} index={idx} />
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -94,35 +147,43 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, index }) => {
 
   return (
     <motion.a
-      initial={{ opacity: 0, y: 6 }}
+      initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -4 }}
-      transition={{ duration: 0.18, delay: index * 0.03 }}
+      transition={{ duration: 0.15, delay: index * 0.02 }}
       href={source.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="group/card relative flex flex-col p-2.5 sm:p-3 rounded-xl bg-[#090d16]/90 hover:bg-[#0f172a] border border-white/[0.07] hover:border-cyan-500/35 hover:shadow-[0_0_16px_rgba(6,182,212,0.12)] transition-all duration-200 text-xs shadow-sm cursor-pointer select-none"
+      className="group/card relative flex flex-col p-2.5 sm:p-3 rounded-xl bg-[#090d16]/95 hover:bg-[#0f172a] border border-white/[0.07] hover:border-cyan-500/40 hover:shadow-[0_0_16px_rgba(6,182,212,0.14)] transition-all duration-150 text-xs shadow-sm cursor-pointer select-none"
       title={source.title}
     >
-      {/* Top row: Favicon + Domain pill + ExternalLink icon */}
-      <div className="flex items-center justify-between gap-2 mb-1.5">
+      {/* Top row: Favicon + Domain pill + Date (if verified) + ExternalLink */}
+      <div className="flex items-center justify-between gap-1.5 mb-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
           <FaviconIcon faviconUrl={faviconUrl} domain={domain} />
-          <span className="text-[10px] font-mono font-medium text-cyan-300/90 bg-cyan-950/60 px-1.5 py-0.5 rounded-md border border-cyan-800/40 truncate max-w-[160px]">
+          <span className="text-[10px] font-mono font-medium text-cyan-300 bg-cyan-950/70 px-1.5 py-0.5 rounded-md border border-cyan-800/40 truncate max-w-[130px]">
             {domain}
           </span>
         </div>
-        <ExternalLink className="w-3 h-3 text-slate-500 group-hover/card:text-cyan-400 group-hover/card:translate-x-0.5 transition-all shrink-0" />
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {source.publishedDate && (
+            <span className="text-[10px] text-slate-400 font-mono hidden xs:inline-flex items-center gap-1">
+              <Calendar className="w-2.5 h-2.5 text-slate-500" />
+              <span>{source.publishedDate}</span>
+            </span>
+          )}
+          <ExternalLink className="w-3.5 h-3.5 text-slate-500 group-hover/card:text-cyan-400 transition-colors" />
+        </div>
       </div>
 
-      {/* Page Title */}
-      <span className="font-medium text-slate-200 group-hover/card:text-white line-clamp-1 leading-snug">
+      {/* Article / Page Title */}
+      <span className="font-semibold text-slate-100 group-hover/card:text-white line-clamp-2 leading-snug">
         {source.title}
       </span>
 
-      {/* Relevant snippet */}
+      {/* Snippet without boilerplate */}
       {source.content && (
-        <span className="text-[11px] text-slate-400/90 line-clamp-2 mt-1 leading-relaxed font-normal">
+        <span className="text-[11px] text-slate-400/90 line-clamp-2 mt-1.5 leading-relaxed font-normal">
           {source.content}
         </span>
       )}
@@ -138,7 +199,7 @@ interface FaviconIconProps {
 const FaviconIcon: React.FC<FaviconIconProps> = ({ faviconUrl, domain }) => {
   const [hasError, setHasError] = useState(false);
 
-  // Requirement 10: Graceful fallback icon if favicon fails to load or is unavailable
+  // Graceful fallback icon if favicon fails to load or is unavailable
   if (!faviconUrl || hasError) {
     return (
       <div

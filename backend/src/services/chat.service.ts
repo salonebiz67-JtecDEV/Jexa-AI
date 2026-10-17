@@ -157,11 +157,12 @@ Retrieved at: ${new Date().toISOString()}
 ${formattedSources}
 
 CRITICAL CITATION AND MULTI-SOURCE INSTRUCTIONS:
-1. Synthesize the live web search results above to answer the user's inquiry thoroughly and factually.
-2. If using information from multiple websites, ensure the factual claims in your answer are directly supported by these retrieved sources.
-3. Provide clickable markdown links for cited sources using the format: [Source Title](URL).
-4. Ground your statements strictly in the facts provided in the search results. Never invent, hallucinate, or fabricate URLs, sources, or claims.
-5. If the results do not fully address the question, acknowledge what is known from the sources and explain any missing details.
+1. Synthesize the live web search results above to answer the user's inquiry thoroughly, naturally, and factually.
+2. Structure research and news updates into clearly spaced sections with readable headlines (e.g. ### Headline), concise factual summaries, and publication dates when verified.
+3. Keep the body text clean and readable: DO NOT dump raw URLs or repeat website links throughout your answer prose. The UI automatically displays a dedicated, collapsible, ChatGPT-style Sources section below your response with clickable cards.
+4. Only include direct markdown links [Source Title](URL) inside your text if the user explicitly asked for links or websites.
+5. Ground your statements strictly in the facts provided in the search results. Accurately distinguish confirmed facts from uncertainty or unverified reports. Never fabricate headlines, dates, citations, or summaries.
+6. If the results do not fully address the question, honestly acknowledge what is known from the sources and note any missing details.
 === END SEARCH RESULTS ===`;
     } else if (searchPerformed && searchStatus === 'missing_key') {
       augmentedSystemPrompt += `\n\n=== LIVE WEB SEARCH NOTICE ===
