@@ -53,7 +53,19 @@ export class DevelopmentTextAIProvider implements ITextAIProvider {
       return `Here is the real-time breakdown for **"${query}"**:\n\nBased on live web sources, latest data has been retrieved and synthesized. You can check the clickable citations and source cards below for verified references.\n\n• **Status**: Live data fetched successfully.\n• **Follow-up**: Feel free to ask for deeper statistics, game highlights, or background details.`;
     }
 
-    // 2. Direct response to name-call ("Jexa", "Hey Jexa", "Yo Jexa", etc.)
+    // 2. Sierra Leone & EDSA Utilities & Outages (Strict local accuracy)
+    if (
+      lower.includes('edsa') ||
+      ((lower.includes('sierra leone') || lower.includes('freetown') || lower.includes('salone')) &&
+        (lower.includes('outage') || lower.includes('light') || lower.includes('power') || lower.includes('blackout') || lower.includes('electricity')))
+    ) {
+      if (request.systemPrompt.includes('=== LIVE WEB SEARCH RESULTS ===')) {
+        return `Regarding the **EDSA electricity situation in Sierra Leone**:\n\nBased on verified local reports and EDSA (Electricity Distribution and Supply Authority) announcements retrieved from current sources:\n\n• **Authority**: Electricity Distribution and Supply Authority (EDSA), Sierra Leone.\n• **Context**: You can inspect the verified local news and official source cards below for specific outage updates and announcements.\n• **Note**: Outage restoration and load shedding schedules should always be cross-referenced with official EDSA public notices from the Ministry of Energy.`;
+      }
+      return `Regarding **EDSA in Sierra Leone** (Electricity Distribution and Supply Authority):\n\nI could not find a confirmed recent announcement from EDSA or official authorities regarding this specific outage. To get verified real-time status without relying on unverified rumors, check official updates directly from EDSA or the Ministry of Energy of Sierra Leone.`;
+    }
+
+    // 3. Direct response to name-call ("Jexa", "Hey Jexa", "Yo Jexa", etc.)
     const isNameCall = /^(?:hey\s+|yo\s+|hi\s+|what's\s+up\s+)?jexa[!?.]*$/i.test(lower);
     if (isNameCall) {
       const nameCallReplies = [

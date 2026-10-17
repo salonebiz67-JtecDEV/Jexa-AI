@@ -3,6 +3,7 @@ export interface SearchDecision {
   query: string;
   reason?: string;
   category:
+    | 'sierra_leone_local'
     | 'explicit_search'
     | 'current_events'
     | 'sports_scores'
@@ -16,7 +17,10 @@ export class SearchDecisionService {
   /**
    * Evaluates incoming user message to intelligently decide whether live web search is required.
    */
-  public static evaluate(message: string): SearchDecision {
+  public static evaluate(
+    message: string,
+    userContext?: { location?: string; timezone?: string; userName?: string }
+  ): SearchDecision {
     const raw = (message || '').trim();
     if (!raw) {
       return { shouldSearch: false, query: '', category: 'none', reason: 'Empty message' };
@@ -45,7 +49,18 @@ export class SearchDecisionService {
       return { shouldSearch: false, query: '', category: 'none', reason: 'General coding logic/algorithm question' };
     }
 
-    // 2. Explicit search commands: Highest priority
+    // 2. Sierra Leone Local Search & EDSA Utilities: Prioritize Sierra Leone and EDSA
+    const slMatch = this.checkSierraLeoneAndEDSA(lower, raw, userContext);
+    if (slMatch.matches) {
+      return {
+        shouldSearch: true,
+        query: slMatch.query,
+        category: 'sierra_leone_local',
+        reason: 'Sierra Leone local utility (EDSA), electricity outage, or official announcement',
+      };
+    }
+
+    // 3. Explicit search commands: Highest priority
     const explicitMatch = this.extractExplicitSearch(raw);
     if (explicitMatch) {
       return {
@@ -56,7 +71,7 @@ export class SearchDecisionService {
       };
     }
 
-    // 3. Sports & Live match results
+    // 4. Sports & Live match results
     const sportsMatch = this.checkSportsAndScores(lower, raw);
     if (sportsMatch.matches) {
       return {
@@ -227,6 +242,44 @@ export class SearchDecisionService {
     if (isRecentTech) {
       return { matches: true, query: this.cleanQuery(raw) };
     }
+    return { matches: false, query: '' };
+  }
+
+  private static checkSierraLeoneAndEDSA(
+    lower: string,
+    raw: string,
+    userContext?: { location?: string; timezone?: string; userName?: string }
+  ): { matches: boolean; query: string } {
+    const hasEDSA = /\bedsa\b/i.test(lower) || lower.includes('electricity distribution and supply authority');
+    const isSierraLeoneLocation = Boolean(
+      userContext?.location && /sierra\s+leone|freetown|salone/i.test(userContext.location)
+    );
+    const mentionsSierraLeone = /(sierra\s+leone|freetown|salone|bo\s+city|makeni|kenema|kono|karpowership|bumbuna|egtc|npa)/i.test(lower);
+    const mentionsOutageOrPower = /(power\s+outage|blackout|electricity\s+outage|light\s+off|no\s+light|power\s+cut|load\s+shedding|current\s+off|electricity\s+status|power\s+status|why\s+is\s+there\s+no\s+power|why\s+did\s+power\s+go\s+off)/i.test(lower);
+    const mentionsGovOrLocalIssues = /(government\s+announcement|ministry\s+of\s+energy|state\s+house|parliament|fuel\s+price|water\s+shortage|guma\s+valley|public\s+notice)/i.test(lower);
+
+    // Case 1: EDSA mentioned directly
+    if (hasEDSA) {
+      // Disambiguate to Sierra Leone EDSA to avoid confusion with EDSA highway/revolution in Manila, Philippines
+      const clean = this.cleanQuery(raw).replace(/\bedsa\b/gi, '').trim();
+      const query = `EDSA Sierra Leone electricity outage news announcement ${clean}`.trim();
+      return { matches: true, query };
+    }
+
+    // Case 2: Sierra Leone context + Outage or Power issue
+    if ((mentionsSierraLeone || isSierraLeoneLocation) && mentionsOutageOrPower) {
+      const clean = this.cleanQuery(raw);
+      const query = `EDSA Sierra Leone electricity blackout power outage update ${clean}`.trim();
+      return { matches: true, query };
+    }
+
+    // Case 3: Sierra Leone local announcements or government notices
+    if (mentionsSierraLeone && (mentionsGovOrLocalIssues || mentionsOutageOrPower)) {
+      const clean = this.cleanQuery(raw);
+      const query = `Sierra Leone official announcement news ${clean}`.trim();
+      return { matches: true, query };
+    }
+
     return { matches: false, query: '' };
   }
 

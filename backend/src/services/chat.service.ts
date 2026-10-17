@@ -57,7 +57,7 @@ export class ChatService {
     // 4. Planning & Intelligent Search Evaluation
     onStatusUpdate?.('Planning...');
 
-    const searchDecision = SearchDecisionService.evaluate(payload.message);
+    const searchDecision = SearchDecisionService.evaluate(payload.message, payload.userContext);
     let searchResults: WebSearchResultItem[] = [];
     let searchPerformed = false;
     let searchStatus: 'success' | 'failed' | 'missing_key' | 'unneeded' = 'unneeded';
@@ -119,6 +119,26 @@ export class ChatService {
 
     // 8. Inject Live Web Search context into system prompt if applicable
     let augmentedSystemPrompt = assembled.systemPrompt;
+
+    // Specialized Sierra Leone & EDSA verification instructions
+    const isSierraLeoneOrEDSA =
+      searchDecision.category === 'sierra_leone_local' ||
+      /\bedsa\b/i.test(payload.message) ||
+      /(sierra\s+leone|freetown|salone)/i.test(payload.message);
+
+    if (isSierraLeoneOrEDSA) {
+      augmentedSystemPrompt += `\n\n=== SIERRA LEONE & EDSA VERIFICATION DIRECTIVES ===
+1. GEOGRAPHIC & UTILITY DISAMBIGUATION:
+   "EDSA" refers strictly to the Electricity Distribution and Supply Authority of Sierra Leone (West Africa), NOT the Epifanio de los Santos Avenue / highway in Manila, Philippines. Do not confuse Sierra Leone with the Philippines or another country.
+2. OFFICIAL SOURCES FIRST:
+   Prioritize official announcements from EDSA Sierra Leone, the Ministry of Energy Sierra Leone, and verified Sierra Leone news organizations (e.g. Awoko, Sierra Leone Telegraph, Calabash, Politico SL, Concord Times).
+3. FACT VERIFICATION & ACCURACY:
+   - Check publication dates and clearly distinguish whether an announcement is recent/current or historical.
+   - Distinguish confirmed official EDSA announcements from rumors or unverified social media posts.
+   - NEVER invent or speculate on outage schedules, restoration times, emergency hotline numbers, or fake official quotes.
+   - If reliable current information cannot be confirmed from the retrieved sources, tell the user honestly: "I could not find a confirmed recent announcement from EDSA or official authorities regarding this outage."
+=== END DIRECTIVES ===`;
+    }
 
     if (searchPerformed && searchStatus === 'success' && searchResults.length > 0) {
       const formattedSources = searchResults
