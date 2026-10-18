@@ -424,7 +424,15 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         {/* User Message Bubble */}
         {isUser ? (
           <div className="bg-[#172133] text-slate-100 px-4 py-2.5 rounded-2xl rounded-tr-md border border-white/[0.09] shadow-sm text-[14.5px] sm:text-[15px]">
-            <p className="whitespace-pre-wrap leading-relaxed break-words">{message.content}</p>
+            {/\[web\s+search\s+requested\]/i.test(message.content) && (
+              <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-[11px] font-medium text-cyan-300 mb-1.5">
+                <Globe className="w-3 h-3 text-cyan-400" />
+                <span>Search Web</span>
+              </div>
+            )}
+            <p className="whitespace-pre-wrap leading-relaxed break-words">
+              {message.content.replace(/\[web\s+search\s+requested\]\s*/gi, '').trim()}
+            </p>
           </div>
         ) : message.status === 'error' ? (
           <div className="p-3.5 rounded-2xl bg-rose-950/30 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2.5 shadow-sm max-w-lg">
@@ -441,7 +449,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             {message.metadata?.searchQuery && (
               <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-[11px] font-medium text-cyan-300 mb-1.5">
                 <Globe className="w-3 h-3 text-cyan-400" />
-                <span>Live Web Search:</span>
+                <span>
+                  {message.metadata.searchTrigger === 'manual'
+                    ? 'Manual Search:'
+                    : 'Live Research:'}
+                </span>
                 <span className="text-white font-mono truncate max-w-[220px]">
                   "{message.metadata.searchQuery}"
                 </span>

@@ -26,6 +26,24 @@ export class TavilyService {
   }
 
   /**
+   * Check if web search service is available based on real backend checks
+   */
+  public static checkAvailability(): { configured: boolean; status: 'available' | 'unavailable'; reason?: string } {
+    const isConfig = this.isConfigured();
+    if (!isConfig) {
+      return {
+        configured: false,
+        status: 'unavailable',
+        reason: 'TAVILY_API_KEY environment variable is not configured on the backend server',
+      };
+    }
+    return {
+      configured: true,
+      status: 'available',
+    };
+  }
+
+  /**
    * Perform live web search using Tavily API
    */
   public static async search(

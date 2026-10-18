@@ -45,6 +45,9 @@ export interface ChatMessageMetadata {
   searchPerformed?: boolean;
   searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded';
   searchError?: string;
+  searchDecisionCategory?: string;
+  searchDecisionReason?: string;
+  searchTrigger?: 'manual' | 'automatic' | 'none';
 }
 
 export interface ChatMessage {

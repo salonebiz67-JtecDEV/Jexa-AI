@@ -46,21 +46,62 @@ export class DevelopmentTextAIProvider implements ITextAIProvider {
     const lower = trimmed.toLowerCase();
     const isVoice = request.systemPrompt.includes('VOICE MODALITY DIRECTIVES');
 
-    // 1. Live Web Search Results Grounding
+    // 1. System Self-Diagnostics Telemetry Response
+    if (request.systemPrompt.includes('=== VERIFIED SYSTEM SELF-DIAGNOSTICS (LIVE TELEMETRY) ===')) {
+      const dbMatch = request.systemPrompt.match(/Database Connectivity: ([^\n]+)/);
+      const memMatch = request.systemPrompt.match(/Memory Persistence Layer: ([^\n]+)/);
+      const textMatch = request.systemPrompt.match(/Selected Text AI Provider: ([^\n]+)/);
+      const voiceMatch = request.systemPrompt.match(/Selected Voice AI Provider: ([^\n]+)/);
+      const webMatch = request.systemPrompt.match(/Live Web Search \(Tavily\): ([^\n]+)/);
+
+      return `### System Diagnostics & Operational Status
+
+• **Database Connectivity**: ${dbMatch ? dbMatch[1] : 'Operational'}
+• **Memory Persistence**: ${memMatch ? memMatch[1] : 'Active'}
+• **Text AI Provider**: ${textMatch ? textMatch[1] : 'Active'}
+• **Voice AI Provider**: ${voiceMatch ? voiceMatch[1] : 'Active'}
+• **Live Web Search**: ${webMatch ? webMatch[1] : 'Checked'}
+
+All subsystems have been verified with live backend telemetry. System internals, credentials, and API keys remain strictly confidential.`;
+    }
+
+    // 2. Live Web Search Results Grounding & Synthesis
     if (request.systemPrompt.includes('=== LIVE WEB SEARCH RESULTS ===')) {
       const matchQuery = request.systemPrompt.match(/Search Query: "([^"]+)"/);
       const query = matchQuery ? matchQuery[1] : trimmed;
-      return `Here is the real-time breakdown for **"${query}"**:\n\nBased on live web sources, latest data has been retrieved and synthesized. You can check the clickable citations and source cards below for verified references.\n\n• **Status**: Live data fetched successfully.\n• **Follow-up**: Feel free to ask for deeper statistics, game highlights, or background details.`;
+
+      return `### Live Research: ${query}
+
+Based on live web sources retrieved and verified in real time:
+
+• **Overview**: Real-time information has been gathered and synthesized for **"${query}"**.
+• **Key Findings**: The retrieved sources confirm current status and up-to-date reporting.
+• **Verified References**: You can explore the complete, clickable source citations in the collapsible **Sources** section below.`;
     }
 
-    // 2. Sierra Leone & EDSA Utilities & Outages (Strict local accuracy)
+    // 3. Live Web Search Missing Key or Error Notice
+    if (request.systemPrompt.includes('=== LIVE WEB SEARCH NOTICE ===')) {
+      const isMissing = request.systemPrompt.includes('TAVILY_API_KEY is not configured');
+      if (isMissing) {
+        return `Live web search is not currently active because **TAVILY_API_KEY** is not configured in backend environment variables.\n\nTo enable real-time internet search and clickable source cards, obtain a free API key at [tavily.com](https://tavily.com) and configure it in your deployment environment.\n\nHere is what I can tell you from baseline knowledge regarding your query.`;
+      }
+      return `Live web search encountered a temporary network issue. I am providing this answer from baseline knowledge. You can retry the search at any time.`;
+    }
+
+    // 4. Sierra Leone & EDSA Utilities & Outages (Strict local accuracy)
     if (
       lower.includes('edsa') ||
       ((lower.includes('sierra leone') || lower.includes('freetown') || lower.includes('salone')) &&
         (lower.includes('outage') || lower.includes('light') || lower.includes('power') || lower.includes('blackout') || lower.includes('electricity')))
     ) {
       if (request.systemPrompt.includes('=== LIVE WEB SEARCH RESULTS ===')) {
-        return `Regarding the **EDSA electricity situation in Sierra Leone**:\n\nBased on verified local reports and EDSA (Electricity Distribution and Supply Authority) announcements retrieved from current sources:\n\n• **Authority**: Electricity Distribution and Supply Authority (EDSA), Sierra Leone.\n• **Context**: You can inspect the verified local news and official source cards below for specific outage updates and announcements.\n• **Note**: Outage restoration and load shedding schedules should always be cross-referenced with official EDSA public notices from the Ministry of Energy.`;
+        return `### EDSA Electricity Situation in Sierra Leone
+
+Based on verified local reports and announcements from the Electricity Distribution and Supply Authority (EDSA) of Sierra Leone:
+
+• **Authority**: Electricity Distribution and Supply Authority (EDSA), Sierra Leone.
+• **Status**: Outage updates and load shedding schedules are actively monitored from official notices.
+• **Sources**: Check the verified Sierra Leone source cards below for specific local announcements.`;
       }
       return `Regarding **EDSA in Sierra Leone** (Electricity Distribution and Supply Authority):\n\nI could not find a confirmed recent announcement from EDSA or official authorities regarding this specific outage. To get verified real-time status without relying on unverified rumors, check official updates directly from EDSA or the Ministry of Energy of Sierra Leone.`;
     }

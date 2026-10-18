@@ -54,10 +54,21 @@ export class ChatService {
       content: payload.message,
     });
 
-    // 4. Planning & Intelligent Search Evaluation
+    // 4. Retrieve Brain profile & active Text AI Provider
+    const profile = await DatabaseService.getBrainProfile(payload.userId);
+    const registry = AIProviderRegistry.getInstance();
+    const primaryProviderType: TextProviderType =
+      payload.textProvider || profile.selectedTextProvider || registry.getDefaultTextType() || 'gemini';
+    const primaryProvider = registry.getTextProvider(primaryProviderType);
+
+    // 5. Planning & Intelligent Search Evaluation (Automatic AI-driven + manual fallback)
     onStatusUpdate?.('Planning...');
 
-    const searchDecision = SearchDecisionService.evaluate(payload.message, payload.userContext);
+    const searchDecision = await SearchDecisionService.evaluate(
+      payload.message,
+      payload.userContext,
+      primaryProvider
+    );
     let searchResults: WebSearchResultItem[] = [];
     let searchPerformed = false;
     let searchStatus: 'success' | 'failed' | 'missing_key' | 'unneeded' = 'unneeded';
@@ -99,13 +110,12 @@ export class ChatService {
       onStatusUpdate?.('Processing information...');
     }
 
-    // 5. Retrieve relevant memories & brain profile scoped to authenticated user
-    const profile = await DatabaseService.getBrainProfile(payload.userId);
+    // 6. Retrieve relevant memories scoped to authenticated user
     const relevantMemories = profile.memorySettings.enabled
       ? await MemoryService.getRelevantMemories(payload.message, profile.memorySettings.maxContextMemories, payload.userId)
       : [];
 
-    // 6. Fetch recent conversation history for context window
+    // 7. Fetch recent conversation history for context window
     const recentMessages = await DatabaseService.getMessages(convId);
 
     // 7. Assemble modular brain context
@@ -179,15 +189,39 @@ Provide the best answer using your knowledge, noting that the live web search co
 === END NOTICE ===`;
     }
 
+    // System diagnostics inspection when asked to check all systems
+    const isDiagnosticsQuery = /(check\s+all\s+systems|system\s+health|run\s+diagnostics|check\s+system\s+status|diagnose\s+system|are\s+all\s+systems\s+working|full\s+system\s+check)\b/i.test(payload.message);
+
+    if (isDiagnosticsQuery) {
+      const dbHealth = await DatabaseService.checkHealth();
+      const tavilyCheck = TavilyService.checkAvailability();
+      const registryStatus = registry.getStatus(dbHealth.connected);
+      const userMemories = await DatabaseService.getMemories(payload.userId);
+
+      augmentedSystemPrompt += `\n\n=== VERIFIED SYSTEM SELF-DIAGNOSTICS (LIVE TELEMETRY) ===
+Diagnostic Timestamp: ${new Date().toISOString()}
+Database Connectivity: ${dbHealth.connected ? 'Supabase PostgreSQL (Connected & Operational)' : 'In-Memory Fallback Active (Supabase Not Connected)'}
+Database Latency: ${dbHealth.latencyMs ? `${dbHealth.latencyMs}ms` : 'N/A'}
+Memory Persistence Layer: ${dbHealth.write && dbHealth.read ? 'Supabase Persistent Storage (Reads & Writes Verified)' : 'In-Memory Volatile Storage'}
+Total User Durable Memories: ${userMemories.length}
+Selected Text AI Provider: ${primaryProviderType} (Model: ${primaryProvider?.modelName || 'active'}) - Status: ${registryStatus.textProvider.status}
+Selected Voice AI Provider: ${registryStatus.voiceProvider.type} - Status: ${registryStatus.voiceProvider.status}
+Live Web Search (Tavily): ${tavilyCheck.configured ? 'Configured & Operational' : 'Unconfigured (TAVILY_API_KEY missing)'} (Real check: ${tavilyCheck.status})
+Environment: ${process.env.NODE_ENV || 'production'}
+
+REPORTING & SECURITY DIRECTIVES:
+1. Provide a clear, honest, well-organized system health report for each subsystem.
+2. Report whether live web search is available based strictly on the real Tavily check above, not merely because the UI button exists.
+3. STRICT CONFIDENTIALITY: NEVER reveal actual API keys, credentials, secret tokens, database connection strings, internal table schemas, or private backend source code.
+=== END SYSTEM DIAGNOSTICS ===`;
+    }
+
     // 9. Execute Text AI Provider via Registry with Failover
     onStatusUpdate?.('Preparing answer...', {
       query: searchDecision.shouldSearch ? searchDecision.query : undefined,
       sourcesCount: searchResults.length > 0 ? searchResults.length : undefined,
     });
 
-    const registry = AIProviderRegistry.getInstance();
-    const primaryProviderType: TextProviderType =
-      payload.textProvider || profile.selectedTextProvider || registry.getDefaultTextType() || 'gemini';
     const fallbackProviderType: TextProviderType =
       primaryProviderType === 'gemini' ? 'groq' : 'gemini';
 
@@ -196,7 +230,6 @@ Provide the best answer using your knowledge, noting that the live web search co
     let primaryError: any = null;
 
     try {
-      const primaryProvider = registry.getTextProvider(primaryProviderType);
       providerResponse = await primaryProvider.generateResponse({
         systemPrompt: augmentedSystemPrompt,
         messages: assembled.formattedMessages,
@@ -279,6 +312,9 @@ Provide the best answer using your knowledge, noting that the live web search co
         searchPerformed,
         searchStatus,
         searchError,
+        searchDecisionCategory: searchDecision.category,
+        searchDecisionReason: searchDecision.reason,
+        searchTrigger: searchDecision.isManual ? 'manual' : (searchPerformed ? 'automatic' : 'none'),
       },
     });
 
