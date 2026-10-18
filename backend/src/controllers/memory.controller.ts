@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { MemoryService } from '../services/memory.service';
+import { DatabaseService } from '../database/db-service';
 import { MemoryCreateInput } from '../../../shared/types/memory';
 
 export class MemoryController {
@@ -53,4 +54,21 @@ export class MemoryController {
       res.status(500).json({ success: false, error: error.message });
     }
   }
+
+  public static async listResearch(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const query = (req.query.q as string) || undefined;
+      const history = await DatabaseService.getResearchHistory(userId, query, 20);
+      res.status(200).json({
+        success: true,
+        data: history,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      console.error('[MemoryController] listResearch error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
 }
+

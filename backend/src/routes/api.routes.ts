@@ -55,6 +55,8 @@ router.delete('/conversations/:id', ConversationController.delete);
 router.get('/memories', MemoryController.list);
 router.post('/memories', MemoryController.create);
 router.delete('/memories/:id', MemoryController.delete);
+router.get('/research-history', MemoryController.listResearch);
+
 
 // AI Brain & Profile
 router.get('/ai/brain-profile', BrainController.getProfile);

@@ -6,6 +6,7 @@ import {
   BrainProfile,
   MemoryItem,
   MemoryCreateInput,
+  ResearchHistoryItem,
   ProviderStatus,
   VoiceSynthesisRequest,
   VoiceSynthesisResponse,
@@ -500,6 +501,12 @@ export const ApiClient = {
       method: 'DELETE',
     });
     return res.deleted;
+  },
+
+  // Research History
+  async getResearchHistory(query?: string): Promise<ResearchHistoryItem[]> {
+    const url = query ? `${API_BASE}/research-history?q=${encodeURIComponent(query)}` : `${API_BASE}/research-history`;
+    return fetchJson<ResearchHistoryItem[]>(url);
   },
 
   // Brain Profile & Providers

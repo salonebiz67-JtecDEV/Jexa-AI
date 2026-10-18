@@ -255,4 +255,28 @@ BEGIN
     DROP POLICY IF EXISTS "Allow diagnostics for tests" ON public.database_diagnostics_test;
     CREATE POLICY "Allow diagnostics for tests" ON public.database_diagnostics_test
         FOR ALL USING (true) WITH CHECK (true);
+
+    -- 9. Research history table policies
+    DROP POLICY IF EXISTS "Users can access own research_history" ON public.research_history;
+    CREATE POLICY "Users can access own research_history" ON public.research_history
+        FOR ALL USING (auth.uid() = user_id OR auth.role() = 'service_role')
+        WITH CHECK (auth.uid() = user_id OR auth.role() = 'service_role');
 END $$;
+
+-- =========================================================================
+-- 11. RESEARCH HISTORY TABLE (Persistent Search & Research Summaries)
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.research_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    query TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    sources JSONB DEFAULT '[]'::jsonb,
+    source_conversation_id UUID REFERENCES public.conversations(id) ON DELETE SET NULL,
+    searched_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.research_history ENABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS idx_research_history_user ON public.research_history(user_id, searched_at DESC);
+

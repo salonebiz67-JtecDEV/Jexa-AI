@@ -1,7 +1,7 @@
 import { JEXA_IDENTITY } from './identity';
 import { PERSONALITY_PRESETS } from './personality';
 import { PersonalityStyle } from '../../shared/types/brain';
-import { MemoryItem } from '../../shared/types/memory';
+import { MemoryItem, MemoryExtractionResult, ResearchHistoryItem } from '../../shared/types/memory';
 import { ChatMessage } from '../../shared/types/chat';
 import { formatResponseRules } from './response-rules';
 import { getStyleInstructions } from './conversation-style';
@@ -9,6 +9,8 @@ import { getStyleInstructions } from './conversation-style';
 export interface AssembleContextOptions {
   personality?: PersonalityStyle;
   memories?: MemoryItem[];
+  activeMemoryResult?: MemoryExtractionResult;
+  researchHistory?: ResearchHistoryItem[];
   recentMessages?: ChatMessage[];
   userContext?: {
     userName?: string;
@@ -70,15 +72,50 @@ Note: This context is background familiarity. Do NOT use it to generate greeting
       referencedMemoryIds.push(m.id);
       return `• [${m.category.toUpperCase()}] ${m.fact}`;
     });
-    promptSections.push(`[DURABLE USER MEMORY & FACTS]
+    promptSections.push(`[DURABLE USER MEMORY & FACTS ACROSS ALL CHATS]
 The following verified facts about the user are registered in durable memory:
 ${memoryLines.join('\n')}
 
 MEMORY HONESTY & USAGE RULES:
+- When the user asks "What do you remember about me?", "What do you know about me?", or similar, summarize ALL the verified memories listed above accurately and conversationally. Do NOT claim you only know their name if additional memories are listed above!
 - Only reference memories that are explicitly provided in durable memory.
 - Never pretend to recall past events or information that is not available in context.
 - Never claim to have saved something to memory when it was casual chatter. Only acknowledge memory saves when an actual lasting fact was recorded.
 - Weave durable facts naturally into advice without robotic database citations.`);
+  }
+
+  // 4b. Active Memory Operation Result (Current Turn Feedback)
+  if (options.activeMemoryResult && options.activeMemoryResult.action !== 'none') {
+    const memRes = options.activeMemoryResult;
+    let directive = '';
+    if (memRes.action === 'saved') {
+      directive = `A new memory was confirmed and saved to the database: "${memRes.factSummary || memRes.feedbackMessage}". Acknowledge this naturally (e.g., "${memRes.feedbackMessage || "I'll remember that."}") while addressing their question.`;
+    } else if (memRes.action === 'updated') {
+      directive = `An existing memory was updated in the database: "${memRes.factSummary || memRes.feedbackMessage}". Acknowledge the update naturally (e.g., "${memRes.feedbackMessage || "I've updated that in your memory."}").`;
+    } else if (memRes.action === 'already_remembered') {
+      directive = `The user shared information that is already stored in memory. You may acknowledge that you already remember this if helpful.`;
+    } else if (memRes.action === 'deleted') {
+      directive = `The memory was removed from the database: "${memRes.feedbackMessage}". Acknowledge that you have removed it.`;
+    } else if (memRes.action === 'privacy_skipped') {
+      directive = `User requested not to remember this. Respect this completely and confirm you will not save it.`;
+    } else if (memRes.action === 'failed') {
+      directive = `Database persistence failed (${memRes.error || 'storage error'}). Truthfully state that memory storage is currently unavailable and offer a retry. Do NOT falsely claim it was saved.`;
+    }
+
+    promptSections.push(`[ACTIVE MEMORY OPERATION RESULT]
+Operation Status: ${memRes.action.toUpperCase()}
+Confirmed Backend Details: ${memRes.factSummary || memRes.feedbackMessage || ''}
+Directive: ${directive}`);
+  }
+
+  // 4c. Cross-Conversation Research History
+  if (options.researchHistory && options.researchHistory.length > 0) {
+    const researchLines = options.researchHistory.map(
+      (r) => `• [${r.searchedAt.slice(0, 10)}] Query: "${r.query}" -> Summary: ${r.summary.slice(0, 220)}`
+    );
+    promptSections.push(`[PREVIOUS RESEARCH HISTORY ACROSS CONVERSATIONS]
+${researchLines.join('\n')}
+Use this research context to answer follow-up questions or continue earlier research threads without redundant searches.`);
   }
 
   // 5. Thoughtful Deliberation & Direct Substance

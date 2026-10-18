@@ -29,6 +29,8 @@ import {
   RefreshCw,
   FileCode,
   LogOut,
+  Brain,
+  Trash2,
 } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useBrainSettings } from '../../hooks/useBrainSettings';
@@ -42,6 +44,7 @@ import {
   DatabaseDiagnosticsResult,
   TestStepStatus,
 } from '../../../shared/types';
+import { MemoryItem } from '../../../shared/types/memory';
 import { safeStorage } from '../../services/storage';
 import { ApiClient, ProviderTestResult } from '../../services/api.client';
 import { AudioPlayer } from '../../services/audioPlayer';
@@ -127,8 +130,41 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [notificationStatus, setNotificationStatus] = useState<NotificationPermission>('default');
   const { isInstallable, isInstalled, install } = usePWAInstall();
 
+  // Personal Memory Management
+  const [memoriesList, setMemoriesList] = useState<MemoryItem[]>([]);
+  const [loadingMemories, setLoadingMemories] = useState(false);
+  const [showMemoriesSection, setShowMemoriesSection] = useState(false);
+  const [deletingMemoryId, setDeletingMemoryId] = useState<string | null>(null);
+
+  const fetchMemories = async () => {
+    setLoadingMemories(true);
+    try {
+      const items = await ApiClient.getMemories();
+      setMemoriesList(items || []);
+    } catch (e) {
+      console.warn('[SettingsDialog] Could not fetch memories:', e);
+    } finally {
+      setLoadingMemories(false);
+    }
+  };
+
+  const handleDeleteMemory = async (id: string) => {
+    setDeletingMemoryId(id);
+    try {
+      await ApiClient.deleteMemory(id);
+      setMemoriesList((prev) => prev.filter((m) => m.id !== id));
+    } catch (e) {
+      console.warn('[SettingsDialog] Could not delete memory:', e);
+    } finally {
+      setDeletingMemoryId(null);
+    }
+  };
+
   // Sync state when dialog opens or profile loads
   useEffect(() => {
+    if (isOpen) {
+      fetchMemories();
+    }
     if (profile?.selectedTextProvider) {
       setTextProvider(profile.selectedTextProvider);
     }
@@ -1434,6 +1470,95 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                     <span>Reset Local Overrides</span>
                   </button>
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* ============================================================== */}
+          {/* SECTION 4.5: PERSONAL MEMORY PERSISTENCE & CONTROL            */}
+          {/* ============================================================== */}
+          <div className="space-y-3 pt-3 border-t border-white/[0.06]">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Brain className="w-4 h-4 text-purple-400" />
+                <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                  PERSONAL MEMORY ({memoriesList.length})
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={fetchMemories}
+                  disabled={loadingMemories}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-[10px] text-slate-300 transition-colors"
+                >
+                  <RefreshCw className={`w-3 h-3 ${loadingMemories ? 'animate-spin text-purple-400' : ''}`} />
+                  <span>Refresh</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowMemoriesSection(!showMemoriesSection)}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-[10px] text-purple-300 transition-colors"
+                >
+                  <span>{showMemoriesSection ? 'Hide' : 'Manage'}</span>
+                  {showMemoriesSection ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-purple-950/20 border border-purple-500/20 flex items-center justify-between">
+              <div className="min-w-0 pr-2">
+                <div className="text-xs font-semibold text-purple-200">
+                  {memoriesList.length > 0 ? `${memoriesList.length} Durable Memories Preserved` : 'Zero Noise / Empty Memory Store'}
+                </div>
+                <div className="text-[10px] text-purple-300/70 truncate">
+                  Isolated to authenticated user • Recalled automatically across all chats
+                </div>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 shrink-0">
+                Supabase RLS
+              </span>
+            </div>
+
+            {showMemoriesSection && (
+              <div className="space-y-2 p-3 rounded-xl bg-[#080c14] border border-white/[0.08] max-h-60 overflow-y-auto">
+                {memoriesList.length === 0 ? (
+                  <div className="text-center py-4 text-xs text-slate-400">
+                    No memories saved yet. Share meaningful facts, preferences, or goals in chat (e.g. &ldquo;Remember that I live in Freetown&rdquo;).
+                  </div>
+                ) : (
+                  memoriesList.map((mem) => (
+                    <div
+                      key={mem.id}
+                      className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.05] flex items-start justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
+                            {mem.category}
+                          </span>
+                          <span className="text-[9px] text-slate-500">
+                            {mem.lastReinforcedAt ? new Date(mem.lastReinforcedAt).toLocaleDateString() : 'Active'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-200 break-words">{mem.fact}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteMemory(mem.id)}
+                        disabled={deletingMemoryId === mem.id}
+                        className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors shrink-0"
+                        title="Delete this memory"
+                      >
+                        {deletingMemoryId === mem.id ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </div>

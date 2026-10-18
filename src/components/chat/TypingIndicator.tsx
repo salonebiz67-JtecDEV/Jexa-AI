@@ -69,6 +69,7 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           pulseIcon: true,
         };
       case 'Checking relevant memories...':
+      case 'Checking memories...':
         return {
           icon: Brain,
           color: 'text-purple-400',
@@ -107,6 +108,8 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           glow: 'shadow-[0_0_14px_rgba(20,184,166,0.35)]',
         };
       case 'Memory unavailable':
+      case 'Memory storage unavailable':
+      case 'Memory retrieval failed':
         return {
           icon: AlertTriangle,
           color: 'text-amber-400',

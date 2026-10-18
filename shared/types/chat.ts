@@ -9,10 +9,13 @@ export type AIActivityStatus =
   | 'Reading web pages...'
   | 'Analyzing sources...'
   | 'Checking relevant memories...'
+  | 'Checking memories...'
   | 'Saving memory...'
   | 'Memory saved'
   | 'Memory updated'
   | 'Memory unavailable'
+  | 'Memory retrieval failed'
+  | 'Memory storage unavailable'
   | 'Processing information...'
   | 'Preparing answer...'
   | 'Answer complete'
@@ -37,7 +40,7 @@ export interface ChatMessageMetadata {
   fallbackUsed?: boolean;
   originalProvider?: string;
   memoriesReferenced?: string[];
-  memoryActionTaken?: 'saved' | 'updated' | 'deleted' | 'already_remembered' | 'none' | 'failed';
+  memoryActionTaken?: 'saved' | 'updated' | 'deleted' | 'already_remembered' | 'none' | 'failed' | 'privacy_skipped';
   memoryFactSaved?: string;
   // Web search metadata & clickable citations
   sources?: WebSearchResultItem[];

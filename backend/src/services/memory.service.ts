@@ -1,6 +1,13 @@
 import { DatabaseService } from '../database/db-service';
-import { MemoryItem, MemoryCreateInput, MemorySearchResult, MemoryCategory } from '../../../shared/types/memory';
+import {
+  MemoryItem,
+  MemoryCreateInput,
+  MemorySearchResult,
+  MemoryCategory,
+  MemoryExtractionResult,
+} from '../../../shared/types/memory';
 import { searchRelevantMemories } from '../../../ai/memory/memory-retrieval';
+import { AIActivityStatus } from '../../../shared/types/chat';
 
 // Common casual / ephemeral words that indicate low-value chatter rather than durable memory
 const CASUAL_GREETINGS_PATTERN =
@@ -14,20 +21,69 @@ const PRIVACY_REQUEST_PATTERN =
 const FORGET_REQUEST_PATTERN =
   /(?:forget|delete|remove|clear)\s+(?:my|the\s+memory\s+of|the\s+fact\s+that|that|about)\s+(.+)/i;
 
-export interface MemoryExtractionResult {
-  action: 'saved' | 'updated' | 'deleted' | 'already_remembered' | 'privacy_skipped' | 'none' | 'failed';
-  memories: MemoryItem[];
-  feedbackMessage?: string;
-  error?: string;
-}
+// Comprehensive explicit memory triggers
+const EXPLICIT_MEMORY_TRIGGERS = [
+  /^(?:please\s+)?remember\s+(?:this|that|the\s+following)?[;:]?\s*(.+)/i,
+  /^(?:please\s+)?save\s+(?:this\s+information|this\s+fact|this\s+to\s+memory|this)?[;:]?\s*(.+)/i,
+  /^(?:this\s+is\s+important)[;:]?\s*(.+)/i,
+  /^(?:i\s+want\s+you\s+to\s+remember\s+(?:that)?)[;:]?\s*(.+)/i,
+  /^(?:update\s+what\s+you\s+remember\s+about\s+me)[;:]?\s*(.+)/i,
+  /^(?:don'?t\s+forget\s+(?:that)?)[;:]?\s*(.+)/i,
+  /^(?:keep\s+in\s+mind\s+(?:that)?)[;:]?\s*(.+)/i,
+  /^(?:note\s+that)[;:]?\s*(.+)/i,
+  /^(?:save\s+to\s+memory)[;:]?\s*(.+)/i,
+];
 
 export class MemoryService {
+  /**
+   * Fast check to determine if the message contains explicit remember directives,
+   * privacy requests, removal instructions, or obvious personal disclosure.
+   */
+  public static detectMemoryIntent(text: string): {
+    hasIntent: boolean;
+    type: 'explicit' | 'privacy' | 'forget' | 'implicit' | 'none';
+  } {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed.length < 4) return { hasIntent: false, type: 'none' };
+    const lower = trimmed.toLowerCase();
+
+    if (PRIVACY_REQUEST_PATTERN.test(lower)) {
+      return { hasIntent: true, type: 'privacy' };
+    }
+    if (FORGET_REQUEST_PATTERN.test(trimmed)) {
+      return { hasIntent: true, type: 'forget' };
+    }
+    for (const pattern of EXPLICIT_MEMORY_TRIGGERS) {
+      if (pattern.test(trimmed)) {
+        return { hasIntent: true, type: 'explicit' };
+      }
+    }
+
+    // Implicit personal facts check
+    const implicitPatterns = [
+      /(?:my\s+name\s+is|i'm\s+called|call\s+me|my\s+preferred\s+name\s+is)\b/i,
+      /(?:my\s+(?:wife|husband|partner|son|daughter|kid|child|brother|sister|mother|father|mom|dad|friend|boss|coworker|dog|cat|pet))\s+(?:is|is\s+named|called)\b/i,
+      /(?:i\s+live\s+in|i\s+am\s+based\s+in|i'm\s+based\s+in|i\s+moved\s+to)\b/i,
+      /(?:my\s+stack\s+is|our\s+stack\s+is|we\s+build\s+with|i\s+build\s+with|i\s+code\s+in|my\s+primary\s+stack\s+is)\b/i,
+      /(?:my\s+goal\s+is|our\s+goal\s+is|i\s+am\s+working\s+on|i'm\s+working\s+on|we\s+plan\s+to\s+launch)\b/i,
+      /(?:i\s+work\s+as|my\s+job\s+is|i\s+am\s+a\s+[a-zA-Z0-9_\- ]+\s+at)\b/i,
+      /(?:i\s+prefer|my\s+preference\s+is|my\s+favorite\s+[a-zA-Z0-9_\- ]+\s+is)\b/i,
+      /(?:my\s+birthday\s+is|i\s+am\s+allergic\s+to|i\s+graduated\s+from)\b/i,
+    ];
+
+    if (implicitPatterns.some((p) => p.test(trimmed))) {
+      return { hasIntent: true, type: 'implicit' };
+    }
+
+    return { hasIntent: false, type: 'none' };
+  }
+
   /**
    * Retrieves memories belonging to the authenticated user and ranks them by relevance to the query.
    */
   public static async getRelevantMemories(
     query: string,
-    limit: number = 5,
+    limit: number = 6,
     userId?: string
   ): Promise<MemoryItem[]> {
     try {
@@ -51,10 +107,11 @@ export class MemoryService {
   public static async extractAndStoreFromMessage(
     userMessage: string,
     conversationId: string,
-    userId?: string
+    userId?: string,
+    onStatusUpdate?: (status: AIActivityStatus, details?: any) => void
   ): Promise<MemoryExtractionResult> {
     const trimmed = userMessage.trim();
-    if (!trimmed || trimmed.length < 4) {
+    if (!trimmed || trimmed.length < 3) {
       return { action: 'none', memories: [] };
     }
 
@@ -75,9 +132,10 @@ export class MemoryService {
       const subject = forgetMatch[1].trim().toLowerCase().replace(/[.?!]+$/, '');
       try {
         const existingMemories = await DatabaseService.getMemories(userId);
-        const match = existingMemories.find((m) =>
-          m.fact.toLowerCase().includes(subject) ||
-          subject.split(' ').every((w) => m.fact.toLowerCase().includes(w))
+        const match = existingMemories.find(
+          (m) =>
+            m.fact.toLowerCase().includes(subject) ||
+            subject.split(' ').every((w) => m.fact.toLowerCase().includes(w))
         );
 
         if (match) {
@@ -86,6 +144,7 @@ export class MemoryService {
             action: 'deleted',
             memories: [match],
             feedbackMessage: `I have removed "${match.fact}" from your memory.`,
+            factSummary: match.fact,
           };
         }
       } catch (err: any) {
@@ -100,7 +159,13 @@ export class MemoryService {
     }
 
     // 3. Filter out pure casual greetings or ephemeral pleasantries without memory content
-    if (CASUAL_GREETINGS_PATTERN.test(lower) && trimmed.length < 35 && !lower.includes('remember') && !lower.includes('my name')) {
+    if (
+      CASUAL_GREETINGS_PATTERN.test(lower) &&
+      trimmed.length < 35 &&
+      !lower.includes('remember') &&
+      !lower.includes('my name') &&
+      !lower.includes('save')
+    ) {
       return { action: 'none', memories: [] };
     }
 
@@ -112,6 +177,79 @@ export class MemoryService {
         return existingMemories.find(predicate);
       };
 
+      // 4. PRIORITY 1: Explicit Remember Directives
+      for (const pattern of EXPLICIT_MEMORY_TRIGGERS) {
+        const match = trimmed.match(pattern);
+        if (match && match[1]?.trim() && match[1].trim().length > 2) {
+          const rawDirective = match[1].trim().replace(/^[;:\-\s]+/, '').replace(/[.?!]+$/, '');
+          const factSummary = rawDirective.slice(0, 200);
+
+          onStatusUpdate?.('Saving memory...', { memoryFact: factSummary });
+
+          // Determine category based on content
+          let cat: MemoryCategory = 'user_fact';
+          const rLower = rawDirective.toLowerCase();
+          if (/(?:prefer|preference|favorite|like|dislike)/i.test(rLower)) cat = 'preference';
+          else if (/(?:goal|plan|building|working on|aim|launch)/i.test(rLower)) cat = 'goal';
+          else if (/(?:wife|husband|partner|son|daughter|kid|brother|sister|mother|father|mom|dad|dog|cat|pet)/i.test(rLower)) cat = 'relationship';
+          else if (/(?:graduated|born|anniversary|wedding|hired|founded)/i.test(rLower)) cat = 'milestone';
+          else if (/(?:hobby|play|interest|guitar|chess|gaming|music)/i.test(rLower)) cat = 'interest';
+
+          const newFact = `User note: "${factSummary}".`;
+
+          // Deduplication: Check if identical or very similar fact already exists
+          const existingMatch = findExisting((m) => {
+            const mFact = m.fact.toLowerCase();
+            return mFact.includes(rLower.slice(0, 30)) || rLower.includes(mFact.slice(0, 30));
+          });
+
+          if (existingMatch) {
+            if (existingMatch.fact.toLowerCase() === newFact.toLowerCase()) {
+              return {
+                action: 'already_remembered',
+                memories: [existingMatch],
+                feedbackMessage: `I already have this noted in your memory.`,
+                factSummary,
+              };
+            }
+
+            const updated = await DatabaseService.updateMemory(
+              existingMatch.id,
+              { fact: newFact, category: cat, confidence: 0.98 },
+              userId
+            );
+
+            onStatusUpdate?.('Memory updated', { memoryFact: factSummary, memoryAction: 'updated' });
+            return {
+              action: 'updated',
+              memories: [updated],
+              feedbackMessage: `I've updated that note in your memory.`,
+              factSummary,
+            };
+          }
+
+          const created = await DatabaseService.createMemory(
+            {
+              category: cat,
+              fact: newFact,
+              confidence: 0.98,
+              sourceConversationId: conversationId,
+            },
+            userId
+          );
+
+          onStatusUpdate?.('Memory saved', { memoryFact: factSummary, memoryAction: 'saved' });
+          return {
+            action: 'saved',
+            memories: [created],
+            feedbackMessage: `I'll remember that.`,
+            factSummary,
+          };
+        }
+      }
+
+      // 5. PRIORITY 2: Structured Personal Details
+
       // A. Preferred Name / Identity
       if (
         lower.includes('my name is') ||
@@ -119,26 +257,43 @@ export class MemoryService {
         lower.includes('call me') ||
         lower.includes('my preferred name is')
       ) {
-        const match = trimmed.match(/(?:my name is|i'm called|call me|my preferred name is)\s+([a-zA-Z0-9_\- ]+?)(?:\.|$|,|!|\s+and|\s+remember)/i);
+        const match = trimmed.match(
+          /(?:my name is|i'm called|call me|my preferred name is)\s+([a-zA-Z0-9_\- ]+?)(?:\.|$|,|!|\s+and|\s+remember)/i
+        );
         if (match && match[1]?.trim() && match[1].trim().length > 1) {
           const rawName = match[1].trim().replace(/[.?!]+$/, '');
           const newFact = `User's preferred name is ${rawName}.`;
 
-          // Check if user already has a name memory
-          const existingNameMemory = findExisting(
-            (m) => m.category === 'user_fact' && (m.fact.toLowerCase().includes("user's name is") || m.fact.toLowerCase().includes("preferred name is"))
+          onStatusUpdate?.('Saving memory...', { memoryFact: `Preferred name: ${rawName}` });
+
+          const existingName = findExisting(
+            (m) =>
+              m.category === 'user_fact' &&
+              (m.fact.toLowerCase().includes("user's preferred name is") ||
+                m.fact.toLowerCase().includes("user's name is"))
           );
 
-          if (existingNameMemory) {
-            if (existingNameMemory.fact.toLowerCase() === newFact.toLowerCase()) {
-              return { action: 'already_remembered', memories: [existingNameMemory], feedbackMessage: `I already remember that your name is ${rawName}.` };
+          if (existingName) {
+            if (existingName.fact.toLowerCase() === newFact.toLowerCase()) {
+              return {
+                action: 'already_remembered',
+                memories: [existingName],
+                feedbackMessage: `I already remember that your name is ${rawName}.`,
+                factSummary: newFact,
+              };
             }
             const updated = await DatabaseService.updateMemory(
-              existingNameMemory.id,
+              existingName.id,
               { fact: newFact, confidence: 0.99 },
               userId
             );
-            return { action: 'updated', memories: [updated], feedbackMessage: `I've updated your name in memory to ${rawName}.` };
+            onStatusUpdate?.('Memory updated', { memoryFact: `Preferred name: ${rawName}` });
+            return {
+              action: 'updated',
+              memories: [updated],
+              feedbackMessage: `I've updated your name in memory to ${rawName}.`,
+              factSummary: newFact,
+            };
           }
 
           const created = await DatabaseService.createMemory(
@@ -150,52 +305,17 @@ export class MemoryService {
             },
             userId
           );
-          return { action: 'saved', memories: [created], feedbackMessage: `I'll remember that your preferred name is ${rawName}.` };
+          onStatusUpdate?.('Memory saved', { memoryFact: `Preferred name: ${rawName}` });
+          return {
+            action: 'saved',
+            memories: [created],
+            feedbackMessage: `I'll remember that your preferred name is ${rawName}.`,
+            factSummary: newFact,
+          };
         }
       }
 
-      // B. Explicit Memory Directive ("Remember that...", "Please remember...", "Note that...")
-      if (
-        lower.includes('remember that') ||
-        lower.includes('remember:') ||
-        lower.includes("don't forget that") ||
-        lower.includes('please remember') ||
-        lower.includes('keep in mind that') ||
-        lower.includes('note that')
-      ) {
-        const match = trimmed.match(/(?:remember that|remember:|don't forget that|please remember|keep in mind that|note that)\s+(.+?)(?:\.|$|!)/i);
-        if (match && match[1]?.trim() && match[1].trim().length > 3) {
-          const rawFact = match[1].trim().replace(/[.?!]+$/, '');
-          const newFact = `User note: "${rawFact.slice(0, 160)}".`;
-
-          // Check for existing similar note
-          const existingNote = findExisting(
-            (m) => m.fact.toLowerCase().includes(rawFact.toLowerCase().slice(0, 30))
-          );
-
-          if (existingNote) {
-            const updated = await DatabaseService.updateMemory(
-              existingNote.id,
-              { fact: newFact, confidence: 0.96 },
-              userId
-            );
-            return { action: 'updated', memories: [updated], feedbackMessage: `I've updated that note in your memory.` };
-          }
-
-          const created = await DatabaseService.createMemory(
-            {
-              category: 'user_fact',
-              fact: newFact,
-              confidence: 0.96,
-              sourceConversationId: conversationId,
-            },
-            userId
-          );
-          return { action: 'saved', memories: [created], feedbackMessage: `I've saved that to your memory.` };
-        }
-      }
-
-      // C. Relationships & Family (Wife, husband, partner, children, dog, cat, friends)
+      // B. Relationships & Family & Pets
       const relPattern =
         /(?:my\s+(wife|husband|partner|son|daughter|kid|child|brother|sister|mother|father|mom|dad|friend|boss|coworker|dog|cat|pet))\s+(?:is|is\s+named|called)\s+([a-zA-Z0-9_\- ]+)/i;
       const relMatch = trimmed.match(relPattern);
@@ -204,40 +324,63 @@ export class MemoryService {
         const personName = relMatch[2].trim().replace(/[.?!]+$/, '');
         const newFact = `User's ${relation} is ${personName}.`;
 
+        onStatusUpdate?.('Saving memory...', { memoryFact: `${relation}: ${personName}` });
+
         const existingRel = findExisting(
           (m) => m.category === 'relationship' && m.fact.toLowerCase().includes(`user's ${relation} is`)
         );
 
         if (existingRel) {
           if (existingRel.fact.toLowerCase() === newFact.toLowerCase()) {
-            return { action: 'already_remembered', memories: [existingRel] };
+            return { action: 'already_remembered', memories: [existingRel], factSummary: newFact };
           }
           const updated = await DatabaseService.updateMemory(
             existingRel.id,
-            { fact: newFact, confidence: 0.95 },
+            { fact: newFact, confidence: 0.96 },
             userId
           );
-          return { action: 'updated', memories: [updated], feedbackMessage: `I've updated your ${relation}'s name in memory to ${personName}.` };
+          onStatusUpdate?.('Memory updated', { memoryFact: `${relation}: ${personName}` });
+          return {
+            action: 'updated',
+            memories: [updated],
+            feedbackMessage: `I've updated your ${relation}'s name in memory to ${personName}.`,
+            factSummary: newFact,
+          };
         }
 
         const created = await DatabaseService.createMemory(
           {
             category: 'relationship',
             fact: newFact,
-            confidence: 0.95,
+            confidence: 0.96,
             sourceConversationId: conversationId,
           },
           userId
         );
-        return { action: 'saved', memories: [created], feedbackMessage: `I'll remember that your ${relation} is ${personName}.` };
+        onStatusUpdate?.('Memory saved', { memoryFact: `${relation}: ${personName}` });
+        return {
+          action: 'saved',
+          memories: [created],
+          feedbackMessage: `I'll remember that your ${relation} is ${personName}.`,
+          factSummary: newFact,
+        };
       }
 
-      // D. Location & Living Base
-      if (lower.includes('i live in') || lower.includes('i am based in') || lower.includes("i'm based in") || lower.includes('i moved to')) {
-        const match = trimmed.match(/(?:i live in|i am based in|i'm based in|i moved to)\s+([a-zA-Z0-9_\- ,]+?)(?:\.|$|!|\s+and)/i);
+      // C. Location & Residence
+      if (
+        lower.includes('i live in') ||
+        lower.includes('i am based in') ||
+        lower.includes("i'm based in") ||
+        lower.includes('i moved to')
+      ) {
+        const match = trimmed.match(
+          /(?:i live in|i am based in|i'm based in|i moved to)\s+([a-zA-Z0-9_\- ,]+?)(?:\.|$|!|\s+and)/i
+        );
         if (match && match[1]?.trim() && match[1].trim().length > 2) {
           const loc = match[1].trim().replace(/[.?!]+$/, '');
           const newFact = `User lives in ${loc}.`;
+
+          onStatusUpdate?.('Saving memory...', { memoryFact: `Location: ${loc}` });
 
           const existingLoc = findExisting(
             (m) => m.category === 'user_fact' && m.fact.toLowerCase().includes('user lives in')
@@ -245,44 +388,59 @@ export class MemoryService {
 
           if (existingLoc) {
             if (existingLoc.fact.toLowerCase() === newFact.toLowerCase()) {
-              return { action: 'already_remembered', memories: [existingLoc] };
+              return { action: 'already_remembered', memories: [existingLoc], factSummary: newFact };
             }
             const updated = await DatabaseService.updateMemory(
               existingLoc.id,
-              { fact: newFact, confidence: 0.94 },
+              { fact: newFact, confidence: 0.95 },
               userId
             );
-            return { action: 'updated', memories: [updated], feedbackMessage: `I've updated your location in memory to ${loc}.` };
+            onStatusUpdate?.('Memory updated', { memoryFact: `Location: ${loc}` });
+            return {
+              action: 'updated',
+              memories: [updated],
+              feedbackMessage: `I've updated your location in memory to ${loc}.`,
+              factSummary: newFact,
+            };
           }
 
           const created = await DatabaseService.createMemory(
             {
               category: 'user_fact',
               fact: newFact,
-              confidence: 0.94,
+              confidence: 0.95,
               sourceConversationId: conversationId,
             },
             userId
           );
-          return { action: 'saved', memories: [created], feedbackMessage: `I'll remember that you live in ${loc}.` };
+          onStatusUpdate?.('Memory saved', { memoryFact: `Location: ${loc}` });
+          return {
+            action: 'saved',
+            memories: [created],
+            feedbackMessage: `I'll remember that you live in ${loc}.`,
+            factSummary: newFact,
+          };
         }
       }
 
-      // E. Technical Stack & Tooling
+      // D. Technical Stack & Tooling
       const techStackKeywords = [
         'my stack is',
         'our stack is',
         'we build with',
         'i build with',
+        'i code in',
         'my primary stack is',
         'our tech stack is',
         'using typescript and react',
         'using python and postgresql',
       ];
       const hasTechStack = techStackKeywords.some((kw) => lower.includes(kw));
-      if (hasTechStack && trimmed.length >= 14) {
+      if (hasTechStack && trimmed.length >= 12) {
         const cleanStack = trimmed.replace(/^(hey|jexa|so|well)[,\s]*/i, '').trim().replace(/[.?!]+$/, '');
-        const newFact = `Technical stack & tooling: "${cleanStack.slice(0, 150)}".`;
+        const newFact = `Technical stack & tooling: "${cleanStack.slice(0, 160)}".`;
+
+        onStatusUpdate?.('Saving memory...', { memoryFact: 'Technical stack & tooling' });
 
         const existingStack = findExisting(
           (m) => m.category === 'user_fact' && m.fact.toLowerCase().includes('technical stack')
@@ -291,10 +449,73 @@ export class MemoryService {
         if (existingStack) {
           const updated = await DatabaseService.updateMemory(
             existingStack.id,
+            { fact: newFact, confidence: 0.94 },
+            userId
+          );
+          onStatusUpdate?.('Memory updated', { memoryFact: 'Technical stack updated' });
+          return {
+            action: 'updated',
+            memories: [updated],
+            feedbackMessage: `I've updated your technical stack in memory.`,
+            factSummary: newFact,
+          };
+        }
+
+        const created = await DatabaseService.createMemory(
+          {
+            category: 'user_fact',
+            fact: newFact,
+            confidence: 0.94,
+            sourceConversationId: conversationId,
+          },
+          userId
+        );
+        onStatusUpdate?.('Memory saved', { memoryFact: 'Technical stack saved' });
+        return {
+          action: 'saved',
+          memories: [created],
+          feedbackMessage: `I've saved your technical stack to memory.`,
+          factSummary: newFact,
+        };
+      }
+
+      // E. Career / Occupation
+      if (
+        (lower.includes('i work as') ||
+          lower.includes('my job is') ||
+          lower.includes('i work at') ||
+          lower.includes('i am a software') ||
+          lower.includes("i'm a software") ||
+          lower.includes('i am an engineer') ||
+          lower.includes("i'm an engineer") ||
+          lower.includes('i am a founder') ||
+          lower.includes("i'm a founder") ||
+          lower.includes('i study') ||
+          lower.includes('i am a student')) &&
+        trimmed.length >= 12
+      ) {
+        const cleanJob = trimmed.replace(/^(hey|jexa|so|well)[,\s]*/i, '').trim().replace(/[.?!]+$/, '');
+        const newFact = `User occupation / role: "${cleanJob.slice(0, 150)}".`;
+
+        onStatusUpdate?.('Saving memory...', { memoryFact: 'Occupation / role' });
+
+        const existingJob = findExisting(
+          (m) => m.category === 'user_fact' && m.fact.toLowerCase().includes('user occupation')
+        );
+
+        if (existingJob) {
+          const updated = await DatabaseService.updateMemory(
+            existingJob.id,
             { fact: newFact, confidence: 0.93 },
             userId
           );
-          return { action: 'updated', memories: [updated], feedbackMessage: `I've updated your technical stack in memory.` };
+          onStatusUpdate?.('Memory updated', { memoryFact: 'Occupation updated' });
+          return {
+            action: 'updated',
+            memories: [updated],
+            feedbackMessage: `I've updated your professional role in memory.`,
+            factSummary: newFact,
+          };
         }
 
         const created = await DatabaseService.createMemory(
@@ -306,53 +527,70 @@ export class MemoryService {
           },
           userId
         );
-        return { action: 'saved', memories: [created], feedbackMessage: `I've saved your technical stack to memory.` };
+        onStatusUpdate?.('Memory saved', { memoryFact: 'Occupation saved' });
+        return { action: 'saved', memories: [created], factSummary: newFact };
       }
 
-      // F. User Preferences (explicit enduring preferences)
+      // F. Goals & Project Ambitions
       if (
-        (lower.includes('i prefer') || lower.includes('my preference is') || lower.includes('i always like to use')) &&
+        (lower.includes('my goal is') ||
+          lower.includes('our goal is') ||
+          lower.includes('i am working on') ||
+          lower.includes("i'm working on") ||
+          lower.includes('we plan to launch') ||
+          lower.includes('my project is')) &&
+        trimmed.length >= 14
+      ) {
+        const newFact = `User goal / project: "${trimmed.slice(0, 160)}".`;
+
+        onStatusUpdate?.('Saving memory...', { memoryFact: 'Project / goal' });
+
+        const created = await DatabaseService.createMemory(
+          {
+            category: 'goal',
+            fact: newFact,
+            confidence: 0.92,
+            sourceConversationId: conversationId,
+          },
+          userId
+        );
+        onStatusUpdate?.('Memory saved', { memoryFact: 'Goal saved' });
+        return { action: 'saved', memories: [created], factSummary: newFact };
+      }
+
+      // G. User Preferences
+      if (
+        (lower.includes('i prefer') ||
+          lower.includes('my preference is') ||
+          lower.includes('i always like to') ||
+          lower.includes('my favorite') ||
+          lower.includes('my favourite')) &&
         !lower.includes('eating') &&
         !lower.includes('right now') &&
         !lower.includes('today')
       ) {
         const factClean = trimmed.replace(/^(hey|jexa|so|well)[,\s]*/i, '').trim().replace(/[.?!]+$/, '');
-        const newFact = `User preference: "${factClean.slice(0, 130)}".`;
+        const newFact = `User preference: "${factClean.slice(0, 140)}".`;
+
+        onStatusUpdate?.('Saving memory...', { memoryFact: 'User preference' });
 
         const created = await DatabaseService.createMemory(
           {
             category: 'preference',
-            fact: newFact,
-            confidence: 0.90,
-            sourceConversationId: conversationId,
-          },
-          userId
-        );
-        return { action: 'saved', memories: [created] };
-      }
-
-      // G. Goals & Project Specifications
-      if (
-        (lower.includes('my goal is') || lower.includes('our goal is') || lower.includes('i am working on') || lower.includes("i'm working on") || lower.includes('we plan to launch')) &&
-        trimmed.length >= 16
-      ) {
-        const newFact = `User goal / project: "${trimmed.slice(0, 150)}".`;
-
-        const created = await DatabaseService.createMemory(
-          {
-            category: 'goal',
             fact: newFact,
             confidence: 0.91,
             sourceConversationId: conversationId,
           },
           userId
         );
-        return { action: 'saved', memories: [created] };
+        onStatusUpdate?.('Memory saved', { memoryFact: 'Preference saved' });
+        return { action: 'saved', memories: [created], factSummary: newFact };
       }
 
       return { action: 'none', memories: [] };
     } catch (err: any) {
       console.error('[MemoryService] Persistence error saving memory:', err);
+      onStatusUpdate?.('Memory storage unavailable', { error: err.message });
       return {
         action: 'failed',
         memories: [],

@@ -12,6 +12,7 @@ import {
   WebSearchResultItem,
 } from '../../../shared/types/chat';
 import { TextProviderType } from '../../../shared/types/provider';
+import { MemoryExtractionResult, ResearchHistoryItem } from '../../../shared/types/memory';
 
 export type StatusUpdateCallback = (
   status: AIActivityStatus,
@@ -19,6 +20,8 @@ export type StatusUpdateCallback = (
     query?: string;
     sourcesCount?: number;
     error?: string;
+    memoryFact?: string;
+    memoryAction?: string;
   }
 ) => void;
 
@@ -61,7 +64,66 @@ export class ChatService {
       payload.textProvider || profile.selectedTextProvider || registry.getDefaultTextType() || 'gemini';
     const primaryProvider = registry.getTextProvider(primaryProviderType);
 
-    // 5. Planning & Intelligent Search Evaluation (Automatic AI-driven + manual fallback)
+    // 5. Memory Management: Scoped to authenticated user across ALL conversations
+    let relevantMemories: any[] = [];
+    let activeMemoryResult: MemoryExtractionResult | undefined;
+
+    if (profile.memorySettings.enabled) {
+      onStatusUpdate?.('Checking relevant memories...');
+      try {
+        relevantMemories = await MemoryService.getRelevantMemories(
+          payload.message,
+          profile.memorySettings.maxContextMemories || 8,
+          payload.userId
+        );
+      } catch (err: any) {
+        console.warn('[ChatService] Memory retrieval notice:', err.message);
+        onStatusUpdate?.('Memory retrieval failed', { error: err.message });
+      }
+
+      // Check if current user message contains explicit remember instructions or durable personal facts
+      const memoryIntent = MemoryService.detectMemoryIntent(payload.message);
+      if (profile.memorySettings.autoExtract && memoryIntent.hasIntent) {
+        try {
+          activeMemoryResult = await MemoryService.extractAndStoreFromMessage(
+            payload.message,
+            convId,
+            payload.userId,
+            onStatusUpdate
+          );
+
+          // If a memory was successfully saved or updated, include it in context memories
+          if (activeMemoryResult && (activeMemoryResult.action === 'saved' || activeMemoryResult.action === 'updated')) {
+            if (activeMemoryResult.memories && activeMemoryResult.memories.length > 0) {
+              const newMem = activeMemoryResult.memories[0];
+              const exists = relevantMemories.some((m) => m.id === newMem.id);
+              if (!exists) {
+                relevantMemories = [newMem, ...relevantMemories];
+              }
+            }
+          }
+        } catch (err: any) {
+          console.error('[ChatService] Memory extraction/storage error:', err);
+          activeMemoryResult = {
+            action: 'failed',
+            memories: [],
+            error: err.message,
+            feedbackMessage: 'Could not persist memory to database.',
+          };
+          onStatusUpdate?.('Memory storage unavailable', { error: err.message });
+        }
+      }
+    }
+
+    // 6. Cross-conversation Research History
+    let relevantResearch: ResearchHistoryItem[] = [];
+    try {
+      relevantResearch = await DatabaseService.getResearchHistory(payload.userId, undefined, 4);
+    } catch (err: any) {
+      console.warn('[ChatService] Research history retrieval notice:', err.message);
+    }
+
+    // 7. Planning & Intelligent Search Evaluation (Automatic AI-driven + manual fallback)
     onStatusUpdate?.('Planning...');
 
     const searchDecision = await SearchDecisionService.evaluate(
@@ -104,30 +166,47 @@ export class ChatService {
           query: searchDecision.query,
           sourcesCount: searchResults.length,
         });
+
+        // Persist research summary into research_history
+        if (searchResults.length > 0) {
+          const topSources = searchResults.slice(0, 4).map((s) => ({
+            title: s.title,
+            url: s.url,
+            domain: s.domain,
+            publishedDate: s.publishedDate,
+          }));
+          const summarySnippet = searchResults[0].content?.slice(0, 240) || 'Verified live web results';
+          DatabaseService.saveResearchHistory(
+            {
+              query: searchDecision.query,
+              summary: summarySnippet,
+              sources: topSources,
+              sourceConversationId: convId,
+            },
+            payload.userId
+          ).catch((e) => console.warn('[ChatService] Error saving research history:', e.message));
+        }
       }
     } else {
       // No search needed - advance directly to information processing
       onStatusUpdate?.('Processing information...');
     }
 
-    // 6. Retrieve relevant memories scoped to authenticated user
-    const relevantMemories = profile.memorySettings.enabled
-      ? await MemoryService.getRelevantMemories(payload.message, profile.memorySettings.maxContextMemories, payload.userId)
-      : [];
-
-    // 7. Fetch recent conversation history for context window
+    // 8. Fetch recent conversation history for context window
     const recentMessages = await DatabaseService.getMessages(convId);
 
-    // 7. Assemble modular brain context
+    // 9. Assemble modular brain context
     const assembled = assembleConversationContext({
       personality: (payload.personaId as any) || profile.activePersonality,
       memories: relevantMemories,
+      activeMemoryResult,
+      researchHistory: relevantResearch,
       recentMessages,
       userContext: payload.userContext,
       isVoiceMode: Boolean(payload.isVoiceMode),
     });
 
-    // 8. Inject Live Web Search context into system prompt if applicable
+    // 10. Inject Live Web Search context into system prompt if applicable
     let augmentedSystemPrompt = assembled.systemPrompt;
 
     // Specialized Sierra Leone & EDSA verification instructions
@@ -178,73 +257,48 @@ CRITICAL CITATION AND MULTI-SOURCE INSTRUCTIONS:
       augmentedSystemPrompt += `\n\n=== LIVE WEB SEARCH NOTICE ===
 The user asked a question requiring live web search (Query: "${searchDecision.query}"), but the backend server does not have TAVILY_API_KEY configured.
 INSTRUCTIONS:
-1. Briefly notify the user that live web search is not currently active because TAVILY_API_KEY is not set in Render environment variables.
-2. Instruct them that they can obtain a free key at https://tavily.com and set TAVILY_API_KEY on Render to enable real-time internet search and source links.
-3. Provide the best helpful answer you can using your baseline knowledge, while noting that real-time live data requires configuring the Tavily key.
-=== END NOTICE ===`;
+1. State honestly that live web search is not currently configured on the server.
+2. Do not invent current real-time data or fabricate today's news.
+3. Answer what you know based on your general knowledge cutoff while clearly disclaiming that live verification was unavailable.`;
     } else if (searchPerformed && searchStatus === 'failed') {
       augmentedSystemPrompt += `\n\n=== LIVE WEB SEARCH NOTICE ===
-The user asked a question requiring live web search, but the live search request encountered a temporary error: "${searchError}".
-Provide the best answer using your knowledge, noting that the live web search could not be completed and they can retry.
-=== END NOTICE ===`;
+The web search for "${searchDecision.query}" encountered an error (${searchError}).
+INSTRUCTIONS:
+1. Inform the user that live internet search could not be completed.
+2. Provide a helpful response from general knowledge, acknowledging that live sources could not be reached.`;
     }
 
-    // System diagnostics inspection when asked to check all systems
-    const isDiagnosticsQuery = /(check\s+all\s+systems|system\s+health|run\s+diagnostics|check\s+system\s+status|diagnose\s+system|are\s+all\s+systems\s+working|full\s+system\s+check)\b/i.test(payload.message);
+    // 11. Prepare answer
+    onStatusUpdate?.('Preparing answer...');
 
-    if (isDiagnosticsQuery) {
-      const dbHealth = await DatabaseService.checkHealth();
-      const tavilyCheck = TavilyService.checkAvailability();
-      const registryStatus = registry.getStatus(dbHealth.connected);
-      const userMemories = await DatabaseService.getMemories(payload.userId);
-
-      augmentedSystemPrompt += `\n\n=== VERIFIED SYSTEM SELF-DIAGNOSTICS (LIVE TELEMETRY) ===
-Diagnostic Timestamp: ${new Date().toISOString()}
-Database Connectivity: ${dbHealth.connected ? 'Supabase PostgreSQL (Connected & Operational)' : 'In-Memory Fallback Active (Supabase Not Connected)'}
-Database Latency: ${dbHealth.latencyMs ? `${dbHealth.latencyMs}ms` : 'N/A'}
-Memory Persistence Layer: ${dbHealth.write && dbHealth.read ? 'Supabase Persistent Storage (Reads & Writes Verified)' : 'In-Memory Volatile Storage'}
-Total User Durable Memories: ${userMemories.length}
-Selected Text AI Provider: ${primaryProviderType} (Model: ${primaryProvider?.modelName || 'active'}) - Status: ${registryStatus.textProvider.status}
-Selected Voice AI Provider: ${registryStatus.voiceProvider.type} - Status: ${registryStatus.voiceProvider.status}
-Live Web Search (Tavily): ${tavilyCheck.configured ? 'Configured & Operational' : 'Unconfigured (TAVILY_API_KEY missing)'} (Real check: ${tavilyCheck.status})
-Environment: ${process.env.NODE_ENV || 'production'}
-
-REPORTING & SECURITY DIRECTIVES:
-1. Provide a clear, honest, well-organized system health report for each subsystem.
-2. Report whether live web search is available based strictly on the real Tavily check above, not merely because the UI button exists.
-3. STRICT CONFIDENTIALITY: NEVER reveal actual API keys, credentials, secret tokens, database connection strings, internal table schemas, or private backend source code.
-=== END SYSTEM DIAGNOSTICS ===`;
-    }
-
-    // 9. Execute Text AI Provider via Registry with Failover
-    onStatusUpdate?.('Preparing answer...', {
-      query: searchDecision.shouldSearch ? searchDecision.query : undefined,
-      sourcesCount: searchResults.length > 0 ? searchResults.length : undefined,
-    });
-
-    const fallbackProviderType: TextProviderType =
-      primaryProviderType === 'gemini' ? 'groq' : 'gemini';
-
-    let providerResponse: any;
+    let providerResponse;
     let fallbackUsed = false;
-    let primaryError: any = null;
 
     try {
+      if (!primaryProvider) {
+        throw new Error(`AI Provider '${primaryProviderType}' is not available.`);
+      }
+
       providerResponse = await primaryProvider.generateResponse({
         systemPrompt: augmentedSystemPrompt,
         messages: assembled.formattedMessages,
         temperature: 0.7,
         maxTokens: 1200,
       });
-    } catch (err: any) {
-      console.warn(`[ChatService] Primary provider '${primaryProviderType}' failed:`, err.message);
-      primaryError = err;
+    } catch (primaryError: any) {
+      console.warn(
+        `[ChatService] Primary provider '${primaryProviderType}' failed:`,
+        primaryError.message
+      );
 
-      // Failover 1: Secondary external provider if configured
+      // Failover 1: Alternate Cloud Provider (e.g., Gemini <-> Groq)
+      const fallbackProviderType: TextProviderType =
+        primaryProviderType === 'gemini' ? 'groq' : 'gemini';
       const fallbackProvider = registry.getTextProvider(fallbackProviderType);
-      if (fallbackProvider && fallbackProvider.isConfigured) {
-        console.log(`[ChatService] Attempting automatic failover to '${fallbackProviderType}'...`);
+
+      if (fallbackProvider) {
         try {
+          console.log(`[ChatService] Attempting automatic failover to '${fallbackProviderType}'...`);
           providerResponse = await fallbackProvider.generateResponse({
             systemPrompt: augmentedSystemPrompt,
             messages: assembled.formattedMessages,
@@ -284,8 +338,8 @@ REPORTING & SECURITY DIRECTIVES:
       }
     }
 
-    // 10. Clean, normalize and unwrap assistant message
-    const isFirstTurn = isNewConversation || (recentMessages.length <= 1);
+    // 12. Clean, normalize and unwrap assistant message
+    const isFirstTurn = isNewConversation || recentMessages.length <= 1;
     const userAskedIdentity = /^(who\s+are\s+you|what\s+is\s+your\s+name|what\s+can\s+you\s+do|tell\s+me\s+about\s+yourself)\b/i.test(
       payload.message.trim()
     );
@@ -295,7 +349,7 @@ REPORTING & SECURITY DIRECTIVES:
       userAskedIdentity,
     });
 
-    // 11. Persist assistant message with search metadata & sources
+    // 13. Persist assistant message with search & memory metadata
     const assistantMessage = await DatabaseService.saveMessage(convId, {
       role: 'assistant',
       content: cleanContent,
@@ -307,6 +361,8 @@ REPORTING & SECURITY DIRECTIVES:
         fallbackUsed,
         originalProvider: primaryProviderType,
         memoriesReferenced: assembled.referencedMemoryIds,
+        memoryActionTaken: activeMemoryResult?.action,
+        memoryFactSaved: activeMemoryResult?.factSummary,
         sources: searchResults.length > 0 ? searchResults : undefined,
         searchQuery: searchPerformed ? searchDecision.query : undefined,
         searchPerformed,
@@ -314,19 +370,12 @@ REPORTING & SECURITY DIRECTIVES:
         searchError,
         searchDecisionCategory: searchDecision.category,
         searchDecisionReason: searchDecision.reason,
-        searchTrigger: searchDecision.isManual ? 'manual' : (searchPerformed ? 'automatic' : 'none'),
+        searchTrigger: searchDecision.isManual ? 'manual' : searchPerformed ? 'automatic' : 'none',
       },
     });
 
-    // 11. Signal answer complete
+    // 14. Signal answer complete
     onStatusUpdate?.('Answer complete');
-
-    // 12. Extract memories asynchronously if enabled scoped to user
-    if (profile.memorySettings.autoExtract) {
-      MemoryService.extractAndStoreFromMessage(payload.message, convId, payload.userId).catch((err) => {
-        console.error('[MemoryService] Background memory extraction error:', err);
-      });
-    }
 
     return {
       message: assistantMessage,

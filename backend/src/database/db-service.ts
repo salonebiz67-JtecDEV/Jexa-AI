@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { getSupabaseClient, isSupabaseConfigured, testSupabasePing } from './supabase';
 import { Conversation, ChatMessage } from '../../../shared/types/chat';
-import { MemoryItem, MemoryCreateInput } from '../../../shared/types/memory';
+import { MemoryItem, MemoryCreateInput, ResearchHistoryItem, ResearchHistorySource } from '../../../shared/types/memory';
 import { BrainProfile } from '../../../shared/types/brain';
 import { DatabaseDiagnosticsResult, DatabaseHealthResponse, TestStepStatus } from '../../../shared/types/database';
 import { JEXA_IDENTITY } from '../../../ai/brain/identity';
@@ -33,6 +33,7 @@ class InMemoryDatabase {
   public conversations: Map<string, Conversation> = new Map();
   public messages: Map<string, ChatMessage[]> = new Map();
   public memories: Map<string, MemoryItem> = new Map();
+  public researchHistory: Map<string, ResearchHistoryItem> = new Map();
   public userProfiles: Map<string, any> = new Map();
   public userBrainProfiles: Map<string, BrainProfile> = new Map();
   public messageMetadata: Map<string, any> = new Map();
@@ -103,6 +104,7 @@ class InMemoryDatabase {
     const seedMemories: MemoryItem[] = [
       {
         id: '00000000-0000-0000-0000-000000000021',
+        userId: DEFAULT_USER_ID,
         category: 'goal',
         fact: 'User is building a production-grade AI companion application with real Supabase persistence.',
         confidence: 0.95,
@@ -111,6 +113,7 @@ class InMemoryDatabase {
       },
       {
         id: '00000000-0000-0000-0000-000000000022',
+        userId: DEFAULT_USER_ID,
         category: 'preference',
         fact: 'User values clean modular architecture, dark elegant aesthetics, and responsiveness.',
         confidence: 0.92,
@@ -942,6 +945,118 @@ export class DatabaseService {
     memoryStore.memories.delete(validId);
     memoryStore.memories.delete(id);
     return true;
+  }
+
+  // =========================================================================
+  // RESEARCH HISTORY PERSISTENCE
+  // =========================================================================
+
+  public static async saveResearchHistory(
+    input: {
+      query: string;
+      summary: string;
+      sources: ResearchHistorySource[];
+      sourceConversationId?: string;
+    },
+    userId?: string
+  ): Promise<ResearchHistoryItem> {
+    const id = crypto.randomUUID();
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    const now = new Date().toISOString();
+
+    const entry: ResearchHistoryItem = {
+      id,
+      userId: validUserId,
+      query: input.query.trim(),
+      summary: input.summary.trim(),
+      sources: input.sources || [],
+      sourceConversationId: input.sourceConversationId ? toValidUUID(input.sourceConversationId) : undefined,
+      searchedAt: now,
+      createdAt: now,
+    };
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await this.ensureUserExists(validUserId);
+        const { error } = await client.from('research_history').insert({
+          id: entry.id,
+          user_id: validUserId,
+          query: entry.query,
+          summary: entry.summary,
+          sources: entry.sources,
+          source_conversation_id: entry.sourceConversationId || null,
+          searched_at: entry.searchedAt,
+          created_at: entry.createdAt,
+        });
+
+        if (error) {
+          console.warn('[DatabaseService] Supabase research_history write notice:', error.message);
+        }
+      } catch (err: any) {
+        console.warn('[DatabaseService] Error inserting research_history to Supabase:', err.message);
+      }
+    }
+
+    memoryStore.researchHistory.set(id, entry);
+    return entry;
+  }
+
+  public static async getResearchHistory(
+    userId?: string,
+    searchQuery?: string,
+    limit: number = 5
+  ): Promise<ResearchHistoryItem[]> {
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    const client = getSupabaseClient();
+
+    if (client) {
+      try {
+        let queryBuilder = client
+          .from('research_history')
+          .select('*')
+          .eq('user_id', validUserId)
+          .order('searched_at', { ascending: false })
+          .limit(limit);
+
+        if (searchQuery?.trim()) {
+          queryBuilder = queryBuilder.ilike('query', `%${searchQuery.trim()}%`);
+        }
+
+        const { data, error } = await queryBuilder;
+        if (!error && data && data.length > 0) {
+          return data.map((d: any) => ({
+            id: d.id,
+            userId: d.user_id,
+            query: d.query,
+            summary: d.summary,
+            sources: d.sources || [],
+            sourceConversationId: d.source_conversation_id,
+            searchedAt: d.searched_at,
+            createdAt: d.created_at,
+          }));
+        }
+      } catch (err: any) {
+        console.warn('[DatabaseService] Error querying research_history from Supabase:', err.message);
+      }
+    }
+
+    // In-memory fallback
+    const all = Array.from(memoryStore.researchHistory.values()).filter(
+      (r) => r.userId === validUserId
+    );
+
+    if (searchQuery?.trim()) {
+      const qLower = searchQuery.toLowerCase();
+      return all
+        .filter((r) => r.query.toLowerCase().includes(qLower) || r.summary.toLowerCase().includes(qLower))
+        .sort((a, b) => new Date(b.searchedAt).getTime() - new Date(a.searchedAt).getTime())
+        .slice(0, limit);
+    }
+
+    return all
+      .sort((a, b) => new Date(b.searchedAt).getTime() - new Date(a.searchedAt).getTime())
+      .slice(0, limit);
   }
 
   // =========================================================================
