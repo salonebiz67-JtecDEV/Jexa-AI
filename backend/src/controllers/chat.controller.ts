@@ -2,14 +2,13 @@ import { Request, Response } from 'express';
 import { ChatService } from '../services/chat.service';
 import { SendMessagePayload, StreamChatEvent } from '../../../shared/types/chat';
 import { formatCleanProviderError } from '../../../shared/types/provider';
+import { getResolvedUserId } from '../middleware/auth.middleware';
 
 export class ChatController {
   public static async sendMessage(req: Request, res: Response): Promise<void> {
     const payload: SendMessagePayload = req.body || {};
-    const userId = (req.headers['x-user-id'] as string) || (payload?.userId as string);
-    if (userId) {
-      payload.userId = userId;
-    }
+    const userId = getResolvedUserId(req);
+    payload.userId = userId;
 
     if (!payload.message || typeof payload.message !== 'string' || !payload.message.trim()) {
       res.status(400).json({ success: false, error: 'A non-empty message string is required.' });

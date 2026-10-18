@@ -11,6 +11,12 @@ export interface AssembleContextOptions {
   memories?: MemoryItem[];
   activeMemoryResult?: MemoryExtractionResult;
   researchHistory?: ResearchHistoryItem[];
+  pastConversationMessages?: Array<{
+    conversationTitle: string;
+    role: 'user' | 'assistant';
+    content: string;
+    createdAt: string;
+  }>;
   recentMessages?: ChatMessage[];
   userContext?: {
     userName?: string;
@@ -73,15 +79,23 @@ Note: This context is background familiarity. Do NOT use it to generate greeting
       return `• [${m.category.toUpperCase()}] ${m.fact}`;
     });
     promptSections.push(`[DURABLE USER MEMORY & FACTS ACROSS ALL CHATS]
-The following verified facts about the user are registered in durable memory:
+The following verified facts about the user are registered in durable memory across all conversations:
 ${memoryLines.join('\n')}
 
 MEMORY HONESTY & USAGE RULES:
-- When the user asks "What do you remember about me?", "What do you know about me?", or similar, summarize ALL the verified memories listed above accurately and conversationally. Do NOT claim you only know their name if additional memories are listed above!
+- When the user asks "What do you remember about me?", "What do you know about me?", or similar, summarize ALL the verified memories listed above accurately, warmly, and conversationally.
+- NEVER claim that you only know their name when additional memories are listed above!
 - Only reference memories that are explicitly provided in durable memory.
 - Never pretend to recall past events or information that is not available in context.
 - Never claim to have saved something to memory when it was casual chatter. Only acknowledge memory saves when an actual lasting fact was recorded.
 - Weave durable facts naturally into advice without robotic database citations.`);
+  } else {
+    promptSections.push(`[DURABLE USER MEMORY & FACTS ACROSS ALL CHATS]
+No persistent conversational memories have been recorded for this user yet.
+
+MEMORY HONESTY RULES:
+- When the user asks "What do you remember about me?", "What do you know about me?", or similar, truthfully state that you don't have any personal memories or custom notes saved yet, and warmly invite them to share anything they'd like you to remember.
+- NEVER claim that the user's name is their only saved detail unless an actual conversational memory exists for it. The user's account name comes from their sign-in profile, not conversational memory.`);
   }
 
   // 4b. Active Memory Operation Result (Current Turn Feedback)
@@ -116,6 +130,20 @@ Directive: ${directive}`);
     promptSections.push(`[PREVIOUS RESEARCH HISTORY ACROSS CONVERSATIONS]
 ${researchLines.join('\n')}
 Use this research context to answer follow-up questions or continue earlier research threads without redundant searches.`);
+  }
+
+  // 4d. Past Conversation Messages Across All Chats
+  if (options.pastConversationMessages && options.pastConversationMessages.length > 0) {
+    const pastLines = options.pastConversationMessages.map(
+      (p) => `• [From chat "${p.conversationTitle}" on ${p.createdAt.slice(0, 10)}] ${p.role.toUpperCase()}: ${p.content.slice(0, 200)}`
+    );
+    promptSections.push(`[RELEVANT PAST CONVERSATIONS ACROSS ALL CHATS]
+The user discussed the following relevant points in other previous conversations:
+${pastLines.join('\n')}
+
+PAST CONVERSATION RECALL RULES:
+- Connect these verified earlier discussions when answering questions like "What have I told you about this?", "Analyze my past conversations", or "What patterns do you notice about me?"
+- Synthesize patterns honestly across chats without inventing false quotes or fake conversations.`);
   }
 
   // 5. Thoughtful Deliberation & Direct Substance

@@ -2,11 +2,12 @@ import { Request, Response } from 'express';
 import { MemoryService } from '../services/memory.service';
 import { DatabaseService } from '../database/db-service';
 import { MemoryCreateInput } from '../../../shared/types/memory';
+import { getResolvedUserId } from '../middleware/auth.middleware';
 
 export class MemoryController {
   public static async list(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const userId = getResolvedUserId(req);
       const memories = await MemoryService.getAllMemories(userId);
       res.status(200).json({
         success: true,
@@ -21,7 +22,7 @@ export class MemoryController {
 
   public static async create(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req.headers['x-user-id'] as string) || req.body?.userId;
+      const userId = getResolvedUserId(req);
       const input: MemoryCreateInput = req.body;
       if (!input.fact || !input.category) {
         res.status(400).json({ success: false, error: 'Fact and category are required' });
@@ -39,9 +40,26 @@ export class MemoryController {
     }
   }
 
+  public static async update(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = getResolvedUserId(req);
+      const { id } = req.params;
+      const updates = req.body || {};
+      const updated = await MemoryService.updateMemory(id, updates, userId);
+      res.status(200).json({
+        success: true,
+        data: updated,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      console.error('[MemoryController] update error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
   public static async delete(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const userId = getResolvedUserId(req);
       const { id } = req.params;
       const success = await MemoryService.deleteMemory(id, userId);
       res.status(200).json({
@@ -57,7 +75,7 @@ export class MemoryController {
 
   public static async listResearch(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const userId = getResolvedUserId(req);
       const query = (req.query.q as string) || undefined;
       const history = await DatabaseService.getResearchHistory(userId, query, 20);
       res.status(200).json({

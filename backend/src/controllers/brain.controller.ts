@@ -1,11 +1,12 @@
 import { Request, Response } from 'express';
 import { DatabaseService } from '../database/db-service';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
+import { getResolvedUserId } from '../middleware/auth.middleware';
 
 export class BrainController {
   public static async getProfile(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const userId = getResolvedUserId(req);
       const profile = await DatabaseService.getBrainProfile(userId);
       const isDbConnected = await DatabaseService.isConnected();
       const providerStatus = AIProviderRegistry.getInstance().getStatus(
@@ -31,7 +32,7 @@ export class BrainController {
   public static async updateProfile(req: Request, res: Response): Promise<void> {
     try {
       const updates = req.body;
-      const userId = (req.headers['x-user-id'] as string) || req.body?.userId;
+      const userId = getResolvedUserId(req);
       const updated = await DatabaseService.updateBrainProfile(updates, userId);
 
       const registry = AIProviderRegistry.getInstance();

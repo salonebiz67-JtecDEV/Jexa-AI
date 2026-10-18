@@ -496,6 +496,13 @@ export const ApiClient = {
     });
   },
 
+  async updateMemory(id: string, updates: Partial<MemoryItem>): Promise<MemoryItem> {
+    return fetchJson<MemoryItem>(`${API_BASE}/memories/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  },
+
   async deleteMemory(id: string): Promise<boolean> {
     const res = await fetchJson<{ id: string; deleted: boolean }>(`${API_BASE}/memories/${id}`, {
       method: 'DELETE',

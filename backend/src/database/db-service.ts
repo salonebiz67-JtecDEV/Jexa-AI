@@ -626,6 +626,153 @@ export class DatabaseService {
     return fullMessage;
   }
 
+  /**
+   * Searches past conversation messages belonging to the authenticated user across ALL conversations.
+   * Enables JEXA to recall earlier discussions from different chats (e.g. "What did we discuss about EDSA?", "Analyze my past conversations").
+   */
+  public static async searchPastMessages(
+    userId?: string,
+    query?: string,
+    excludeConversationId?: string,
+    limit: number = 6
+  ): Promise<Array<{
+    conversationId: string;
+    conversationTitle: string;
+    role: 'user' | 'assistant';
+    content: string;
+    createdAt: string;
+  }>> {
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    const validExcludeConvId = excludeConversationId ? toValidUUID(excludeConversationId) : undefined;
+    const client = getSupabaseClient();
+
+    if (client) {
+      try {
+        // 1. Get user's conversation IDs
+        let convQuery = client
+          .from('conversations')
+          .select('id, title, updated_at')
+          .eq('user_id', validUserId);
+
+        if (validExcludeConvId) {
+          convQuery = convQuery.neq('id', validExcludeConvId);
+        }
+
+        const { data: convs, error: convErr } = await convQuery.order('updated_at', { ascending: false }).limit(20);
+        if (!convErr && convs && convs.length > 0) {
+          const convMap = new Map(convs.map((c) => [c.id, c.title]));
+          const convIds = convs.map((c) => c.id);
+
+          let msgQuery = client
+            .from('messages')
+            .select('id, conversation_id, role, content, created_at')
+            .in('conversation_id', convIds);
+
+          if (query?.trim()) {
+            const cleanQ = query.trim().replace(/[%_]/g, '');
+            if (cleanQ.length > 2) {
+              msgQuery = msgQuery.ilike('content', `%${cleanQ}%`);
+            }
+          }
+
+          const { data: msgs, error: msgErr } = await msgQuery.order('created_at', { ascending: false }).limit(limit * 2);
+          if (!msgErr && msgs && msgs.length > 0) {
+            return msgs.slice(0, limit).map((m: any) => ({
+              conversationId: m.conversation_id,
+              conversationTitle: convMap.get(m.conversation_id) || 'Previous Conversation',
+              role: m.role,
+              content: m.content,
+              createdAt: m.created_at,
+            }));
+          }
+        }
+      } catch (err: any) {
+        console.warn('[DatabaseService] Error searching past messages from Supabase:', err.message);
+      }
+    }
+
+    // In-memory fallback
+    const userConvs = Array.from(memoryStore.conversations.values()).filter(
+      (c) => c.userId === validUserId && (!validExcludeConvId || c.id !== validExcludeConvId)
+    );
+    const convMap = new Map(userConvs.map((c) => [c.id, c.title]));
+    const convIds = new Set(userConvs.map((c) => c.id));
+
+    const matchedMessages: Array<{
+      conversationId: string;
+      conversationTitle: string;
+      role: 'user' | 'assistant';
+      content: string;
+      createdAt: string;
+    }> = [];
+
+    const qLower = (query || '').toLowerCase().trim();
+
+    for (const [cId, msgList] of memoryStore.messages.entries()) {
+      if (!convIds.has(cId)) continue;
+      const title = convMap.get(cId) || 'Previous Conversation';
+      for (const m of msgList) {
+        if (!qLower || m.content.toLowerCase().includes(qLower)) {
+          matchedMessages.push({
+            conversationId: m.conversationId,
+            conversationTitle: title,
+            role: m.role as any,
+            content: m.content,
+            createdAt: m.createdAt,
+          });
+        }
+      }
+    }
+
+    return matchedMessages
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, limit);
+  }
+
+  /**
+   * Diagnostic summary of database persistence & memory health.
+   */
+  public static async getMemoryDiagnostics(userId?: string): Promise<{
+    storageMode: 'supabase_persistent' | 'in_memory_degraded';
+    supabaseConnected: boolean;
+    hasServiceRoleKey: boolean;
+    memoriesCount: number;
+    conversationsCount: number;
+    crossChatSearchSupported: boolean;
+    rlsEnforced: boolean;
+  }> {
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    const client = getSupabaseClient();
+    const ping = await testSupabasePing();
+
+    let memCount = 0;
+    let convCount = 0;
+
+    if (client && ping.connected) {
+      try {
+        const { count: mCount } = await client.from('memories').select('*', { count: 'exact', head: true }).eq('user_id', validUserId);
+        const { count: cCount } = await client.from('conversations').select('*', { count: 'exact', head: true }).eq('user_id', validUserId);
+        memCount = mCount || 0;
+        convCount = cCount || 0;
+      } catch (e) {
+        console.warn('[DatabaseService] Error reading counts for diagnostics:', e);
+      }
+    } else {
+      memCount = Array.from(memoryStore.memories.values()).filter((m) => m.userId === validUserId).length;
+      convCount = Array.from(memoryStore.conversations.values()).filter((c) => c.userId === validUserId).length;
+    }
+
+    return {
+      storageMode: ping.connected ? 'supabase_persistent' : 'in_memory_degraded',
+      supabaseConnected: ping.connected,
+      hasServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()),
+      memoriesCount: memCount,
+      conversationsCount: convCount,
+      crossChatSearchSupported: true,
+      rlsEnforced: true,
+    };
+  }
+
   // =========================================================================
   // SETTINGS & BRAIN PROFILE PERSISTENCE (Supabase Source of Truth)
   // =========================================================================

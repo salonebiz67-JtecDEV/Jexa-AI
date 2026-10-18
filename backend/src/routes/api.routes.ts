@@ -10,7 +10,12 @@ import { ProviderController } from '../controllers/provider.controller';
 import { DatabaseController } from '../controllers/database.controller';
 import { AuthController } from '../controllers/auth.controller';
 
+import { authenticateRequest } from '../middleware/auth.middleware';
+
 const router = Router();
+
+// Apply cryptographic authentication & verified user resolution middleware
+router.use(authenticateRequest);
 
 // Authentication & User Profile
 router.get('/auth/config', AuthController.getConfig);
@@ -54,6 +59,8 @@ router.delete('/conversations/:id', ConversationController.delete);
 // Memories
 router.get('/memories', MemoryController.list);
 router.post('/memories', MemoryController.create);
+router.put('/memories/:id', MemoryController.update);
+router.patch('/memories/:id', MemoryController.update);
 router.delete('/memories/:id', MemoryController.delete);
 router.get('/research-history', MemoryController.listResearch);
 

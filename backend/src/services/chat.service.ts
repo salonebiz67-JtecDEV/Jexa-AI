@@ -69,7 +69,7 @@ export class ChatService {
     let activeMemoryResult: MemoryExtractionResult | undefined;
 
     if (profile.memorySettings.enabled) {
-      onStatusUpdate?.('Checking relevant memories...');
+      onStatusUpdate?.('Checking memories...');
       try {
         relevantMemories = await MemoryService.getRelevantMemories(
           payload.message,
@@ -83,13 +83,22 @@ export class ChatService {
 
       // Check if current user message contains explicit remember instructions or durable personal facts
       const memoryIntent = MemoryService.detectMemoryIntent(payload.message);
-      if (profile.memorySettings.autoExtract && memoryIntent.hasIntent) {
+      const isExplicitInstruction =
+        memoryIntent.type === 'explicit' ||
+        memoryIntent.type === 'forget' ||
+        memoryIntent.type === 'privacy';
+      const shouldExtract =
+        isExplicitInstruction ||
+        (profile.memorySettings.autoExtract && memoryIntent.hasIntent);
+
+      if (shouldExtract) {
         try {
           activeMemoryResult = await MemoryService.extractAndStoreFromMessage(
             payload.message,
             convId,
             payload.userId,
-            onStatusUpdate
+            onStatusUpdate,
+            primaryProvider
           );
 
           // If a memory was successfully saved or updated, include it in context memories
@@ -121,6 +130,33 @@ export class ChatService {
       relevantResearch = await DatabaseService.getResearchHistory(payload.userId, undefined, 4);
     } catch (err: any) {
       console.warn('[ChatService] Research history retrieval notice:', err.message);
+    }
+
+    // 6b. Cross-conversation Past Messages (Connected history across all chats)
+    let relevantPastConversations: Array<{
+      conversationId: string;
+      conversationTitle: string;
+      role: 'user' | 'assistant';
+      content: string;
+      createdAt: string;
+    }> = [];
+    try {
+      const isPastChatInquiry =
+        /(?:past\s+conversation|earlier\s+chat|other\s+chat|previous\s+chat|what\s+have\s+i\s+told\s+you|analyze\s+my\s+past|what\s+patterns\s+do\s+you\s+notice|last\s+time\s+we\s+talked|remember\s+when|we\s+discussed|did\s+i\s+mention)/i.test(
+          payload.message
+        );
+
+      const pastMsgs = await DatabaseService.searchPastMessages(
+        payload.userId,
+        isPastChatInquiry ? payload.message : undefined,
+        convId,
+        4
+      );
+      if (pastMsgs && pastMsgs.length > 0) {
+        relevantPastConversations = pastMsgs;
+      }
+    } catch (err: any) {
+      console.warn('[ChatService] Past messages retrieval notice:', err.message);
     }
 
     // 7. Planning & Intelligent Search Evaluation (Automatic AI-driven + manual fallback)
@@ -201,6 +237,7 @@ export class ChatService {
       memories: relevantMemories,
       activeMemoryResult,
       researchHistory: relevantResearch,
+      pastConversationMessages: relevantPastConversations,
       recentMessages,
       userContext: payload.userContext,
       isVoiceMode: Boolean(payload.isVoiceMode),

@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
 import { DatabaseService } from '../database/db-service';
+import { getResolvedUserId } from '../middleware/auth.middleware';
 
 export class ConversationController {
   public static async list(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const userId = getResolvedUserId(req);
       const conversations = await DatabaseService.listConversations(userId);
       res.status(200).json({
         success: true,
@@ -23,7 +24,7 @@ export class ConversationController {
   public static async create(req: Request, res: Response): Promise<void> {
     try {
       const { title, personaId } = req.body || {};
-      const userId = (req.headers['x-user-id'] as string) || req.body?.userId;
+      const userId = getResolvedUserId(req);
       const conversation = await DatabaseService.createConversation(title, personaId, userId);
       res.status(201).json({
         success: true,
@@ -42,7 +43,7 @@ export class ConversationController {
   public static async getById(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const userId = getResolvedUserId(req);
       const conversation = await DatabaseService.getConversation(id, userId);
       if (!conversation) {
         res.status(404).json({ success: false, error: 'Conversation not found' });
@@ -119,7 +120,7 @@ export class ConversationController {
   public static async getMessages(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const userId = getResolvedUserId(req);
       const messages = await DatabaseService.getMessages(id, userId);
       res.status(200).json({
         success: true,
@@ -138,7 +139,7 @@ export class ConversationController {
   public static async delete(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const userId = getResolvedUserId(req);
       const deleted = await DatabaseService.deleteConversation(id, userId);
       res.status(200).json({
         success: deleted,
