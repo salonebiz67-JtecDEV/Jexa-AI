@@ -4,6 +4,7 @@ import {
   MemoryCreateInput,
   MemorySearchResult,
   MemoryExtractionResult,
+  getCategoryLabel,
 } from '../../../shared/types/memory';
 import { searchRelevantMemories } from '../../../ai/memory/memory-retrieval';
 import { AIActivityStatus } from '../../../shared/types/chat';
@@ -27,7 +28,7 @@ export class MemoryService {
     if (/(?:don'?t|do\s+not|never)\s+(?:remember|save|store)|(?:off\s+the\s+record|keep\s+this\s+private)/i.test(lower)) {
       return { hasIntent: true, type: 'privacy' };
     }
-    if (/(?:forget|delete|remove|clear)\s+(?:my|the\s+memory|that|about)\b/i.test(lower)) {
+    if (/(?:please\s+)?(?:forget|delete|remove|clear)\s+(?:my|the\s+memory|the\s+fact|that|about)?\b/i.test(lower)) {
       return { hasIntent: true, type: 'forget' };
     }
     if (/(?:remember\s+(?:this|that|the|following)|save\s+(?:this|to\s+memory)|this\s+is\s+important|i\s+want\s+you\s+to\s+remember|update\s+what\s+you\s+remember|note\s+that|don't\s+forget)/i.test(lower)) {
@@ -131,6 +132,7 @@ export class MemoryService {
       }
 
       // 3. Run AI Memory Extractor analysis
+      onStatusUpdate?.('Identifying useful memory…');
       const decision = await AIMemoryExtractor.analyze(trimmed, existingMemories, activeProvider);
 
       if (decision.action === 'privacy_skipped') {
@@ -162,7 +164,7 @@ export class MemoryService {
 
       if (decision.action === 'updated' && decision.candidates.length > 0) {
         const candidate = decision.candidates[0];
-        onStatusUpdate?.('Saving memory...', { memoryFact: candidate.fact });
+        onStatusUpdate?.('Saving memory…', { memoryFact: candidate.fact });
 
         let updatedItem: MemoryItem;
         if (candidate.updatesMemoryId) {
@@ -171,6 +173,7 @@ export class MemoryService {
             {
               fact: candidate.fact,
               category: candidate.category,
+              memoryType: candidate.memoryType || 'confirmed_fact',
               confidence: candidate.confidence,
             },
             userId
@@ -181,7 +184,7 @@ export class MemoryService {
           if (existing) {
             updatedItem = await DatabaseService.updateMemory(
               existing.id,
-              { fact: candidate.fact, confidence: candidate.confidence },
+              { fact: candidate.fact, confidence: candidate.confidence, memoryType: candidate.memoryType || 'confirmed_fact' },
               userId
             );
           } else {
@@ -189,6 +192,7 @@ export class MemoryService {
               {
                 category: candidate.category,
                 fact: candidate.fact,
+                memoryType: candidate.memoryType || 'confirmed_fact',
                 confidence: candidate.confidence,
                 sourceConversationId: conversationId,
               },
@@ -197,7 +201,13 @@ export class MemoryService {
           }
         }
 
-        onStatusUpdate?.('Memory updated', { memoryFact: candidate.fact, memoryAction: 'updated' });
+        const catLabel = getCategoryLabel(updatedItem.category);
+        onStatusUpdate?.((`Memory updated — ${catLabel}`) as any, {
+          memoryFact: candidate.fact,
+          memoryAction: 'updated',
+          category: updatedItem.category,
+        });
+
         return {
           action: 'updated',
           memories: [updatedItem],
@@ -210,12 +220,13 @@ export class MemoryService {
         const createdItems: MemoryItem[] = [];
 
         for (const candidate of decision.candidates) {
-          onStatusUpdate?.('Saving memory...', { memoryFact: candidate.fact });
+          onStatusUpdate?.('Saving memory…', { memoryFact: candidate.fact });
 
           const created = await DatabaseService.createMemory(
             {
               category: candidate.category,
               fact: candidate.fact,
+              memoryType: candidate.memoryType || 'confirmed_fact',
               confidence: candidate.confidence,
               sourceConversationId: conversationId,
             },
@@ -225,7 +236,14 @@ export class MemoryService {
         }
 
         const primaryFact = createdItems[0]?.fact || 'New memory';
-        onStatusUpdate?.('Memory saved', { memoryFact: primaryFact, memoryAction: 'saved' });
+        const primaryCat = createdItems[0]?.category || decision.candidates[0].category;
+        const catLabel = getCategoryLabel(primaryCat);
+
+        onStatusUpdate?.((`Memory saved — ${catLabel}`) as any, {
+          memoryFact: primaryFact,
+          memoryAction: 'saved',
+          category: primaryCat,
+        });
 
         return {
           action: 'saved',

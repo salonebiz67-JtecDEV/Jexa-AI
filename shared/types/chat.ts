@@ -10,16 +10,29 @@ export type AIActivityStatus =
   | 'Analyzing sources...'
   | 'Checking relevant memories...'
   | 'Checking memories...'
+  | 'Identifying useful memory…'
   | 'Saving memory...'
+  | 'Saving memory…'
   | 'Memory saved'
+  | 'Memory saved — User Profile'
+  | 'Memory saved — Preferences & Settings'
+  | 'Memory saved — Relationships & Important Dates'
+  | 'Memory saved — Projects & Goals'
+  | 'Memory saved — Conversation Insights'
   | 'Memory updated'
+  | 'Memory updated — User Profile'
+  | 'Memory updated — Preferences & Settings'
+  | 'Memory updated — Relationships & Important Dates'
+  | 'Memory updated — Projects & Goals'
+  | 'Memory updated — Conversation Insights'
   | 'Memory unavailable'
   | 'Memory retrieval failed'
   | 'Memory storage unavailable'
   | 'Processing information...'
   | 'Preparing answer...'
   | 'Answer complete'
-  | 'Search failed — retry available';
+  | 'Search failed — retry available'
+  | (string & {});
 
 export interface WebSearchResultItem {
   title: string;

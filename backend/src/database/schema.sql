@@ -123,10 +123,15 @@ CREATE TABLE IF NOT EXISTS public.user_preferences (
 CREATE TABLE IF NOT EXISTS public.memories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
-    category TEXT NOT NULL CHECK (category IN ('user_fact', 'preference', 'goal', 'relationship', 'milestone', 'interest')),
+    category TEXT NOT NULL CHECK (category IN (
+        'user_profile', 'preferences_settings', 'relationships_dates', 'projects_goals', 'conversation_insights',
+        'user_fact', 'preference', 'goal', 'relationship', 'milestone', 'interest'
+    )),
     fact TEXT NOT NULL,
+    memory_type TEXT DEFAULT 'confirmed_fact' CHECK (memory_type IN ('confirmed_fact', 'insight')),
     confidence NUMERIC(3, 2) DEFAULT 0.85,
     source_conversation_id UUID REFERENCES public.conversations(id) ON DELETE SET NULL,
+    source_message_id UUID REFERENCES public.messages(id) ON DELETE SET NULL,
     last_reinforced_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );

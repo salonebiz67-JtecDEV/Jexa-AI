@@ -8,6 +8,11 @@ export interface FormattedLongTermMemory {
 
 export function formatLongTermMemories(memories: MemoryItem[]): FormattedLongTermMemory {
   const byCategory: Record<MemoryCategory, MemoryItem[]> = {
+    user_profile: [],
+    preferences_settings: [],
+    relationships_dates: [],
+    projects_goals: [],
+    conversation_insights: [],
     user_fact: [],
     preference: [],
     goal: [],

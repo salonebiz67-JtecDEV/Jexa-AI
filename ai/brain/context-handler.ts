@@ -1,7 +1,7 @@
 import { JEXA_IDENTITY } from './identity';
 import { PERSONALITY_PRESETS } from './personality';
 import { PersonalityStyle } from '../../shared/types/brain';
-import { MemoryItem, MemoryExtractionResult, ResearchHistoryItem } from '../../shared/types/memory';
+import { MemoryItem, MemoryExtractionResult, ResearchHistoryItem, getCategoryLabel } from '../../shared/types/memory';
 import { ChatMessage } from '../../shared/types/chat';
 import { formatResponseRules } from './response-rules';
 import { getStyleInstructions } from './conversation-style';
@@ -76,7 +76,9 @@ Note: This context is background familiarity. Do NOT use it to generate greeting
   if (options.memories && options.memories.length > 0) {
     const memoryLines = options.memories.map((m) => {
       referencedMemoryIds.push(m.id);
-      return `• [${m.category.toUpperCase()}] ${m.fact}`;
+      const catLabel = getCategoryLabel(m.category).toUpperCase();
+      const typeLabel = m.memoryType === 'insight' ? 'AI INSIGHT' : 'CONFIRMED FACT';
+      return `• [${catLabel} | ${typeLabel}] ${m.fact}`;
     });
     promptSections.push(`[DURABLE USER MEMORY & FACTS ACROSS ALL CHATS]
 The following verified facts about the user are registered in durable memory across all conversations:
@@ -84,6 +86,7 @@ ${memoryLines.join('\n')}
 
 MEMORY HONESTY & USAGE RULES:
 - When the user asks "What do you remember about me?", "What do you know about me?", or similar, summarize ALL the verified memories listed above accurately, warmly, and conversationally.
+- Clearly distinguish confirmed facts from interpretations: Treat [CONFIRMED FACT] as established truth directly from the user, and [AI INSIGHT] as an observed pattern or reasonable inference.
 - NEVER claim that you only know their name when additional memories are listed above!
 - Only reference memories that are explicitly provided in durable memory.
 - Never pretend to recall past events or information that is not available in context.

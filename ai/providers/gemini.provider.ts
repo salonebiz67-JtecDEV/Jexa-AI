@@ -10,12 +10,19 @@ export class GeminiTextAIProvider implements ITextAIProvider {
   public lastError?: string;
 
   constructor(customModel?: string) {
-    this.modelName = (
+    let rawModel = (
       customModel ||
       process.env.TEXT_AI_MODEL ||
       process.env.GEMINI_MODEL ||
-      'gemini-2.5-flash'
+      'gemini-3.8-flash'
     ).trim();
+
+    // Automatically alias deprecated models to modern gemini-3.8-flash
+    if (rawModel === 'gemini-2.5-flash' || rawModel === 'gemini-1.5-flash' || rawModel === 'gemini-pro') {
+      rawModel = 'gemini-3.8-flash';
+    }
+
+    this.modelName = rawModel;
 
     const apiKey =
       process.env.GEMINI_API_KEY ||

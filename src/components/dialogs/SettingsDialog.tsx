@@ -45,7 +45,7 @@ import {
   DatabaseDiagnosticsResult,
   TestStepStatus,
 } from '../../../shared/types';
-import { MemoryItem } from '../../../shared/types/memory';
+import { MemoryItem, getCategoryLabel } from '../../../shared/types/memory';
 import { safeStorage } from '../../services/storage';
 import { ApiClient, ProviderTestResult } from '../../services/api.client';
 import { AudioPlayer } from '../../services/audioPlayer';
@@ -1572,10 +1572,18 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                       className="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.05] space-y-1.5"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
-                            {mem.category}
+                            {getCategoryLabel(mem.category)}
                           </span>
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded ${mem.memoryType === 'insight' ? 'bg-indigo-500/20 text-indigo-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
+                            {mem.memoryType === 'insight' ? 'AI Insight' : 'Confirmed Fact'}
+                          </span>
+                          {typeof mem.confidence === 'number' && (
+                            <span className="text-[9px] text-slate-500 font-mono">
+                              {Math.round(mem.confidence * 100)}% conf
+                            </span>
+                          )}
                           <span className="text-[9px] text-slate-500">
                             {mem.lastReinforcedAt ? new Date(mem.lastReinforcedAt).toLocaleDateString() : 'Active'}
                           </span>

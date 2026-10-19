@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { getSupabaseClient, isSupabaseConfigured, testSupabasePing } from './supabase';
 import { Conversation, ChatMessage } from '../../../shared/types/chat';
-import { MemoryItem, MemoryCreateInput, ResearchHistoryItem, ResearchHistorySource } from '../../../shared/types/memory';
+import { MemoryItem, MemoryCreateInput, ResearchHistoryItem, ResearchHistorySource, normalizeCategory } from '../../../shared/types/memory';
 import { BrainProfile } from '../../../shared/types/brain';
 import { DatabaseDiagnosticsResult, DatabaseHealthResponse, TestStepStatus } from '../../../shared/types/database';
 import { JEXA_IDENTITY } from '../../../ai/brain/identity';
@@ -963,10 +963,12 @@ export class DatabaseService {
         return data.map((d) => ({
           id: d.id,
           userId: d.user_id,
-          category: d.category,
+          category: normalizeCategory(d.category),
           fact: d.fact,
+          memoryType: (d.memory_type as any) || 'confirmed_fact',
           confidence: parseFloat(d.confidence || '0.85'),
           sourceConversationId: d.source_conversation_id,
+          sourceMessageId: d.source_message_id,
           lastReinforcedAt: d.last_reinforced_at,
           createdAt: d.created_at,
         }));
@@ -975,19 +977,27 @@ export class DatabaseService {
 
     return Array.from(memoryStore.memories.values())
       .filter((m) => (userId ? m.userId === validUserId : m.userId === DEFAULT_USER_ID))
+      .map((m) => ({
+        ...m,
+        category: normalizeCategory(m.category),
+        memoryType: m.memoryType || 'confirmed_fact',
+      }))
       .sort((a, b) => new Date(b.lastReinforcedAt).getTime() - new Date(a.lastReinforcedAt).getTime());
   }
 
   public static async createMemory(input: MemoryCreateInput, userId?: string): Promise<MemoryItem> {
     const id = crypto.randomUUID();
     const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    const normalizedCat = normalizeCategory(input.category);
     const newMemory: MemoryItem = {
       id,
       userId: validUserId,
-      category: input.category,
+      category: normalizedCat,
       fact: input.fact,
+      memoryType: input.memoryType || 'confirmed_fact',
       confidence: input.confidence ?? 0.85,
       sourceConversationId: input.sourceConversationId ? toValidUUID(input.sourceConversationId) : undefined,
+      sourceMessageId: input.sourceMessageId ? toValidUUID(input.sourceMessageId) : undefined,
       lastReinforcedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
     };
@@ -995,7 +1005,7 @@ export class DatabaseService {
     const client = getSupabaseClient();
     if (client) {
       await this.ensureUserExists(validUserId);
-      const { error } = await client.from('memories').insert({
+      const insertPayload: Record<string, any> = {
         id: newMemory.id,
         user_id: validUserId,
         category: newMemory.category,
@@ -1004,7 +1014,27 @@ export class DatabaseService {
         source_conversation_id: newMemory.sourceConversationId || null,
         last_reinforced_at: newMemory.lastReinforcedAt,
         created_at: newMemory.createdAt,
-      });
+      };
+
+      let { error } = await client.from('memories').insert(insertPayload);
+
+      // If the Supabase instance has an older check constraint, retry with legacy category
+      if (error && (error.message?.includes('check constraint') || (error as any).code === '23514')) {
+        const legacyCategoryMap: Record<string, string> = {
+          user_profile: 'user_fact',
+          preferences_settings: 'preference',
+          relationships_dates: 'relationship',
+          projects_goals: 'goal',
+          conversation_insights: 'user_fact',
+        };
+        const legacyCat = legacyCategoryMap[newMemory.category] || 'user_fact';
+        const retryResult = await client.from('memories').insert({
+          ...insertPayload,
+          category: legacyCat,
+        });
+        error = retryResult.error;
+      }
+
       if (error) {
         console.error('[DatabaseService] Failed to insert memory to Supabase:', error.message);
         throw new Error(`Failed to persist memory to Supabase: ${error.message}`);
@@ -1028,7 +1058,7 @@ export class DatabaseService {
       last_reinforced_at: new Date().toISOString(),
     };
     if (updates.fact) updatePayload.fact = updates.fact;
-    if (updates.category) updatePayload.category = updates.category;
+    if (updates.category) updatePayload.category = normalizeCategory(updates.category);
     if (updates.confidence !== undefined) updatePayload.confidence = updates.confidence;
 
     if (client) {
@@ -1036,7 +1066,26 @@ export class DatabaseService {
       if (userId) {
         query = query.eq('user_id', validUserId);
       }
-      const { data, error } = await query.select().single();
+      let { data, error } = await query.select().single();
+
+      // If legacy check constraint rejects category on update, retry with legacy category
+      if (error && updates.category && (error.message?.includes('check constraint') || (error as any).code === '23514')) {
+        const legacyCategoryMap: Record<string, string> = {
+          user_profile: 'user_fact',
+          preferences_settings: 'preference',
+          relationships_dates: 'relationship',
+          projects_goals: 'goal',
+          conversation_insights: 'user_fact',
+        };
+        const legacyCat = legacyCategoryMap[normalizeCategory(updates.category)] || 'user_fact';
+        updatePayload.category = legacyCat;
+        let retryQuery = client.from('memories').update(updatePayload).eq('id', validId);
+        if (userId) retryQuery = retryQuery.eq('user_id', validUserId);
+        const retryResult = await retryQuery.select().single();
+        data = retryResult.data;
+        error = retryResult.error;
+      }
+
       if (error) {
         console.error('[DatabaseService] Failed to update memory in Supabase:', error.message);
         throw new Error(`Failed to update memory in Supabase: ${error.message}`);
@@ -1045,10 +1094,12 @@ export class DatabaseService {
         const updatedItem: MemoryItem = {
           id: data.id,
           userId: data.user_id,
-          category: data.category,
+          category: normalizeCategory(data.category),
           fact: data.fact,
+          memoryType: (data.memory_type as any) || 'confirmed_fact',
           confidence: parseFloat(data.confidence || '0.85'),
           sourceConversationId: data.source_conversation_id,
+          sourceMessageId: data.source_message_id,
           lastReinforcedAt: data.last_reinforced_at,
           createdAt: data.created_at,
         };
@@ -1064,6 +1115,8 @@ export class DatabaseService {
     const updated: MemoryItem = {
       ...existing,
       ...updates,
+      category: updates.category ? normalizeCategory(updates.category) : existing.category,
+      memoryType: updates.memoryType || existing.memoryType || 'confirmed_fact',
       lastReinforcedAt: new Date().toISOString(),
     };
     memoryStore.memories.set(validId, updated);

@@ -37,6 +37,44 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
 
   // Determine icon, accent color, and animations based on actual operation
   const getStatusConfig = () => {
+    if (currentStatus.startsWith('Memory saved')) {
+      return {
+        icon: CheckCircle2,
+        color: 'text-emerald-400',
+        bg: 'bg-emerald-500/20',
+        border: 'border-emerald-500/40',
+        dotColor: 'bg-emerald-400',
+        glow: 'shadow-[0_0_14px_rgba(16,185,129,0.35)]',
+      };
+    }
+
+    if (currentStatus.startsWith('Memory updated')) {
+      return {
+        icon: CheckCircle2,
+        color: 'text-teal-400',
+        bg: 'bg-teal-500/20',
+        border: 'border-teal-500/40',
+        dotColor: 'bg-teal-400',
+        glow: 'shadow-[0_0_14px_rgba(20,184,166,0.35)]',
+      };
+    }
+
+    if (
+      currentStatus === 'Memory unavailable' ||
+      currentStatus === 'Memory storage unavailable' ||
+      currentStatus === 'Memory retrieval failed' ||
+      currentStatus.startsWith('Memory save failed')
+    ) {
+      return {
+        icon: AlertTriangle,
+        color: 'text-amber-400',
+        bg: 'bg-amber-500/10',
+        border: 'border-amber-500/30',
+        dotColor: 'bg-amber-400',
+        glow: 'shadow-[0_0_12px_rgba(245,158,11,0.25)]',
+      };
+    }
+
     switch (currentStatus) {
       case 'Searching the web...':
         return {
@@ -70,6 +108,8 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
         };
       case 'Checking relevant memories...':
       case 'Checking memories...':
+      case 'Identifying useful memory…':
+      case 'Identifying useful memory...':
         return {
           icon: Brain,
           color: 'text-purple-400',
@@ -80,6 +120,7 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           pulseIcon: true,
         };
       case 'Saving memory...':
+      case 'Saving memory…':
         return {
           icon: Sparkles,
           color: 'text-cyan-400',
@@ -88,35 +129,6 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           dotColor: 'bg-cyan-400',
           glow: 'shadow-[0_0_12px_rgba(6,182,212,0.25)]',
           spinIcon: true,
-        };
-      case 'Memory saved':
-        return {
-          icon: CheckCircle2,
-          color: 'text-emerald-400',
-          bg: 'bg-emerald-500/20',
-          border: 'border-emerald-500/40',
-          dotColor: 'bg-emerald-400',
-          glow: 'shadow-[0_0_14px_rgba(16,185,129,0.35)]',
-        };
-      case 'Memory updated':
-        return {
-          icon: CheckCircle2,
-          color: 'text-teal-400',
-          bg: 'bg-teal-500/20',
-          border: 'border-teal-500/40',
-          dotColor: 'bg-teal-400',
-          glow: 'shadow-[0_0_14px_rgba(20,184,166,0.35)]',
-        };
-      case 'Memory unavailable':
-      case 'Memory storage unavailable':
-      case 'Memory retrieval failed':
-        return {
-          icon: AlertTriangle,
-          color: 'text-amber-400',
-          bg: 'bg-amber-500/10',
-          border: 'border-amber-500/30',
-          dotColor: 'bg-amber-400',
-          glow: 'shadow-[0_0_12px_rgba(245,158,11,0.25)]',
         };
       case 'Planning...':
         return {
