@@ -31,6 +31,7 @@ import {
   LogOut,
   Brain,
   Trash2,
+  Edit2,
 } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useBrainSettings } from '../../hooks/useBrainSettings';
@@ -135,6 +136,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [loadingMemories, setLoadingMemories] = useState(false);
   const [showMemoriesSection, setShowMemoriesSection] = useState(false);
   const [deletingMemoryId, setDeletingMemoryId] = useState<string | null>(null);
+  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
+  const [editingFact, setEditingFact] = useState<string>('');
+  const [savingEditId, setSavingEditId] = useState<string | null>(null);
 
   const fetchMemories = async () => {
     setLoadingMemories(true);
@@ -153,10 +157,45 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     try {
       await ApiClient.deleteMemory(id);
       setMemoriesList((prev) => prev.filter((m) => m.id !== id));
+      if (editingMemoryId === id) {
+        setEditingMemoryId(null);
+        setEditingFact('');
+      }
     } catch (e) {
       console.warn('[SettingsDialog] Could not delete memory:', e);
     } finally {
       setDeletingMemoryId(null);
+    }
+  };
+
+  const handleStartEdit = (mem: MemoryItem) => {
+    setEditingMemoryId(mem.id);
+    setEditingFact(mem.fact);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMemoryId(null);
+    setEditingFact('');
+  };
+
+  const handleSaveEdit = async (id: string) => {
+    if (!editingFact.trim()) return;
+    setSavingEditId(id);
+    try {
+      const updated = await ApiClient.updateMemory(id, { fact: editingFact.trim() });
+      setMemoriesList((prev) =>
+        prev.map((m) =>
+          m.id === id
+            ? { ...m, fact: updated.fact, lastReinforcedAt: updated.lastReinforcedAt }
+            : m
+        )
+      );
+      setEditingMemoryId(null);
+      setEditingFact('');
+    } catch (e) {
+      console.warn('[SettingsDialog] Could not update memory:', e);
+    } finally {
+      setSavingEditId(null);
     }
   };
 
@@ -1530,10 +1569,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   memoriesList.map((mem) => (
                     <div
                       key={mem.id}
-                      className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.05] flex items-start justify-between gap-2"
+                      className="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.05] space-y-1.5"
                     >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 mb-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
                           <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
                             {mem.category}
                           </span>
@@ -1541,21 +1580,79 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                             {mem.lastReinforcedAt ? new Date(mem.lastReinforcedAt).toLocaleDateString() : 'Active'}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-200 break-words">{mem.fact}</p>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {editingMemoryId === mem.id ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveEdit(mem.id)}
+                                disabled={savingEditId === mem.id || !editingFact.trim()}
+                                className="px-2 py-0.5 rounded bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 text-[10px] font-medium flex items-center gap-1 transition-colors disabled:opacity-50"
+                                title="Save changes"
+                              >
+                                {savingEditId === mem.id ? (
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                )}
+                                <span>Save</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleCancelEdit}
+                                disabled={savingEditId === mem.id}
+                                className="px-2 py-0.5 rounded bg-white/[0.04] hover:bg-white/[0.08] text-slate-400 text-[10px] transition-colors"
+                                title="Cancel"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleStartEdit(mem)}
+                                className="p-1 rounded text-slate-500 hover:text-purple-300 hover:bg-purple-500/10 transition-colors"
+                                title="Edit this memory"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteMemory(mem.id)}
+                                disabled={deletingMemoryId === mem.id}
+                                className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                                title="Delete this memory"
+                              >
+                                {deletingMemoryId === mem.id ? (
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
+                                ) : (
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteMemory(mem.id)}
-                        disabled={deletingMemoryId === mem.id}
-                        className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors shrink-0"
-                        title="Delete this memory"
-                      >
-                        {deletingMemoryId === mem.id ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
-                        ) : (
-                          <Trash2 className="w-3.5 h-3.5" />
-                        )}
-                      </button>
+
+                      {editingMemoryId === mem.id ? (
+                        <div className="pt-1">
+                          <input
+                            type="text"
+                            value={editingFact}
+                            onChange={(e) => setEditingFact(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveEdit(mem.id);
+                              if (e.key === 'Escape') handleCancelEdit();
+                            }}
+                            className="w-full px-2 py-1 text-xs rounded bg-white/[0.05] border border-purple-500/30 text-white focus:outline-none focus:border-purple-400"
+                            placeholder="Correct or update this memory fact..."
+                            autoFocus
+                          />
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-200 break-words leading-relaxed">{mem.fact}</p>
+                      )}
                     </div>
                   ))
                 )}
