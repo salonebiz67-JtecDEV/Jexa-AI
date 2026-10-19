@@ -65,14 +65,21 @@ export class MemoryService {
   public static async getRelevantMemories(
     query: string,
     limit: number = 8,
-    userId?: string
+    userId?: string,
+    recentDialogue?: string
   ): Promise<MemoryItem[]> {
     try {
       const allMemories = await DatabaseService.getMemories(userId);
       if (!allMemories || allMemories.length === 0) {
         return [];
       }
-      const ranked: MemorySearchResult[] = searchRelevantMemories(query, allMemories, limit);
+      const ranked: MemorySearchResult[] = searchRelevantMemories(
+        query,
+        allMemories,
+        limit,
+        0.4,
+        recentDialogue ? { recentDialogue } : undefined
+      );
       return ranked.map((r: MemorySearchResult) => r.item);
     } catch (err: any) {
       console.warn('[MemoryService] getRelevantMemories warning:', err.message);
@@ -109,7 +116,8 @@ export class MemoryService {
     conversationId: string,
     userId?: string,
     onStatusUpdate?: (status: AIActivityStatus, details?: any) => void,
-    provider?: ITextAIProvider
+    provider?: ITextAIProvider,
+    recentDialogue?: string
   ): Promise<MemoryExtractionResult> {
     const trimmed = userMessage.trim();
     if (!trimmed || trimmed.length < 3) {
@@ -131,9 +139,9 @@ export class MemoryService {
         }
       }
 
-      // 3. Run AI Memory Extractor analysis
+      // 3. Run AI Memory Extractor analysis with contextual dialogue
       onStatusUpdate?.('Identifying useful memory…');
-      const decision = await AIMemoryExtractor.analyze(trimmed, existingMemories, activeProvider);
+      const decision = await AIMemoryExtractor.analyze(trimmed, existingMemories, activeProvider, recentDialogue);
 
       if (decision.action === 'privacy_skipped') {
         return {

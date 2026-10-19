@@ -646,6 +646,22 @@ export class DatabaseService {
     const validExcludeConvId = excludeConversationId ? toValidUUID(excludeConversationId) : undefined;
     const client = getSupabaseClient();
 
+    const stopWords = new Set([
+      'the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'but', 'if', 'then',
+      'else', 'when', 'up', 'down', 'in', 'out', 'to', 'for', 'of', 'with', 'about',
+      'i', 'you', 'he', 'she', 'it', 'we', 'they', 'my', 'your', 'his', 'her', 'their',
+      'what', 'how', 'why', 'can', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
+      'tell', 'know', 'anything', 'something', 'everything', 'please', 'me', 'us',
+      'past', 'conversation', 'conversations', 'chat', 'chats', 'earlier', 'previous',
+      'mention', 'discussed', 'talked', 'remember', 'analyze', 'patterns', 'notice'
+    ]);
+
+    const cleanKeywords = (query || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !stopWords.has(w));
+
     if (client) {
       try {
         // 1. Get user's conversation IDs
@@ -668,11 +684,9 @@ export class DatabaseService {
             .select('id, conversation_id, role, content, created_at')
             .in('conversation_id', convIds);
 
-          if (query?.trim()) {
-            const cleanQ = query.trim().replace(/[%_]/g, '');
-            if (cleanQ.length > 2) {
-              msgQuery = msgQuery.ilike('content', `%${cleanQ}%`);
-            }
+          if (cleanKeywords.length > 0) {
+            const orFilter = cleanKeywords.slice(0, 4).map((kw) => `content.ilike.%${kw}%`).join(',');
+            msgQuery = msgQuery.or(orFilter);
           }
 
           const { data: msgs, error: msgErr } = await msgQuery.order('created_at', { ascending: false }).limit(limit * 2);
@@ -706,13 +720,13 @@ export class DatabaseService {
       createdAt: string;
     }> = [];
 
-    const qLower = (query || '').toLowerCase().trim();
-
     for (const [cId, msgList] of memoryStore.messages.entries()) {
       if (!convIds.has(cId)) continue;
       const title = convMap.get(cId) || 'Previous Conversation';
       for (const m of msgList) {
-        if (!qLower || m.content.toLowerCase().includes(qLower)) {
+        const contentLower = m.content.toLowerCase();
+        const matches = cleanKeywords.length === 0 || cleanKeywords.some((kw) => contentLower.includes(kw));
+        if (matches) {
           matchedMessages.push({
             conversationId: m.conversationId,
             conversationTitle: title,

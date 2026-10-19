@@ -140,6 +140,9 @@ RULES:
 3. FACT VS INSIGHT:
    - "confirmed_fact": Direct user statements, confirmed personal details, explicit instructions.
    - "insight": AI-derived behavioral tendencies or higher-level patterns.
+4. IMPERFECT ENGLISH, SLANG & CONTEXTUAL REASONING:
+   - Accurately interpret imperfect English, typos (e.g. 'sistr', 'projek', 'bday', 'nam'), phonetic spellings, contractions ('wanna', 'gonna'), and colloquial slang (e.g. 'bro', Krio 'me sista', 'na', 'wok', 'salone').
+   - Focus on intended meaning and factual substance. Resolve pronouns or references using recent dialogue context if provided.
 
 OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra prose):
 {
@@ -291,8 +294,10 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       }
     }
 
-    // 3. Category: User Profile (Name / Identity / Location / Career)
-    const nameMatch = trimmed.match(/(?:my name is|i'm called|call me|my preferred name is)\s+([a-zA-Z0-9_\- ]+?)(?:\.|$|,|!|\s+and)/i);
+    // 3. Category: User Profile (Name / Identity / Location / Career) - with slang & typo tolerance
+    const nameMatch = trimmed.match(
+      /(?:(?:my|me|mi)\s+(?:name|nam|preffered\s+name|preferred\s+name)\s+(?:is|na|b|called)?|i'm\s+called|call\s+me|am\s+called)\s+([a-zA-Z0-9_\- ]+?)(?:\.|$|,|!|\s+and)/i
+    );
     if (nameMatch && nameMatch[1]?.trim()) {
       const name = nameMatch[1].trim().replace(/[.?!]+$/, '');
       const fact = `User's preferred name is ${name}.`;
@@ -312,7 +317,9 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       };
     }
 
-    const locMatch = trimmed.match(/(?:i live in|i am based in|i'm based in|i moved to)\s+([a-zA-Z0-9_\- ,]+?)(?:\.|$|!|\s+and)/i);
+    const locMatch = trimmed.match(
+      /(?:(?:i|a|me)\s+(?:live|liv|living|based|base|moved|de)\s+(?:in|at|na)|reside\s+in)\s+([a-zA-Z0-9_\- ,]+?)(?:\.|$|!|\s+and)/i
+    );
     if (locMatch && locMatch[1]?.trim()) {
       const loc = locMatch[1].trim().replace(/[.?!]+$/, '');
       const fact = `User lives in ${loc}.`;
@@ -332,7 +339,9 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       };
     }
 
-    const careerMatch = trimmed.match(/(?:i work as|my job is|i am a|i'm a)\s+([a-zA-Z0-9_\- ]+?)\s+(?:at|for)\s+([a-zA-Z0-9_\- ]+)/i);
+    const careerMatch = trimmed.match(
+      /(?:(?:i|a|me)\s+(?:work|wok|am|a|m)\s+(?:as|like)?|my\s+job\s+is)\s+([a-zA-Z0-9_\- ]+?)\s+(?:at|for|na|wit)\s+([a-zA-Z0-9_\- ]+)/i
+    );
     if (careerMatch && careerMatch[1]?.trim() && careerMatch[2]?.trim()) {
       const role = careerMatch[1].trim();
       const company = careerMatch[2].trim().replace(/[.?!]+$/, '');
@@ -344,10 +353,14 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       };
     }
 
-    // 4. Category: Relationships & Important Dates
-    const relMatch = trimmed.match(/(?:my\s+(wife|husband|partner|son|daughter|kid|child|brother|sister|mother|father|mom|dad|friend|dog|cat|pet))\s+(?:is|is\s+named|called)\s+([a-zA-Z0-9_\- ]+)/i);
+    // 4. Category: Relationships & Important Dates - with slang & typo tolerance
+    const relMatch = trimmed.match(
+      /(?:(?:my|me|mi)\s+(wife|husband|partner|son|daughter|kid|child|brother|broda|sister|sista|sistr|mother|father|mom|dad|friend|dog|cat|pet))\s+(?:is|is\s+named|called|na)\s+([a-zA-Z0-9_\- ]+)/i
+    );
     if (relMatch && relMatch[1] && relMatch[2]?.trim()) {
-      const rel = relMatch[1].toLowerCase();
+      let rel = relMatch[1].toLowerCase();
+      if (rel === 'sistr' || rel === 'sista') rel = 'sister';
+      if (rel === 'broda') rel = 'brother';
       const person = relMatch[2].trim().replace(/[.?!]+$/, '');
       const fact = `User's ${rel} is ${person}.`;
       const existing = existingMemories.find((m) => m.fact.includes(`User's ${rel} is`));
@@ -366,7 +379,9 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       };
     }
 
-    const dateMatch = trimmed.match(/(?:my\s+birthday\s+is|our\s+anniversary\s+is|born\s+on)\s+([a-zA-Z0-9_\- ,]+?)(?:\.|$|!)/i);
+    const dateMatch = trimmed.match(
+      /(?:(?:my|her|his|our)\s+(?:birthday|bday|anniversary)\s+is|born\s+on)\s+([a-zA-Z0-9_\- ,]+?)(?:\.|$|!)/i
+    );
     if (dateMatch && dateMatch[1]?.trim()) {
       const dateStr = dateMatch[1].trim().replace(/[.?!]+$/, '');
       const fact = `Important date: "${trimmed.slice(0, 140)}".`;

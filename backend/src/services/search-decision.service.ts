@@ -28,7 +28,8 @@ export class SearchDecisionService {
   public static async evaluate(
     message: string,
     userContext?: { location?: string; timezone?: string; userName?: string },
-    aiProvider?: ITextAIProvider
+    aiProvider?: ITextAIProvider,
+    recentDialogue?: string
   ): Promise<SearchDecision> {
     const raw = (message || '').trim();
     if (!raw) {
@@ -93,9 +94,20 @@ export class SearchDecisionService {
     // 4. Explicit search commands
     const explicitMatch = this.extractExplicitSearch(raw);
     if (explicitMatch) {
+      let finalQuery = explicitMatch;
+      // If the query is just a pronoun/reference (e.g. "that", "it", "that online", "this"), resolve from recent dialogue
+      if (recentDialogue && /^(?:that|it|this|them|what\s+we\s+discussed)(?:\s+(?:online|up|for\s+me))?$/i.test(explicitMatch.trim())) {
+        const dialogueLines = recentDialogue.split('\n').filter(Boolean);
+        const lastRelevantLine = dialogueLines.slice().reverse().find((l) => !/^(?:ASSISTANT:\s*(?:I can check|Sure|Okay|Let me))/i.test(l)) || dialogueLines[0] || '';
+        const topic = lastRelevantLine.replace(/^[A-Z]+:\s*/, '').slice(0, 120).trim();
+        if (topic.length > 3) {
+          finalQuery = this.cleanQuery(topic);
+        }
+      }
+
       return {
         shouldSearch: true,
-        query: explicitMatch,
+        query: finalQuery,
         category: 'explicit_search',
         reason: 'User explicitly asked to research, look up, verify, find sources, or search online',
         isManual: false,
@@ -174,10 +186,26 @@ export class SearchDecisionService {
       };
     }
 
+    // 10b. Follow-up search resolving references from recent dialogue
+    if (recentDialogue && /(?:search\s+for\s+that|look\s+that\s+up|google\s+that|check\s+if\s+that's\s+true|verify\s+that\s+online|find\s+out\s+more\s+about\s+that|what\s+about\s+that)/i.test(lower)) {
+      const dialogueLines = recentDialogue.split('\n').filter(Boolean);
+      const lastLine = dialogueLines[dialogueLines.length - 1] || '';
+      const topicKeywords = lastLine.replace(/^[A-Z]+:\s*/, '').slice(0, 100).trim();
+      if (topicKeywords.length > 3) {
+        return {
+          shouldSearch: true,
+          query: this.cleanQuery(topicKeywords),
+          category: 'explicit_search',
+          reason: 'User requested search on the topic discussed in previous dialogue turn',
+          isManual: false,
+        };
+      }
+    }
+
     // 11. AI Provider Decision: For ambiguous or factual inquiries, ask active AI model
     if (aiProvider && aiProvider.isConfigured && aiProvider.providerType !== 'development_mock') {
       try {
-        const aiDecision = await this.classifyWithAIProvider(raw, aiProvider);
+        const aiDecision = await this.classifyWithAIProvider(raw, aiProvider, recentDialogue);
         if (aiDecision) {
           return aiDecision;
         }
@@ -212,7 +240,8 @@ export class SearchDecisionService {
 
   private static async classifyWithAIProvider(
     rawMessage: string,
-    aiProvider: ITextAIProvider
+    aiProvider: ITextAIProvider,
+    recentDialogue?: string
   ): Promise<SearchDecision | null> {
     const cleanMsg = this.cleanQuery(rawMessage);
     if (cleanMsg.length < 5) return null;
@@ -227,7 +256,7 @@ Decide if this user message requires live web search to answer factually and up-
 - search=true: current events, today's news, real-time facts (2024-2026), live sports, current prices, current officeholders, status of recent laws, new product releases, status of modern companies/people.
 - search=false: general science, historical facts, advice, coding algorithms, creative writing, math, philosophy, vocabulary.
 
-User message: "${cleanMsg}"
+User message: "${cleanMsg}"${recentDialogue ? `\nRecent Context: "${recentDialogue.slice(-300)}"` : ''}
 Current date: ${todayStr}
 
 Respond ONLY with a valid JSON object in this exact schema:

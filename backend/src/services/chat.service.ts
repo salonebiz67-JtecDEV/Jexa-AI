@@ -64,6 +64,13 @@ export class ChatService {
       payload.textProvider || profile.selectedTextProvider || registry.getDefaultTextType() || 'gemini';
     const primaryProvider = registry.getTextProvider(primaryProviderType);
 
+    // 4b. Fetch recent messages early to enable conversational context resolution & pronoun disambiguation
+    const recentMessages = await DatabaseService.getMessages(convId);
+    const recentDialogueSnippet = recentMessages
+      .slice(-4)
+      .map((m) => `${m.role.toUpperCase()}: ${m.content.slice(0, 200)}`)
+      .join('\n');
+
     // 5. Memory Management: Scoped to authenticated user across ALL conversations
     let relevantMemories: any[] = [];
     let activeMemoryResult: MemoryExtractionResult | undefined;
@@ -74,7 +81,8 @@ export class ChatService {
         relevantMemories = await MemoryService.getRelevantMemories(
           payload.message,
           profile.memorySettings.maxContextMemories || 8,
-          payload.userId
+          payload.userId,
+          recentDialogueSnippet
         );
       } catch (err: any) {
         console.warn('[ChatService] Memory retrieval notice:', err.message);
@@ -98,7 +106,8 @@ export class ChatService {
             convId,
             payload.userId,
             onStatusUpdate,
-            primaryProvider
+            primaryProvider,
+            recentDialogueSnippet
           );
 
           // If a memory was successfully saved or updated, include it in context memories
@@ -165,7 +174,8 @@ export class ChatService {
     const searchDecision = await SearchDecisionService.evaluate(
       payload.message,
       payload.userContext,
-      primaryProvider
+      primaryProvider,
+      recentDialogueSnippet
     );
     let searchResults: WebSearchResultItem[] = [];
     let searchPerformed = false;
@@ -228,8 +238,7 @@ export class ChatService {
       onStatusUpdate?.('Processing information...');
     }
 
-    // 8. Fetch recent conversation history for context window
-    const recentMessages = await DatabaseService.getMessages(convId);
+    // 8. Recent conversation history already loaded in step 4b
 
     // 9. Assemble modular brain context
     const assembled = assembleConversationContext({
