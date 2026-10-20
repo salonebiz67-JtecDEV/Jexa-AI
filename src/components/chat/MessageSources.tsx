@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Globe, ExternalLink, ChevronDown, ChevronUp, Calendar } from 'lucide-react';
+import { Globe, ExternalLink, ChevronDown, ChevronUp, Calendar, ShieldCheck, AlertCircle } from 'lucide-react';
 import { WebSearchResultItem } from '../../../shared/types/chat';
 
 interface MessageSourcesProps {
@@ -156,13 +156,25 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, index }) => {
       className="group/card relative flex flex-col p-2.5 sm:p-3 rounded-xl bg-[#090d16]/95 hover:bg-[#0f172a] border border-white/[0.07] hover:border-cyan-500/40 hover:shadow-[0_0_16px_rgba(6,182,212,0.14)] transition-all duration-150 text-xs shadow-sm cursor-pointer select-none"
       title={source.title}
     >
-      {/* Top row: Favicon + Domain pill + Date (if verified) + ExternalLink */}
+      {/* Top row: Favicon + Domain pill + Badges + Date + ExternalLink */}
       <div className="flex items-center justify-between gap-1.5 mb-1.5">
-        <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
           <FaviconIcon faviconUrl={faviconUrl} domain={domain} />
-          <span className="text-[10px] font-mono font-medium text-cyan-300 bg-cyan-950/70 px-1.5 py-0.5 rounded-md border border-cyan-800/40 truncate max-w-[130px]">
+          <span className="text-[10px] font-mono font-medium text-cyan-300 bg-cyan-950/70 px-1.5 py-0.5 rounded-md border border-cyan-800/40 truncate max-w-[120px]">
             {domain}
           </span>
+          {source.authoritative && (
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 flex items-center gap-0.5" title="Authoritative source">
+              <ShieldCheck className="w-2.5 h-2.5" />
+              <span>Verified</span>
+            </span>
+          )}
+          {source.isAccessible === false && (
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30 flex items-center gap-0.5" title={source.inaccessibleReason || 'Inaccessible'}>
+              <AlertCircle className="w-2.5 h-2.5" />
+              <span>Inaccessible</span>
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">

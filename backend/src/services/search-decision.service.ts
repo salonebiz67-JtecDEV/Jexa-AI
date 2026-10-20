@@ -251,16 +251,17 @@ export class SearchDecisionService {
 
     try {
       const todayStr = new Date().toISOString().split('T')[0];
-      const classifierPrompt = `You are the Search Classifier for JEXA AI.
+      const classifierPrompt = `You are the Search Classifier & Query Formulation Engine for JEXA AI.
 Decide if this user message requires live web search to answer factually and up-to-date, or if it can be answered using general baseline knowledge.
-- search=true: current events, today's news, real-time facts (2024-2026), live sports, current prices, current officeholders, status of recent laws, new product releases, status of modern companies/people.
-- search=false: general science, historical facts, advice, coding algorithms, creative writing, math, philosophy, vocabulary.
+- search=true: current news, recent events (2024-2026), changing facts, real-time prices/rates/weather, live sports, current officeholders, status of recent laws, new products/versions, Sierra Leone/EDSA utilities.
+- search=false: ordinary chit-chat, creative writing, storytelling, brainstorming, coding algorithms, math, personal memory statements.
+- QUERY FORMULATION: If search is needed, translate imperfect English, slang, typos (e.g. 'wat', 'wen', 'luk up', 'projek'), or ambiguous phrases into an effective, clean, high-signal web search query. Resolve references ('that', 'it', 'what we discussed') using the Recent Context.
 
 User message: "${cleanMsg}"${recentDialogue ? `\nRecent Context: "${recentDialogue.slice(-300)}"` : ''}
 Current date: ${todayStr}
 
 Respond ONLY with a valid JSON object in this exact schema:
-{"search": true|false, "query": "concise search query without quotes", "reason": "short explanation"}`;
+{"search": true|false, "query": "concise effective search query without quotes", "reason": "short explanation"}`;
 
       const responsePromise = aiProvider.generateResponse({
         systemPrompt: classifierPrompt,
@@ -499,13 +500,17 @@ Respond ONLY with a valid JSON object in this exact schema:
     return { matches: false, query: '' };
   }
 
-  private static cleanQuery(query: string): string {
-    return query
+  public static cleanQuery(query: string): string {
+    let q = query
       .replace(/\[web\s+search\s+requested\]/gi, '')
-      .replace(/^(can\s+you\s+)?(please\s+)?(search\s+(the\s+web\s+|the\s+internet\s+|online\s+)?for|search|find|look\s*up|browse\s+for)\s+/i, '')
-      .replace(/^(what\s+is\s+the\s+latest|what\s+are\s+the\s+latest|tell\s+me\s+about\s+the\s+latest|what\s+is\s+|what\s+are\s+)\s*/i, '')
-      .replace(/^(the\s+latest|the\s+recent|the\s+current)\s+/i, '')
+      .replace(/^(?:can\s+u\s+|can\s+you\s+)?(?:plz\s+|please\s+)?(?:search\s+(?:the\s+web\s+|the\s+internet\s+|online\s+)?for|search|find|look\s*up|luk\s+up|browse\s+for)\s+/i, '')
+      .replace(/^(?:wat\s+is\s+d\s+|wat\s+is\s+|wats\s+d\s+|wats\s+|what\s+is\s+the\s+latest|what\s+are\s+the\s+latest|tell\s+me\s+about\s+the\s+latest|tel\s+me\s+bout\s+|tell\s+me\s+about\s+|what\s+is\s+|what\s+are\s+|who\s+iz\s+)\s*/i, '')
+      .replace(/^(?:the\s+latest|the\s+recent|the\s+current)\s+/i, '')
+      .replace(/\b(?:dat)\b/gi, 'that')
+      .replace(/\b(?:wit)\b/gi, 'with')
       .replace(/[?!.]+$/, '')
       .trim();
+
+    return q || query.trim();
   }
 }

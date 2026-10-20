@@ -107,6 +107,22 @@ export class AIMemoryExtractor {
       return { action: 'none', candidates: [] };
     }
 
+    // 5b. Fast deduplication check: If user repeats information already recorded without changes
+    const nameMatch = trimmed.match(/(?:my\s+(?:preferred\s+)?name\s+is|call\s+me)\s+([A-Za-z]+)/i);
+    if (nameMatch && nameMatch[1] && !/update|change|different|not\s+|instead/i.test(trimmed)) {
+      const name = nameMatch[1].toLowerCase();
+      const existingNameMem = existingMemories.find(
+        (m) => m.category === 'user_profile' && m.fact.toLowerCase().includes(name)
+      );
+      if (existingNameMem) {
+        return {
+          action: 'already_remembered',
+          candidates: [],
+          feedbackMessage: `I already have noted that your name is ${nameMatch[1]}.`,
+        };
+      }
+    }
+
     // 6. Try AI-Powered Extraction if provider is available
     if (provider && typeof provider.generateResponse === 'function') {
       try {
@@ -134,9 +150,9 @@ RULES:
    - Understand the meaning and context of the entire message rather than relying only on keywords.
    - Do NOT store transient small talk, momentary requests ("what is the weather today"), or speculative guesses.
 2. DEDUPLICATION & UPDATES:
-   - If the fact is ALREADY stored in identical or equivalent form in existing memories, return action: "already_remembered".
-   - If the new statement UPDATES or SUPERSEDES an existing memory (e.g. user moved, changed job, or changed tech stack), return action: "updated" and set updatesMemoryId to that memory's ID.
-   - If it is genuinely new, return action: "saved".
+   - If the fact or core information is ALREADY covered in existing memories (even if phrased slightly differently, e.g. "My preferred name is Alex" when an existing memory already mentions their name is Alex), return action: "already_remembered". Do NOT mark as "updated" or "saved" unless the information has actually changed or contains new facts.
+   - If the new statement UPDATES, CHANGES, or SUPERSEDES an existing memory with new/different values (e.g. user changed their name, moved to a different city, or switched jobs), return action: "updated" and set updatesMemoryId to that memory's ID.
+   - If it is genuinely new information, return action: "saved".
 3. FACT VS INSIGHT:
    - "confirmed_fact": Direct user statements, confirmed personal details, explicit instructions.
    - "insight": AI-derived behavioral tendencies or higher-level patterns.
@@ -157,12 +173,19 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
 
         const promptContent = `User Message: "${trimmed}"${recentDialogue ? `\nRecent Context: "${recentDialogue}"` : ''}`;
 
-        const aiResponse = await provider.generateResponse({
-          systemPrompt: extractionSystemPrompt,
-          messages: [{ role: 'user', content: promptContent }],
-          temperature: 0.1,
-          maxTokens: 300,
-        });
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('AI extraction timeout')), 5000)
+        );
+
+        const aiResponse = await Promise.race([
+          provider.generateResponse({
+            systemPrompt: extractionSystemPrompt,
+            messages: [{ role: 'user', content: promptContent }],
+            temperature: 0.1,
+            maxTokens: 300,
+          }),
+          timeoutPromise,
+        ]);
 
         const rawContent = (aiResponse.content || '').trim();
         const jsonMatch = rawContent.match(/\{[\s\S]*\}/);

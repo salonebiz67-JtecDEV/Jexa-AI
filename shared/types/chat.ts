@@ -5,7 +5,12 @@ export type Role = 'user' | 'assistant' | 'system';
 export type AIActivityStatus =
   | 'Thinking...'
   | 'Planning...'
+  | 'Selecting tool...'
+  | 'Using web research...'
+  | 'Verifying results...'
+  | 'Tool failed'
   | 'Searching the web...'
+  | 'Reading sources...'
   | 'Reading web pages...'
   | 'Analyzing sources...'
   | 'Checking relevant memories...'
@@ -42,6 +47,10 @@ export interface WebSearchResultItem {
   publishedDate?: string;
   domain?: string;
   faviconUrl?: string;
+  isAccessible?: boolean;
+  authoritative?: boolean;
+  inaccessibleReason?: string;
+  extractedText?: string;
 }
 
 export interface ChatMessageMetadata {

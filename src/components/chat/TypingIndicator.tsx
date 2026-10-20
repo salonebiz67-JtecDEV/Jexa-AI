@@ -60,6 +60,7 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
     }
 
     if (
+      currentStatus === 'Tool failed' ||
       currentStatus === 'Memory unavailable' ||
       currentStatus === 'Memory storage unavailable' ||
       currentStatus === 'Memory retrieval failed' ||
@@ -76,6 +77,36 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
     }
 
     switch (currentStatus) {
+      case 'Selecting tool...':
+        return {
+          icon: Compass,
+          color: 'text-indigo-400',
+          bg: 'bg-indigo-500/10',
+          border: 'border-indigo-500/30',
+          dotColor: 'bg-indigo-400',
+          glow: 'shadow-[0_0_12px_rgba(99,102,241,0.25)]',
+          pulseIcon: true,
+        };
+      case 'Using web research...':
+        return {
+          icon: Globe,
+          color: 'text-cyan-400',
+          bg: 'bg-cyan-500/10',
+          border: 'border-cyan-500/30',
+          dotColor: 'bg-cyan-400',
+          glow: 'shadow-[0_0_12px_rgba(6,182,212,0.25)]',
+          spinIcon: true,
+        };
+      case 'Verifying results...':
+        return {
+          icon: Layers,
+          color: 'text-teal-400',
+          bg: 'bg-teal-500/10',
+          border: 'border-teal-500/30',
+          dotColor: 'bg-teal-400',
+          glow: 'shadow-[0_0_12px_rgba(45,212,191,0.25)]',
+          pulseIcon: true,
+        };
       case 'Searching the web...':
         return {
           icon: Globe,
@@ -86,6 +117,7 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           glow: 'shadow-[0_0_12px_rgba(6,182,212,0.25)]',
           spinIcon: true,
         };
+      case 'Reading sources...':
       case 'Reading web pages...':
         return {
           icon: BookOpen,

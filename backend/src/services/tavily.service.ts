@@ -6,6 +6,17 @@ export interface TavilySearchOptions {
   includeAnswer?: boolean;
 }
 
+export interface WebPageExtractResult {
+  url: string;
+  title?: string;
+  domain?: string;
+  content: string;
+  accessible: boolean;
+  authoritative?: boolean;
+  error?: string;
+  statusCode?: number;
+}
+
 export interface TavilySearchResult {
   success: boolean;
   query: string;
@@ -16,6 +27,7 @@ export interface TavilySearchResult {
 
 export class TavilyService {
   private static readonly API_ENDPOINT = 'https://api.tavily.com/search';
+  private static readonly EXTRACT_ENDPOINT = 'https://api.tavily.com/extract';
 
   /**
    * Check if TAVILY_API_KEY is configured in backend environment variables
@@ -182,6 +194,9 @@ export class TavilyService {
           ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`
           : undefined;
 
+        const isAuth = this.isAuthoritativeDomain(domain);
+        const accessible = content.length > 20;
+
         sanitizedResults.push({
           title,
           url: rawUrl,
@@ -190,6 +205,9 @@ export class TavilyService {
           publishedDate: item.published_date || item.publishedDate,
           domain: domain || undefined,
           faviconUrl,
+          isAccessible: accessible,
+          authoritative: isAuth,
+          inaccessibleReason: accessible ? undefined : 'Snippet content unavailable or blocked by source',
         });
       }
 
@@ -214,5 +232,227 @@ export class TavilyService {
         error: errorMessage,
       };
     }
+  }
+
+  /**
+   * Validate external URL to ensure protocol safety and prevent SSRF to private/internal networks
+   */
+  public static validateExternalUrl(rawUrl: string): { valid: boolean; error?: string; url?: string; domain?: string } {
+    if (!rawUrl || typeof rawUrl !== 'string') {
+      return { valid: false, error: 'URL must be a non-empty string.' };
+    }
+    const trimmed = rawUrl.trim();
+    if (!/^https?:\/\//i.test(trimmed)) {
+      return { valid: false, error: 'Only HTTP and HTTPS URLs are permitted.' };
+    }
+
+    try {
+      const parsed = new URL(trimmed);
+      const hostname = parsed.hostname.toLowerCase();
+
+      // Block SSRF / private networks / internal endpoints
+      const isBlocked =
+        hostname === 'localhost' ||
+        hostname.endsWith('.localhost') ||
+        hostname.endsWith('.local') ||
+        hostname.endsWith('.internal') ||
+        hostname === '127.0.0.1' ||
+        hostname === '0.0.0.0' ||
+        hostname === '::1' ||
+        /^10\./.test(hostname) ||
+        /^192\.168\./.test(hostname) ||
+        /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(hostname) ||
+        /^169\.254\./.test(hostname);
+
+      if (isBlocked) {
+        return { valid: false, error: 'Access to private internal network addresses is blocked for security.' };
+      }
+
+      return { valid: true, url: parsed.toString(), domain: hostname.replace(/^www\./, '') };
+    } catch {
+      return { valid: false, error: 'Malformed or invalid URL format.' };
+    }
+  }
+
+  /**
+   * Determine whether a domain represents an established, authoritative source
+   */
+  public static isAuthoritativeDomain(domain?: string): boolean {
+    if (!domain) return false;
+    const lower = domain.toLowerCase();
+    if (lower.endsWith('.gov') || lower.includes('.gov.') || lower.endsWith('.edu') || lower.includes('.edu.')) {
+      return true;
+    }
+    const authoritativeList = [
+      'reuters.com',
+      'apnews.com',
+      'bbc.com',
+      'bbc.co.uk',
+      'bloomberg.com',
+      'who.int',
+      'un.org',
+      'worldbank.org',
+      'imf.org',
+      'statehouse.gov.sl',
+      'edsa.sl',
+      'moe.gov.sl',
+      'awokonewspaper.sl',
+      'thesierraleonetelegraph.com',
+      'politicosl.com',
+      'developer.mozilla.org',
+      'nodejs.org',
+      'github.com',
+      'w3.org',
+      'ietf.org',
+    ];
+    return authoritativeList.some((auth) => lower === auth || lower.endsWith('.' + auth));
+  }
+
+  /**
+   * Inspect and extract content from specific external web pages with accessibility verification
+   */
+  public static async extractPages(urls: string[], timeoutMs = 5000): Promise<WebPageExtractResult[]> {
+    if (!Array.isArray(urls) || urls.length === 0) {
+      return [];
+    }
+
+    // Limit to max 4 URLs per inspection pass
+    const slice = urls.slice(0, 4);
+    const results: WebPageExtractResult[] = [];
+
+    // Attempt Tavily Extract if API key configured
+    const apiKey = process.env.TAVILY_API_KEY?.trim();
+    if (apiKey && apiKey.length > 5) {
+      try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), timeoutMs);
+
+        const resp = await fetch(this.EXTRACT_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: apiKey, urls: slice }),
+          signal: controller.signal,
+        });
+        clearTimeout(tid);
+
+        if (resp.ok) {
+          const data = await resp.json();
+          if (Array.isArray(data.results)) {
+            for (const item of data.results) {
+              const check = this.validateExternalUrl(item.url);
+              const cleanContent = (item.raw_content || item.content || '')
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 1500);
+
+              results.push({
+                url: item.url,
+                domain: check.domain,
+                content: cleanContent,
+                accessible: cleanContent.length > 20,
+                authoritative: this.isAuthoritativeDomain(check.domain),
+                error: cleanContent.length > 20 ? undefined : 'No content extracted',
+              });
+            }
+          }
+          if (Array.isArray(data.failed_results)) {
+            for (const fail of data.failed_results) {
+              results.push({
+                url: fail.url,
+                content: '',
+                accessible: false,
+                error: fail.error || 'Failed to access webpage content',
+              });
+            }
+          }
+        }
+      } catch {
+        // Fallback to direct inspection
+      }
+    }
+
+    // For any URLs not covered by Tavily extract, perform safe direct inspection
+    for (const rawUrl of slice) {
+      if (results.some((r) => r.url === rawUrl)) continue;
+
+      const validation = this.validateExternalUrl(rawUrl);
+      if (!validation.valid || !validation.url) {
+        results.push({
+          url: rawUrl,
+          content: '',
+          accessible: false,
+          error: validation.error || 'Invalid URL',
+        });
+        continue;
+      }
+
+      try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 3500);
+
+        const resp = await fetch(validation.url, {
+          method: 'GET',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 JexaResearchBot/1.0',
+            'Accept': 'text/html,application/xhtml+xml,text/plain',
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(tid);
+
+        if (!resp.ok) {
+          results.push({
+            url: validation.url,
+            domain: validation.domain,
+            content: '',
+            accessible: false,
+            statusCode: resp.status,
+            error: `HTTP ${resp.status} ${resp.statusText}`,
+          });
+          continue;
+        }
+
+        const html = await resp.text();
+        const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+        const title = titleMatch ? titleMatch[1].trim() : undefined;
+
+        // Clean HTML, strip scripts and styles
+        const textContent = html
+          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
+          .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
+          .replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 1500);
+
+        const isAcc = textContent.length > 30;
+        results.push({
+          url: validation.url,
+          title,
+          domain: validation.domain,
+          content: isAcc ? textContent : '',
+          accessible: isAcc,
+          authoritative: this.isAuthoritativeDomain(validation.domain),
+          error: isAcc ? undefined : 'Page content was empty or protected by anti-bot verification',
+        });
+      } catch (err: any) {
+        results.push({
+          url: validation.url,
+          domain: validation.domain,
+          content: '',
+          accessible: false,
+          error: err.name === 'AbortError' ? 'Page request timed out' : `Connection error: ${err.message}`,
+        });
+      }
+    }
+
+    return results;
   }
 }

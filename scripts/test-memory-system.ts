@@ -303,9 +303,7 @@ async function runMemoryTestSuite() {
   console.log('RESULT:', allPass ? 'ALL TESTS PASSED SUCCESSFULLY' : 'SOME TESTS FAILED');
   console.log('====================================================');
 
-  if (!allPass) {
-    process.exit(1);
-  }
+  process.exit(allPass ? 0 : 1);
 }
 
 runMemoryTestSuite().catch((err) => {
