@@ -68,13 +68,27 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     setTimeout(() => setCopiedCodeIndex(null), 2000);
   };
 
-  // Helper to parse inline markdown: [label](url), raw URLs, bold, inline code, and italics
+  // Helper to parse inline markdown: [label](url), citations [1], raw URLs, bold, inline code, strikethrough, and italics
   const renderInlineFormatting = (text: string) => {
-    const tokenRegex = /(\[[^\]]+\]\(https?:\/\/[^\s\)]+\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|https?:\/\/[^\s<>"]+)/g;
+    const tokenRegex = /(\[[^\]]+\]\(https?:\/\/[^\s\)]+\)|\[\^?\d+(?:,\s*\^?\d+)*\]|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*]+\*|_[^_]+_|https?:\/\/[^\s<>"]+)/g;
     const parts = text.split(tokenRegex);
 
     return parts.map((part, idx) => {
       if (!part) return null;
+
+      // Citation badge: [1], [2], [1, 2], [^1]
+      const citMatch = part.match(/^\[\^?(\d+(?:,\s*\^?\d+)*)\]$/);
+      if (citMatch) {
+        return (
+          <span
+            key={idx}
+            className="inline-flex items-center justify-center px-1.5 py-0.2 mx-0.5 rounded text-[10px] font-mono font-semibold bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 align-super select-none shadow-[0_0_6px_rgba(6,182,212,0.2)]"
+            title={`Source reference ${citMatch[1]}`}
+          >
+            {citMatch[1].replace(/\^/g, '')}
+          </span>
+        );
+      }
 
       // Markdown link: [Title](url)
       const linkMatch = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)$/);
@@ -107,8 +121,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         );
       }
 
-      // Bold: **text**
-      if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+      // Bold: **text** or __text__
+      if (
+        (part.startsWith('**') && part.endsWith('**') && part.length >= 4) ||
+        (part.startsWith('__') && part.endsWith('__') && part.length >= 4)
+      ) {
         const boldText = part.slice(2, -2);
         return (
           <strong key={idx} className="font-semibold text-white">
@@ -117,8 +134,21 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         );
       }
 
-      // Italic: *text*
-      if (part.startsWith('*') && part.endsWith('*') && part.length >= 2 && !part.startsWith('**')) {
+      // Strikethrough: ~~text~~
+      if (part.startsWith('~~') && part.endsWith('~~') && part.length >= 4) {
+        const strikeText = part.slice(2, -2);
+        return (
+          <del key={idx} className="line-through text-slate-400">
+            {strikeText}
+          </del>
+        );
+      }
+
+      // Italic: *text* or _text_
+      if (
+        (part.startsWith('*') && part.endsWith('*') && part.length >= 2 && !part.startsWith('**')) ||
+        (part.startsWith('_') && part.endsWith('_') && part.length >= 2 && !part.startsWith('__'))
+      ) {
         const italicText = part.slice(1, -1);
         return (
           <em key={idx} className="italic text-slate-200">
@@ -239,6 +269,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       const blocks: React.ReactNode[] = [];
       let currentParagraph: string[] = [];
       let currentList: { type: 'ul' | 'ol'; items: string[] } | null = null;
+      let currentTable: string[] = [];
       let blockCounter = 0;
 
       const flushParagraph = () => {
@@ -295,14 +326,92 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         }
       };
 
+      const flushTable = () => {
+        if (currentTable.length > 0) {
+          const tableLines = currentTable;
+          currentTable = [];
+
+          // Find separator row (e.g. |---|:---|---:|)
+          const delimiterIdx = tableLines.findIndex((l) =>
+            /^\|?\s*:?-{2,}:?\s*(\|?\s*:?-{2,}:?\s*)+\|?$/.test(l.trim())
+          );
+
+          if (delimiterIdx > 0) {
+            const rawHeader = tableLines[delimiterIdx - 1];
+            const headerCells = rawHeader
+              .split('|')
+              .map((c) => c.trim())
+              .filter((c, i, arr) => {
+                if (i === 0 && rawHeader.trim().startsWith('|')) return false;
+                if (i === arr.length - 1 && rawHeader.trim().endsWith('|')) return false;
+                return true;
+              });
+
+            const bodyRows = tableLines.slice(delimiterIdx + 1).map((rowLine) => {
+              const cells = rowLine.split('|').map((c) => c.trim());
+              if (cells[0] === '' && rowLine.trim().startsWith('|')) cells.shift();
+              if (cells[cells.length - 1] === '' && rowLine.trim().endsWith('|')) cells.pop();
+              return cells;
+            });
+
+            blocks.push(
+              <div
+                key={`tbl-${segIdx}-${blockCounter++}`}
+                className="my-3 overflow-x-auto rounded-xl border border-white/[0.08] bg-[#070b14]/80 shadow-sm"
+              >
+                <table className="min-w-full divide-y divide-white/[0.08] text-xs sm:text-[13.5px]">
+                  <thead className="bg-white/[0.04]">
+                    <tr>
+                      {headerCells.map((h, i) => (
+                        <th
+                          key={i}
+                          className="px-3.5 py-2.5 text-left font-semibold text-cyan-200 uppercase tracking-wider font-mono text-[11px] sm:text-xs"
+                        >
+                          {renderInlineFormatting(h)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/[0.04]">
+                    {bodyRows.map((row, rIdx) => (
+                      <tr key={rIdx} className="hover:bg-white/[0.02] transition-colors">
+                        {row.map((cell, cIdx) => (
+                          <td key={cIdx} className="px-3.5 py-2 text-slate-200">
+                            {renderInlineFormatting(cell)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+            return;
+          }
+
+          // Fallback if not complete table
+          for (const l of tableLines) {
+            blocks.push(
+              <p
+                key={`tbl-fallback-${segIdx}-${blockCounter++}`}
+                className="leading-relaxed text-slate-200 text-[14px] font-mono my-1"
+              >
+                {renderInlineFormatting(l)}
+              </p>
+            );
+          }
+        }
+      };
+
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const trimmed = line.trim();
 
-        // Empty line flushes current blocks
+        // Empty line flushes all current block accumulators
         if (!trimmed) {
           flushParagraph();
           flushList();
+          flushTable();
           continue;
         }
 
@@ -310,14 +419,26 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
           flushParagraph();
           flushList();
+          flushTable();
           blocks.push(<hr key={`hr-${segIdx}-${blockCounter++}`} className="my-3 border-white/[0.08]" />);
           continue;
         }
 
-        // Headings: ALWAYS flushed as separate blocks
-        if (trimmed.startsWith('# ') || trimmed.startsWith('## ') || trimmed.startsWith('### ') || trimmed.startsWith('#### ')) {
+        // Markdown Table Row
+        if (trimmed.startsWith('|') && trimmed.includes('|', 1)) {
           flushParagraph();
           flushList();
+          currentTable.push(trimmed);
+          continue;
+        } else if (currentTable.length > 0) {
+          flushTable();
+        }
+
+        // Headings: ALWAYS flushed as separate blocks
+        if (trimmed.startsWith('# ') || trimmed.startsWith('## ') || trimmed.startsWith('### ') || trimmed.startsWith('#### ') || trimmed.startsWith('##### ') || trimmed.startsWith('###### ')) {
+          flushParagraph();
+          flushList();
+          flushTable();
 
           if (trimmed.startsWith('# ')) {
             blocks.push(
@@ -352,7 +473,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 key={`h4-${segIdx}-${blockCounter++}`}
                 className="text-xs font-semibold uppercase tracking-wider text-slate-300 mt-3 mb-1"
               >
-                {renderInlineFormatting(trimmed.replace(/^####\s+/, ''))}
+                {renderInlineFormatting(trimmed.replace(/^#{4,6}\s+/, ''))}
               </h5>
             );
           }
@@ -363,6 +484,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         if (trimmed.startsWith('>')) {
           flushParagraph();
           flushList();
+          flushTable();
           blocks.push(
             <blockquote
               key={`bq-${segIdx}-${blockCounter++}`}
@@ -374,10 +496,18 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           continue;
         }
 
+        // List item continuation (indented line continuing the current bullet/item)
+        if (currentList && (line.startsWith('  ') || line.startsWith('\t')) && currentList.items.length > 0) {
+          const lastIndex = currentList.items.length - 1;
+          currentList.items[lastIndex] += ' ' + trimmed;
+          continue;
+        }
+
         // Unordered list item
-        if (/^[\*\-•]\s+/.test(trimmed)) {
+        if (/^[\*\-•\+]\s+/.test(trimmed)) {
           flushParagraph();
-          const cleanItem = trimmed.replace(/^[\*\-•]\s+/, '');
+          flushTable();
+          const cleanItem = trimmed.replace(/^[\*\-•\+]\s+/, '');
           if (currentList && currentList.type === 'ul') {
             currentList.items.push(cleanItem);
           } else {
@@ -390,6 +520,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         // Ordered list item
         if (/^\d+[\.\)]\s+/.test(trimmed)) {
           flushParagraph();
+          flushTable();
           const cleanItem = trimmed.replace(/^\d+[\.\)]\s+/, '');
           if (currentList && currentList.type === 'ol') {
             currentList.items.push(cleanItem);
@@ -404,11 +535,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         if (currentList) {
           flushList();
         }
+        flushTable();
         currentParagraph.push(trimmed);
       }
 
       flushParagraph();
       flushList();
+      flushTable();
 
       return (
         <div key={segIdx} className="space-y-1">

@@ -213,6 +213,9 @@ export function useChat() {
       try {
         const savedTextProvider = safeStorage.getItem('jexa_text_provider') as any;
 
+        let accumulatedStreamContent = '';
+        const streamingAssistantId = `streaming-assistant-${Date.now()}`;
+
         const response = await ApiClient.sendMessageStream(
           {
             conversationId: currentConversationId || undefined,
@@ -227,6 +230,26 @@ export function useChat() {
               if (details) {
                 setActivityDetails(details);
               }
+            },
+            onChunk(chunk) {
+              accumulatedStreamContent += chunk;
+              setMessages((prev) => {
+                const streamIdx = prev.findIndex((m) => m.id === streamingAssistantId);
+                const streamingMsg: ChatMessage = {
+                  id: streamingAssistantId,
+                  conversationId: currentConversationId || 'pending',
+                  role: 'assistant',
+                  content: accumulatedStreamContent,
+                  createdAt: new Date().toISOString(),
+                  status: 'streaming',
+                };
+                if (streamIdx !== -1) {
+                  const updated = [...prev];
+                  updated[streamIdx] = streamingMsg;
+                  return updated;
+                }
+                return [...prev, streamingMsg];
+              });
             },
           }
         );
@@ -243,7 +266,11 @@ export function useChat() {
           const userMsgId = response.userMessage?.id;
           const assistantMsgId = response.message?.id;
           const withoutTemp = prev.filter(
-            (m) => m.id !== tempId && m.id !== userMsgId && m.id !== assistantMsgId
+            (m) =>
+              m.id !== tempId &&
+              m.id !== userMsgId &&
+              m.id !== assistantMsgId &&
+              m.id !== streamingAssistantId
           );
           const finalUserMsg = response.userMessage || {
             ...optimisticUserMsg,

@@ -7,6 +7,7 @@
 export interface CleanResponseOptions {
   isFirstTurn?: boolean;
   userAskedIdentity?: boolean;
+  isStreaming?: boolean;
 }
 
 export function cleanAndNormalizeResponseContent(
@@ -25,12 +26,12 @@ export function cleanAndNormalizeResponseContent(
   // 2. Fix JSON escaping artifacts & runaway backslashes/slashes
   text = normalizeEscapesAndSlashes(text);
 
-  // 3. Remove unwanted repetitive robotic greetings unless user asked for identity or first turn
-  if (!options.isFirstTurn && !options.userAskedIdentity) {
+  // 3. Remove unwanted repetitive robotic greetings unless user asked for identity, first turn, or actively streaming
+  if (!options.isFirstTurn && !options.userAskedIdentity && !options.isStreaming) {
     text = cleanRepetitiveGreeting(text);
   }
 
-  // 4. Repair unclosed code blocks (e.g. streaming chunks or cutoff responses)
+  // 4. Repair unclosed code blocks and inline formatting (e.g. streaming chunks or cutoff responses)
   text = repairUnclosedMarkdown(text);
 
   return text.trim();
@@ -134,14 +135,38 @@ function cleanRepetitiveGreeting(input: string): string {
 }
 
 /**
- * Ensures code fences are properly paired so that markdown parsers do not render
- * the rest of the text as an unstyled/broken block.
+ * Ensures code fences, inline backticks, and bold markers are safely paired so that
+ * markdown parsers do not render broken blocks or broken formatting during streaming.
  */
 export function repairUnclosedMarkdown(input: string): string {
-  const matches = input.match(/```/g);
-  if (matches && matches.length % 2 !== 0) {
+  let text = input;
+
+  // 1. Repair unclosed code fences
+  const codeFenceMatches = text.match(/```/g);
+  if (codeFenceMatches && codeFenceMatches.length % 2 !== 0) {
     // Odd number of backticks means there's an unclosed code block
-    return `${input}\n\`\`\`\n`;
+    text = `${text}\n\`\`\`\n`;
   }
-  return input;
+
+  // 2. Repair unclosed inline code backticks outside of code fences
+  const withoutFences = text.replace(/```[\s\S]*?```/g, '');
+  const inlineTicks = withoutFences.match(/(?<!`)`(?!`)/g);
+  if (inlineTicks && inlineTicks.length % 2 !== 0) {
+    text = `${text}\``;
+  }
+
+  // 3. Repair unclosed bold ** outside code fences
+  const withoutCode = text.replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
+  const boldMatches = withoutCode.match(/\*\*/g);
+  if (boldMatches && boldMatches.length % 2 !== 0) {
+    text = `${text}**`;
+  }
+
+  // 4. Repair unclosed strikethrough ~~ outside code fences
+  const strikeMatches = withoutCode.match(/~~/g);
+  if (strikeMatches && strikeMatches.length % 2 !== 0) {
+    text = `${text}~~`;
+  }
+
+  return text;
 }
