@@ -490,7 +490,17 @@ Respond ONLY with a valid JSON object in this exact schema:
   }
 
   private static checkTechnicalDocsOrReleases(lower: string, raw: string): { matches: boolean; query: string } {
-    const isRecentTech = /(what\s+is\s+new\s+in|latest\s+version\s+of|release\s+notes\s+for|changelog\s+for|new\s+features\s+in)\s+[a-z0-9_\s\.\-]+/i.test(lower);
+    const techDocPatterns = [
+      /(?:what\s+is\s+new\s+in|latest\s+version\s+of|release\s+notes\s+for|changelog\s+for|new\s+features\s+in)\s+[a-z0-9_\s\.\-]+/i,
+      /(?:docs\s+for|documentation\s+(?:for|of)|api\s+reference\s+for|official\s+docs\s+for)\s+[a-z0-9_\s\.\-]+/i,
+      /(?:breaking\s+changes?\s+(?:in|for)|migration\s+guide\s+(?:for|to)|how\s+to\s+migrate\s+to)\s+[a-z0-9_\s\.\-]+/i,
+      /(?:how\s+to\s+(?:use|configure|setup|install)|syntax\s+for)\s+[a-z0-9_\s\.\-]+\s+(?:in|with)\s+(?:react\s+19|next(?:\.js)?\s*1[45]|tailwind(?:\s*v?4)?|vite|bun|drizzle|prisma|supabase|vue\s*3|angular|astro|node\s*2[02]|typescript\s*5|python\s*3\.1[23])/i,
+      /(?:is|has)\s+[a-z0-9_\s\.\-]+\s+(?:released?|out\s+yet|deprecated|supported\s+in)\b/i,
+      /(?:troubleshoot|fix|how\s+to\s+resolve)\s+(?:error|bug|issue|exception|typeerror)\s+[a-z0-9_\s\.\-]+/i,
+      /\b(?:react\s+19|next(?:\.js)?\s*1[45]|tailwind\s*v?4|drizzle\s+orm|supabase\s+v?2|bun\s+1\.\d|python\s*3\.1[23])\b/i,
+    ];
+
+    const isRecentTech = techDocPatterns.some((pattern) => pattern.test(lower));
     if (isRecentTech) {
       return { matches: true, query: this.cleanQuery(raw) };
     }

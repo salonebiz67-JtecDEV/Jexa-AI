@@ -9,8 +9,8 @@ interface MessageSourcesProps {
 }
 
 export const MessageSources: React.FC<MessageSourcesProps> = ({ sources, searchQuery }) => {
-  // Collapsed by default on mobile for clean ChatGPT feel, expandable on tap
-  const [isOpen, setIsOpen] = useState(false);
+  // Visible by default immediately below answers; collapsible on tap
+  const [isOpen, setIsOpen] = useState(true);
 
   // Requirement: Never display empty section if no web search sources exist
   if (!sources || sources.length === 0) {

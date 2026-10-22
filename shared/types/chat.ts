@@ -94,6 +94,9 @@ export interface StreamChatStatusEvent {
     error?: string;
     memoryFact?: string;
     memoryAction?: string;
+    sources?: WebSearchResultItem[];
+    searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results';
+    searchTrigger?: 'manual' | 'automatic' | 'none';
   };
 }
 

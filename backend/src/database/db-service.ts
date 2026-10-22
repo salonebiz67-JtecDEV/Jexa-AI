@@ -549,7 +549,11 @@ export class DatabaseService {
       }
     }
 
-    return memoryStore.messages.get(validConvId) || memoryStore.messages.get(conversationId) || [];
+    const inMem = memoryStore.messages.get(validConvId) || memoryStore.messages.get(conversationId) || [];
+    return inMem.map((m) => {
+      const meta = memoryStore.messageMetadata.get(m.id) || m.metadata;
+      return { ...m, metadata: meta };
+    });
   }
 
   public static async saveMessage(
@@ -599,8 +603,15 @@ export class DatabaseService {
       let { error } = await client.from('messages').insert(insertPayload);
       if (error && (error.message?.includes('metadata') || (error as any).code === '42703')) {
         delete insertPayload.metadata;
-        const retry = await client.from('messages').insert(insertPayload);
-        error = retry.error;
+        insertPayload.metadata_json = message.metadata;
+        const retry1 = await client.from('messages').insert(insertPayload);
+        if (retry1.error) {
+          delete insertPayload.metadata_json;
+          const retry2 = await client.from('messages').insert(insertPayload);
+          error = retry2.error;
+        } else {
+          error = null;
+        }
       }
 
       if (error) {

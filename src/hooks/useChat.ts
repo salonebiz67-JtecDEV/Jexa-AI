@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiClient } from '../services/api.client';
-import { ChatMessage, Conversation, AIActivityStatus } from '../../shared/types';
+import { ChatMessage, Conversation, AIActivityStatus, WebSearchResultItem } from '../../shared/types';
 import { safeStorage } from '../services/storage';
 import { useAuth } from './useAuth';
 
@@ -12,7 +12,16 @@ export function useChat() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSending, setIsSending] = useState<boolean>(false);
   const [activityStatus, setActivityStatus] = useState<AIActivityStatus | null>(null);
-  const [activityDetails, setActivityDetails] = useState<{ query?: string; sourcesCount?: number; error?: string } | null>(null);
+  const [activityDetails, setActivityDetails] = useState<{
+    query?: string;
+    sourcesCount?: number;
+    error?: string;
+    sources?: WebSearchResultItem[];
+    searchStatus?: any;
+    searchTrigger?: any;
+    memoryFact?: string;
+    memoryAction?: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Load conversations on mount or whenever authenticated user changes
@@ -215,6 +224,10 @@ export function useChat() {
 
         let accumulatedStreamContent = '';
         const streamingAssistantId = `streaming-assistant-${Date.now()}`;
+        let activeSources: any[] | undefined;
+        let activeSearchQuery: string | undefined;
+        let activeSearchStatus: any = undefined;
+        let activeSearchTrigger: any = undefined;
 
         const response = await ApiClient.sendMessageStream(
           {
@@ -229,6 +242,41 @@ export function useChat() {
               setActivityStatus(status);
               if (details) {
                 setActivityDetails(details);
+                if (details.sources && details.sources.length > 0) {
+                  activeSources = details.sources;
+                }
+                if (details.query) {
+                  activeSearchQuery = details.query;
+                }
+                if (details.searchStatus) {
+                  activeSearchStatus = details.searchStatus;
+                }
+                if (details.searchTrigger) {
+                  activeSearchTrigger = details.searchTrigger;
+                }
+
+                // If sources or search query arrived, update streaming message metadata early
+                if (activeSources || activeSearchQuery) {
+                  setMessages((prev) => {
+                    const streamIdx = prev.findIndex((m) => m.id === streamingAssistantId);
+                    if (streamIdx !== -1) {
+                      const updated = [...prev];
+                      updated[streamIdx] = {
+                        ...updated[streamIdx],
+                        metadata: {
+                          ...updated[streamIdx].metadata,
+                          sources: activeSources,
+                          searchQuery: activeSearchQuery,
+                          searchStatus: activeSearchStatus,
+                          searchTrigger: activeSearchTrigger,
+                          searchPerformed: true,
+                        },
+                      };
+                      return updated;
+                    }
+                    return prev;
+                  });
+                }
               }
             },
             onChunk(chunk) {
@@ -242,6 +290,13 @@ export function useChat() {
                   content: accumulatedStreamContent,
                   createdAt: new Date().toISOString(),
                   status: 'streaming',
+                  metadata: {
+                    sources: activeSources,
+                    searchQuery: activeSearchQuery,
+                    searchStatus: activeSearchStatus,
+                    searchTrigger: activeSearchTrigger,
+                    searchPerformed: Boolean(activeSearchQuery || (activeSources && activeSources.length > 0)),
+                  },
                 };
                 if (streamIdx !== -1) {
                   const updated = [...prev];

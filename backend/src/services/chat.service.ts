@@ -24,6 +24,9 @@ export type StatusUpdateCallback = (
     error?: string;
     memoryFact?: string;
     memoryAction?: string;
+    sources?: WebSearchResultItem[];
+    searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results';
+    searchTrigger?: 'manual' | 'automatic' | 'none';
   }
 ) => void;
 
@@ -237,6 +240,10 @@ export class ChatService {
           onStatusUpdate?.('Search failed — retry available', {
             query: searchDecision.query,
             error: searchError,
+            sourcesCount: 0,
+            sources: [],
+            searchStatus: searchStatus,
+            searchTrigger: searchDecision.isManual ? 'manual' : 'automatic',
           });
         } else {
           searchResults = toolResult.data?.results || [];
@@ -279,17 +286,26 @@ export class ChatService {
             onStatusUpdate?.('Processing information...', {
               query: searchDecision.query,
               sourcesCount: 0,
+              sources: [],
+              searchStatus: 'no_results',
+              searchTrigger: searchDecision.isManual ? 'manual' : 'automatic',
             });
           } else {
             searchStatus = 'success';
             onStatusUpdate?.('Reading sources...', {
               query: searchDecision.query,
               sourcesCount: searchResults.length,
+              sources: searchResults,
+              searchStatus: 'success',
+              searchTrigger: searchDecision.isManual ? 'manual' : 'automatic',
             });
 
             onStatusUpdate?.('Analyzing sources...', {
               query: searchDecision.query,
               sourcesCount: searchResults.length,
+              sources: searchResults,
+              searchStatus: 'success',
+              searchTrigger: searchDecision.isManual ? 'manual' : 'automatic',
             });
 
             // Persist research summary into research_history

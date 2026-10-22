@@ -211,6 +211,20 @@ export class TavilyService {
         });
       }
 
+      // Prioritize authoritative sources first, then accessible pages, then score
+      sanitizedResults.sort((a, b) => {
+        if (Boolean(b.authoritative) !== Boolean(a.authoritative)) {
+          return b.authoritative ? 1 : -1;
+        }
+        if (Boolean(b.isAccessible) !== Boolean(a.isAccessible)) {
+          return b.isAccessible ? 1 : -1;
+        }
+        if (typeof b.score === 'number' && typeof a.score === 'number') {
+          return b.score - a.score;
+        }
+        return 0;
+      });
+
       return {
         success: true,
         query: trimmedQuery,
@@ -304,6 +318,42 @@ export class TavilyService {
       'github.com',
       'w3.org',
       'ietf.org',
+      // Official software & library documentation domains
+      'react.dev',
+      'reactjs.org',
+      'nextjs.org',
+      'vuejs.org',
+      'angular.dev',
+      'angular.io',
+      'svelte.dev',
+      'typescriptlang.org',
+      'python.org',
+      'docs.python.org',
+      'pypi.org',
+      'npmjs.com',
+      'crates.io',
+      'docs.rs',
+      'pkg.go.dev',
+      'go.dev',
+      'rust-lang.org',
+      'tailwindcss.com',
+      'vite.dev',
+      'vitejs.dev',
+      'bun.sh',
+      'deno.com',
+      'deno.land',
+      'orm.drizzle.team',
+      'prisma.io',
+      'supabase.com',
+      'firebase.google.com',
+      'cloud.google.com',
+      'aws.amazon.com',
+      'learn.microsoft.com',
+      'docs.docker.com',
+      'kubernetes.io',
+      'developer.apple.com',
+      'developer.android.com',
+      'stackoverflow.com',
     ];
     return authoritativeList.some((auth) => lower === auth || lower.endsWith('.' + auth));
   }

@@ -21,6 +21,7 @@ import {
   DatabaseDiagnosticsResult,
   AIActivityStatus,
   StreamChatEvent,
+  WebSearchResultItem,
 } from '../../shared/types';
 import { safeStorage } from './storage';
 
@@ -220,7 +221,19 @@ async function fetchJson<T>(url: string, options?: RequestInit, allowRetry = tru
 }
 
 export interface SendMessageStreamOptions {
-  onStatusUpdate?: (status: AIActivityStatus, details?: { query?: string; sourcesCount?: number; error?: string }) => void;
+  onStatusUpdate?: (
+    status: AIActivityStatus,
+    details?: {
+      query?: string;
+      sourcesCount?: number;
+      error?: string;
+      memoryFact?: string;
+      memoryAction?: string;
+      sources?: WebSearchResultItem[];
+      searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results';
+      searchTrigger?: 'manual' | 'automatic' | 'none';
+    }
+  ) => void;
   onChunk?: (chunk: string) => void;
   onComplete?: (response: ChatResponsePayload) => void;
   onError?: (error: Error) => void;
