@@ -26,15 +26,46 @@ export function cleanAndNormalizeResponseContent(
   // 2. Fix JSON escaping artifacts & runaway backslashes/slashes
   text = normalizeEscapesAndSlashes(text);
 
-  // 3. Remove unwanted repetitive robotic greetings unless user asked for identity, first turn, or actively streaming
+  // 3. Clean literal HTML tags such as <br>, <br/>, &nbsp;, <p>, <div> (protecting code blocks)
+  text = cleanHtmlArtifacts(text);
+
+  // 4. Remove unwanted repetitive robotic greetings unless user asked for identity, first turn, or actively streaming
   if (!options.isFirstTurn && !options.userAskedIdentity && !options.isStreaming) {
     text = cleanRepetitiveGreeting(text);
   }
 
-  // 4. Repair unclosed code blocks and inline formatting (e.g. streaming chunks or cutoff responses)
+  // 5. Repair unclosed code blocks and inline formatting (e.g. streaming chunks or cutoff responses)
   text = repairUnclosedMarkdown(text);
 
   return text.trim();
+}
+
+/**
+ * Normalizes literal HTML tags (e.g. <br>, <br/>, &nbsp;, <p>, <div>) into clean Markdown equivalents.
+ * Preserves contents of code fences so HTML snippets inside code blocks are not touched.
+ */
+function cleanHtmlArtifacts(input: string): string {
+  // Split by code blocks to preserve code snippets
+  const parts = input.split(/(```[\s\S]*?```)/g);
+  return parts
+    .map((part) => {
+      if (part.startsWith('```') && part.endsWith('```')) {
+        return part;
+      }
+      let res = part;
+      // Convert literal <br> tags to standard newlines
+      res = res.replace(/<br\s*\/?>/gi, '\n');
+      // Convert <hr> tags to markdown hr
+      res = res.replace(/<hr\s*\/?>/gi, '\n---\n');
+      // Convert common HTML entities
+      res = res.replace(/&nbsp;/gi, ' ');
+      res = res.replace(/&quot;/gi, '"');
+      res = res.replace(/&#39;/gi, "'");
+      // Clean up standalone paragraph/div tags emitted by models
+      res = res.replace(/<\/?(?:p|div)>/gi, '\n');
+      return res;
+    })
+    .join('');
 }
 
 /**
@@ -166,6 +197,13 @@ export function repairUnclosedMarkdown(input: string): string {
   const strikeMatches = withoutCode.match(/~~/g);
   if (strikeMatches && strikeMatches.length % 2 !== 0) {
     text = `${text}~~`;
+  }
+
+  // 5. Repair unclosed italic * outside bold and code fences
+  const withoutBold = withoutCode.replace(/\*\*[^*]*\*\*/g, '');
+  const italicMatches = withoutBold.match(/(?<!\*)\*(?!\*)/g);
+  if (italicMatches && italicMatches.length % 2 !== 0) {
+    text = `${text}*`;
   }
 
   return text;

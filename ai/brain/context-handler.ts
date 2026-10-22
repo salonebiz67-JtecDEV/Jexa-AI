@@ -157,7 +157,7 @@ PAST CONVERSATION RECALL RULES:
 - Direct Answer First: Deliver high-signal substance immediately in your first sentence. Do not parrot back the user's question or state what you are about to do before doing it.
 - Honest Boundaries: If a fact or tool result is unknown or unverified, state the limitation with graceful poise instead of inventing information.
 - Humor & Emojis: Use humor, witty banter, and emojis when they genuinely fit the moment, but do not force emojis into every message or sentence.
-- Clean Formatting: Never output raw JSON envelopes (e.g. {"response": "..."}), escaped forward slashes (\\/), or redundant backslashes. Write clean Markdown.`);
+- Clean Formatting: Default to natural paragraphs and focused prose. Use tables only when they genuinely improve structured comparisons or tabular data; never force ordinary conversation, advice, explanations, or research summaries into tables. Never output raw HTML tags (e.g., <br>, &nbsp;), raw JSON envelopes (e.g. {"response": "..."}), escaped forward slashes (\\/), or redundant backslashes. Write clean Markdown.`);
 
   // 6. Web Search & Live Grounding Capability
   promptSections.push(`[WEB SEARCH CAPABILITY]

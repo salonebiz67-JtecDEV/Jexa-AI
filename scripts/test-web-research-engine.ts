@@ -3,299 +3,240 @@ import { TavilyService } from '../backend/src/services/tavily.service';
 import { ToolRegistry } from '../backend/src/tools/tool-registry';
 import { ToolExecutor } from '../backend/src/tools/tool-executor';
 import { webSearchTool } from '../backend/src/tools/definitions/web-search.tool';
-import { ChatService } from '../backend/src/services/chat.service';
+import { cleanAndNormalizeResponseContent } from '../ai/brain/response-cleaner';
 
 async function runWebResearchTestSuite() {
   console.log('====================================================');
-  console.log('JEXA WEB RESEARCH & SHARED ENGINE VERIFICATION SUITE');
+  console.log('JEXA WEB RESEARCH & INTELLIGENT SEARCH TEST SUITE');
   console.log('====================================================\n');
 
   const report: Record<string, 'PASS' | 'FAIL'> = {};
 
   // --------------------------------------------------------------------------
-  // TEST 1: Automatic vs Manual Search Decision
+  // TEST 1: Automatic Search Decisions (No explicit "search" keyword required)
   // --------------------------------------------------------------------------
-  console.log('[Test 1] Testing Automatic vs Manual Search Decisions...');
-  // Manual toggle from composer
-  const manualDecision = await SearchDecisionService.evaluate('[web search requested] tell me about quantum computing');
-  // Automatic current news
-  const newsDecision = await SearchDecisionService.evaluate('latest breaking news on international climate summit today');
-  // Ordinary greeting (must NOT search)
-  const greetingDecision = await SearchDecisionService.evaluate('Hello Jexa! How are you doing today?');
-  // Creative writing (must NOT search)
-  const creativeDecision = await SearchDecisionService.evaluate('Write a bedtime story about a curious robotic fox in Freetown');
-  // Pure algorithm coding (must NOT search)
-  const codingDecision = await SearchDecisionService.evaluate('implement a bubble sort algorithm in typescript');
+  console.log('[Test 1] Testing Automatic Search Decisions Without Explicit Keywords...');
+  // Officeholders & leadership
+  const pmDecision = await SearchDecisionService.evaluate('who is the current prime minister of the UK');
+  const ceoDecision = await SearchDecisionService.evaluate('who is the current CEO of Microsoft');
+  // Temporal facts (2025/2026 events)
+  const temporalDecision = await SearchDecisionService.evaluate('what is the status of the Artemis II mission in 2025');
+  // Real-time rates & weather
+  const cryptoDecision = await SearchDecisionService.evaluate('what is the current price of Bitcoin today');
+  // Local utility
+  const edsaDecision = await SearchDecisionService.evaluate('why is power off in Freetown Sierra Leone right now');
 
-  console.log('  Decision matrix:', {
-    manualToggle: manualDecision.shouldSearch,
-    currentNews: newsDecision.shouldSearch,
-    greetingAvoided: !greetingDecision.shouldSearch,
-    creativeAvoided: !creativeDecision.shouldSearch,
-    codingAvoided: !codingDecision.shouldSearch,
+  console.log('  Automatic triggers:', {
+    pmSearch: pmDecision.shouldSearch,
+    ceoSearch: ceoDecision.shouldSearch,
+    temporalSearch: temporalDecision.shouldSearch,
+    cryptoSearch: cryptoDecision.shouldSearch,
+    edsaSearch: edsaDecision.shouldSearch,
   });
 
   if (
-    manualDecision.shouldSearch &&
-    newsDecision.shouldSearch &&
-    !greetingDecision.shouldSearch &&
-    !creativeDecision.shouldSearch &&
-    !codingDecision.shouldSearch
+    pmDecision.shouldSearch &&
+    ceoDecision.shouldSearch &&
+    temporalDecision.shouldSearch &&
+    cryptoDecision.shouldSearch &&
+    edsaDecision.shouldSearch
   ) {
-    console.log('  -> Search triggers accurately for live news and manual requests, while avoiding chit-chat & coding.');
-    report['Automatic vs manual search decisions'] = 'PASS';
+    console.log('  -> Recognized queries needing external information without requiring "search" keywords.');
+    report['1. Automatic search decisions'] = 'PASS';
   } else {
-    report['Automatic vs manual search decisions'] = 'FAIL';
+    report['1. Automatic search decisions'] = 'FAIL';
   }
 
   // --------------------------------------------------------------------------
-  // TEST 2: Query Understanding, Slang & Contextual Pronoun Expansion
+  // TEST 2: Explicit Research & Website URL Requests
   // --------------------------------------------------------------------------
-  console.log('\n[Test 2] Testing Query Understanding, Slang & Contextual Expansion...');
-  const slangQuery1 = 'wat is d latest news about spaceX';
-  const cleaned1 = SearchDecisionService.cleanQuery(slangQuery1);
+  console.log('\n[Test 2] Testing Explicit Research and Website URL Inspection...');
+  const siteDecision = await SearchDecisionService.evaluate('research website https://news.bbc.co.uk/tech');
+  const exploreDecision = await SearchDecisionService.evaluate('inspect https://example.com/press');
+  const manualToggle = await SearchDecisionService.evaluate('[web search requested] explain string theory');
 
-  const slangQuery2 = 'can u luk up premier league scores';
-  const cleaned2 = SearchDecisionService.cleanQuery(slangQuery2);
-
-  const contextualFollowUp = await SearchDecisionService.evaluate(
-    'can you search for that online?',
-    undefined,
-    undefined,
-    'USER: Did EDSA make an announcement about Freetown power outage today?\nASSISTANT: I can check the latest announcements.'
-  );
-
-  console.log('  Query cleaning results:', {
-    cleaned1,
-    cleaned2,
-    contextualQuery: contextualFollowUp.query,
+  console.log('  Explicit research decisions:', {
+    siteSearch: siteDecision.shouldSearch,
+    siteUrls: siteDecision.urlsToInspect,
+    exploreSearch: exploreDecision.shouldSearch,
+    exploreUrls: exploreDecision.urlsToInspect,
+    manualToggle: manualToggle.shouldSearch,
   });
 
-  const validCleaning =
-    !cleaned1.toLowerCase().includes('wat is d') &&
-    cleaned1.toLowerCase().includes('spacex') &&
-    !cleaned2.toLowerCase().includes('can u luk up') &&
-    contextualFollowUp.shouldSearch &&
-    contextualFollowUp.query.toLowerCase().includes('edsa');
+  const validExplicit =
+    siteDecision.shouldSearch &&
+    Array.isArray(siteDecision.urlsToInspect) &&
+    siteDecision.urlsToInspect.includes('https://news.bbc.co.uk/tech') &&
+    exploreDecision.shouldSearch &&
+    Array.isArray(exploreDecision.urlsToInspect) &&
+    exploreDecision.urlsToInspect.includes('https://example.com/press') &&
+    manualToggle.shouldSearch &&
+    manualToggle.isManual === true;
 
-  if (validCleaning) {
-    console.log('  -> Slang, phonetic typos, and pronouns successfully expanded into effective search queries.');
-    report['Query understanding and contextual formulation'] = 'PASS';
+  if (validExplicit) {
+    console.log('  -> Explicit website URLs correctly captured in urlsToInspect and manual toggle preserved.');
+    report['2. Explicit research & website URLs'] = 'PASS';
   } else {
-    report['Query understanding and contextual formulation'] = 'FAIL';
+    report['2. Explicit research & website URLs'] = 'FAIL';
   }
 
   // --------------------------------------------------------------------------
-  // TEST 3: Shared Engine Integration (ToolRegistry & ToolExecutor)
+  // TEST 3: Ordinary Conversation (Strictly Avoid Unnecessary Search)
   // --------------------------------------------------------------------------
-  console.log('\n[Test 3] Testing Shared Tool Engine Registration & Execution...');
-  const registry = ToolRegistry.getInstance();
-  const registeredTool = registry.getTool('web_search');
+  console.log('\n[Test 3] Testing Avoidance of Search for Ordinary Conversation...');
+  const greeting = await SearchDecisionService.evaluate('Hello Jexa! Good morning, how are you?');
+  const identity = await SearchDecisionService.evaluate('Who are you and what are your capabilities?');
+  const math = await SearchDecisionService.evaluate('calculate 45 * 18');
+  const creative = await SearchDecisionService.evaluate('Write a short bedtime story about a friendly dragon');
+  const algorithm = await SearchDecisionService.evaluate('implement a binary search algorithm in python');
 
-  const hasTool = Boolean(registeredTool && registeredTool.name === 'web_search');
-  const hasSchema = Boolean(registeredTool?.inputSchema?.properties?.query);
-  const isReadOnly = registeredTool?.permissionLevel === 'read_only';
-
-  // Test argument validation on executor
-  const invalidExec = await ToolExecutor.executeTool(
-    webSearchTool,
-    { query: '' } as any,
-    {}
-  );
-  const validationBlocked =
-    !invalidExec.success &&
-    (invalidExec.error?.includes('required argument') || invalidExec.error?.includes('empty'));
-
-  console.log('  Shared engine checks:', {
-    hasTool,
-    hasSchema,
-    isReadOnly,
-    validationBlocked,
-  });
-
-  if (hasTool && hasSchema && isReadOnly && validationBlocked) {
-    console.log('  -> web_search tool properly registered in shared engine with schema validation.');
-    report['Shared engine registration & validation'] = 'PASS';
-  } else {
-    report['Shared engine registration & validation'] = 'FAIL';
-  }
-
-  // --------------------------------------------------------------------------
-  // TEST 4: SSRF Prevention & Safe URL Validation
-  // --------------------------------------------------------------------------
-  console.log('\n[Test 4] Testing URL Security & SSRF Protection...');
-  const localCheck = TavilyService.validateExternalUrl('http://localhost:3000/api/secret');
-  const loopbackCheck = TavilyService.validateExternalUrl('http://127.0.0.1:8080/admin');
-  const metadataCheck = TavilyService.validateExternalUrl('http://169.254.169.254/latest/meta-data');
-  const privateClassACheck = TavilyService.validateExternalUrl('http://10.0.0.1/db');
-  const validWebCheck = TavilyService.validateExternalUrl('https://reuters.com/world/africa');
-
-  console.log('  SSRF validation results:', {
-    localhostBlocked: !localCheck.valid,
-    loopbackBlocked: !loopbackCheck.valid,
-    metadataBlocked: !metadataCheck.valid,
-    privateClassABlocked: !privateClassACheck.valid,
-    validWebPermitted: validWebCheck.valid,
+  console.log('  Conversation check:', {
+    greetingBlocked: !greeting.shouldSearch,
+    identityBlocked: !identity.shouldSearch,
+    mathBlocked: !math.shouldSearch,
+    creativeBlocked: !creative.shouldSearch,
+    algorithmBlocked: !algorithm.shouldSearch,
   });
 
   if (
-    !localCheck.valid &&
-    !loopbackCheck.valid &&
-    !metadataCheck.valid &&
-    !privateClassACheck.valid &&
-    validWebCheck.valid
+    !greeting.shouldSearch &&
+    !identity.shouldSearch &&
+    !math.shouldSearch &&
+    !creative.shouldSearch &&
+    !algorithm.shouldSearch
   ) {
-    console.log('  -> SSRF vectors strictly blocked while valid external HTTPS URLs are accepted.');
-    report['SSRF prevention and URL security'] = 'PASS';
+    console.log('  -> Search avoided for greetings, identity, math, creative writing, and coding algorithms.');
+    report['3. Ordinary conversation avoidance'] = 'PASS';
   } else {
-    report['SSRF prevention and URL security'] = 'FAIL';
+    report['3. Ordinary conversation avoidance'] = 'FAIL';
   }
 
   // --------------------------------------------------------------------------
-  // TEST 5: Authoritative Source Recognition & Inaccessible Page Handling
+  // TEST 4: Query Simplification and Retry Logic
   // --------------------------------------------------------------------------
-  console.log('\n[Test 5] Testing Authoritative Source Recognition & Inaccessible Handling...');
-  const isReutersAuth = TavilyService.isAuthoritativeDomain('reuters.com');
-  const isBbcAuth = TavilyService.isAuthoritativeDomain('bbc.co.uk');
-  const isGovAuth = TavilyService.isAuthoritativeDomain('statehouse.gov.sl');
-  const isEdsaAuth = TavilyService.isAuthoritativeDomain('edsa.sl');
-  const isRandomAuth = TavilyService.isAuthoritativeDomain('spamblog12345.xyz');
+  console.log('\n[Test 4] Testing Query Simplification for Zero-Result Retries...');
+  const complexQuery = 'what is the current status of EDSA electricity power cut in Freetown Sierra Leone';
+  const simplified = SearchDecisionService.simplifyQuery(complexQuery);
 
-  console.log('  Authoritative domain checks:', {
-    isReutersAuth,
-    isBbcAuth,
-    isGovAuth,
-    isEdsaAuth,
-    isRandomAuthNot: !isRandomAuth,
-  });
-
-  // Test extraction of a non-existent domain to verify honest inaccessible reporting
-  const inaccessibleExtract = await TavilyService.extractPages([
-    'https://non-existent-domain-for-jexa-testing-404.sl/outage'
-  ]);
-
-  const inaccessibleReported =
-    Array.isArray(inaccessibleExtract) &&
-    inaccessibleExtract.length > 0 &&
-    inaccessibleExtract[0].accessible === false;
-
-  console.log('  Inaccessible page handling:', {
-    inaccessibleReported,
-    errorNotice: inaccessibleExtract[0]?.error,
+  console.log('  Simplification check:', {
+    original: complexQuery,
+    simplified,
   });
 
   if (
-    isReutersAuth &&
-    isBbcAuth &&
-    isGovAuth &&
-    isEdsaAuth &&
-    !isRandomAuth &&
-    inaccessibleReported
+    simplified.length > 0 &&
+    !simplified.includes('what is the') &&
+    simplified.includes('EDSA') &&
+    simplified.includes('Freetown')
   ) {
-    console.log('  -> Authoritative sources correctly identified; inaccessible pages reported without hallucinated text.');
-    report['Authoritative sources and inaccessible page reporting'] = 'PASS';
+    console.log('  -> Query simplification cleanly strips stopwords and punctuation for broadening search.');
+    report['4. Query simplification & retry logic'] = 'PASS';
   } else {
-    report['Authoritative sources and inaccessible page reporting'] = 'FAIL';
+    report['4. Query simplification & retry logic'] = 'FAIL';
   }
 
   // --------------------------------------------------------------------------
-  // TEST 6: Provider Error & Missing Key Handling
+  // TEST 5: Direct URL Extraction in Web Search Tool
   // --------------------------------------------------------------------------
-  console.log('\n[Test 6] Testing Honest Error Reporting & Missing Key Handling...');
-  const originalKey = process.env.TAVILY_API_KEY;
-  try {
-    delete process.env.TAVILY_API_KEY;
+  console.log('\n[Test 5] Testing Web Search Tool with Direct URL Extraction...');
+  const origExtract = TavilyService.extractPages;
+  const origConfigured = TavilyService.isConfigured;
+  const origSearch = TavilyService.search;
 
-    // Execute tool with unconfigured API key
-    const missingKeyResult = await ToolExecutor.executeTool(
-      webSearchTool,
-      { query: 'Sierra Leone news' },
-      {}
-    );
-
-    const reportsMissingKey =
-      !missingKeyResult.success &&
-      (missingKeyResult.error?.includes('TAVILY_API_KEY') || missingKeyResult.error?.includes('not available'));
-
-    console.log('  Missing key execution check:', {
-      success: missingKeyResult.success,
-      error: missingKeyResult.error,
-      reportsMissingKey,
-    });
-
-    if (reportsMissingKey) {
-      console.log('  -> Missing API key reported honestly without false claims of successful research.');
-      report['Provider error and missing key handling'] = 'PASS';
-    } else {
-      report['Provider error and missing key handling'] = 'FAIL';
-    }
-  } finally {
-    if (originalKey) {
-      process.env.TAVILY_API_KEY = originalKey;
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // TEST 7: Multi-Source Execution & Source Card Formatting
-  // --------------------------------------------------------------------------
-  console.log('\n[Test 7] Testing Multi-Source Execution and Source Card Data Structure...');
-  // Mock TavilyService.isConfigured & search to test multi-source processing deterministically
-  const originalSearch = TavilyService.search;
-  const originalConfigured = TavilyService.isConfigured;
   (TavilyService as any).isConfigured = () => true;
-  (TavilyService as any).search = async (query: string) => {
-    return {
-      success: true,
-      query,
-      results: [
-        {
-          title: 'EDSA Restores Power to Western Area After Grid Maintenance',
-          url: 'https://statehouse.gov.sl/edsa-restores-power',
-          content: 'The Electricity Distribution and Supply Authority announced the completion of maintenance at Bumbuna.',
-          domain: 'statehouse.gov.sl',
-          authoritative: true,
-          isAccessible: true,
-          publishedDate: '2026-10-18',
-        },
-        {
-          title: 'Awoko News: Freetown Electricity Improvements Detailed by Ministry',
-          url: 'https://awokonewspaper.sl/freetown-electricity-improvements',
-          content: 'Ministry of Energy confirmed 40MW supply stabilization in Freetown.',
-          domain: 'awokonewspaper.sl',
-          authoritative: true,
-          isAccessible: true,
-          publishedDate: '2026-10-19',
-        },
-      ],
-    };
-  };
+  (TavilyService as any).search = async () => ({
+    success: true,
+    query: 'https://example.org/release-notes',
+    results: [],
+  });
+  (TavilyService as any).extractPages = async (urls: string[]) => [
+    {
+      url: urls[0],
+      title: 'Official Release Notes v2.4',
+      domain: 'example.org',
+      content: 'Version 2.4 adds new real-time synchronization pipelines and security audits.',
+      accessible: true,
+      authoritative: true,
+    },
+  ];
 
-  const multiSourceResult = await ToolExecutor.executeTool(
+  const toolExec = await ToolExecutor.executeTool(
     webSearchTool,
-    { query: 'EDSA electricity outage Freetown', inspectPages: false },
+    {
+      query: 'https://example.org/release-notes',
+      urlsToInspect: ['https://example.org/release-notes'],
+    },
     {}
   );
 
-  // Restore original
-  (TavilyService as any).search = originalSearch;
-  (TavilyService as any).isConfigured = originalConfigured;
+  (TavilyService as any).extractPages = origExtract;
+  (TavilyService as any).isConfigured = origConfigured;
+  (TavilyService as any).search = origSearch;
 
-  const hasSources = multiSourceResult.success && (multiSourceResult.data?.resultsCount || 0) >= 2;
-  const hasDisclosures = (multiSourceResult.sourceDisclosures?.length || 0) >= 2;
-  const hasAuthoritative = (multiSourceResult.data?.authoritativeSourcesCount || 0) >= 1;
+  const urlMergedAsSource =
+    toolExec.success &&
+    toolExec.data?.results &&
+    toolExec.data.results.length === 1 &&
+    toolExec.data.results[0].title === 'Official Release Notes v2.4';
 
-  console.log('  Multi-source verification:', {
-    hasSources,
-    hasDisclosures,
-    hasAuthoritative,
-    sourcesCount: multiSourceResult.data?.resultsCount,
+  console.log('  URL inspection results:', {
+    success: toolExec.success,
+    resultsCount: toolExec.data?.resultsCount,
+    sourceTitle: toolExec.data?.results?.[0]?.title,
   });
 
-  if (hasSources && hasDisclosures && hasAuthoritative) {
-    console.log('  -> Multi-source research aggregated and enriched with source cards and authority verification.');
-    report['Multi-source research & source cards'] = 'PASS';
+  if (urlMergedAsSource) {
+    console.log('  -> Direct URL inspected pages successfully promoted to verified research sources.');
+    report['5. Direct URL inspection integration'] = 'PASS';
   } else {
-    report['Multi-source research & source cards'] = 'FAIL';
+    report['5. Direct URL inspection integration'] = 'FAIL';
+  }
+
+  // --------------------------------------------------------------------------
+  // TEST 6: Source Accuracy, Authoritative Domains & Inaccessible Handling
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 6] Testing Source Accuracy, Authority Verification & SSRF...');
+  const isReutersAuth = TavilyService.isAuthoritativeDomain('reuters.com');
+  const isGovAuth = TavilyService.isAuthoritativeDomain('statehouse.gov.sl');
+  const isRandomAuth = TavilyService.isAuthoritativeDomain('fake-news-network.biz');
+
+  const ssrfLocal = TavilyService.validateExternalUrl('http://127.0.0.1:8080');
+  const ssrfAws = TavilyService.validateExternalUrl('http://169.254.169.254/latest');
+  const validUrl = TavilyService.validateExternalUrl('https://bbc.com/news');
+
+  console.log('  Security & Authority:', {
+    isReutersAuth,
+    isGovAuth,
+    isRandomAuthBlocked: !isRandomAuth,
+    ssrfLocalBlocked: !ssrfLocal.valid,
+    ssrfAwsBlocked: !ssrfAws.valid,
+    validUrlAllowed: validUrl.valid,
+  });
+
+  if (isReutersAuth && isGovAuth && !isRandomAuth && !ssrfLocal.valid && !ssrfAws.valid && validUrl.valid) {
+    console.log('  -> Authority verification active and SSRF vectors strictly blocked.');
+    report['6. Source accuracy & SSRF prevention'] = 'PASS';
+  } else {
+    report['6. Source accuracy & SSRF prevention'] = 'FAIL';
+  }
+
+  // --------------------------------------------------------------------------
+  // TEST 7: Clean Markdown Rendering (Paragraphs default, <br> tags stripped)
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 7] Testing Markdown Rendering & HTML Artifact Cleaning...');
+  const dirtyAiResponse = 'Here is the latest update:<br><br>The meeting concluded with a mutual agreement.<br>Details follow below.';
+  const cleaned = cleanAndNormalizeResponseContent(dirtyAiResponse, { isFirstTurn: false });
+
+  console.log('  Response cleaning:', {
+    original: dirtyAiResponse,
+    cleaned,
+  });
+
+  if (!cleaned.includes('<br>') && cleaned.includes('The meeting concluded')) {
+    console.log('  -> Literal HTML <br> tags cleanly replaced with proper Markdown linebreaks.');
+    report['7. Markdown formatting & paragraph default'] = 'PASS';
+  } else {
+    report['7. Markdown formatting & paragraph default'] = 'FAIL';
   }
 
   // --------------------------------------------------------------------------

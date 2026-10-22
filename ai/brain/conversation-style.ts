@@ -16,7 +16,8 @@ export function getStyleInstructions(config: StyleConfig = DEFAULT_STYLE_CONFIG)
   const parts: string[] = [];
 
   if (config.useMarkdown) {
-    parts.push('Use clean Markdown formatting: bold for emphasis, lists for structured multi-point ideas, code blocks for technical syntax.');
+    parts.push('Use clean Markdown formatting with paragraphs as the default format. Use bullet or numbered lists for structured multi-point ideas, code blocks for technical syntax, and tables ONLY for genuine tabular data or side-by-side structured comparisons. Never force ordinary conversation, advice, explanations, or research summaries into tables.');
+    parts.push('Never emit literal HTML tags such as <br>, <p>, <div>, or &nbsp;—use standard Markdown line breaks and paragraphs.');
   } else {
     parts.push('Use plain prose with clean sentence breaks. Avoid markdown symbols or asterisks.');
   }

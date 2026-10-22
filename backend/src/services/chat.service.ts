@@ -27,10 +27,13 @@ export type StatusUpdateCallback = (
   }
 ) => void;
 
+export type ChunkCallback = (chunk: string) => void;
+
 export class ChatService {
   public static async processMessage(
     payload: SendMessagePayload,
-    onStatusUpdate?: StatusUpdateCallback
+    onStatusUpdate?: StatusUpdateCallback,
+    onChunk?: ChunkCallback
   ): Promise<ChatResponsePayload> {
     // 1. Initial activity status
     onStatusUpdate?.('Thinking...');
@@ -181,7 +184,7 @@ export class ChatService {
     );
     let searchResults: WebSearchResultItem[] = [];
     let searchPerformed = false;
-    let searchStatus: 'success' | 'failed' | 'missing_key' | 'unneeded' = 'unneeded';
+    let searchStatus: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results' = 'unneeded';
     let searchError: string | undefined;
 
     if (searchDecision.shouldSearch) {
@@ -211,6 +214,7 @@ export class ChatService {
             maxResults: 5,
             searchDepth: isDeepResearch ? 'advanced' : 'basic',
             inspectPages: true,
+            urlsToInspect: searchDecision.urlsToInspect,
           },
           {
             userId: payload.userId,
@@ -235,21 +239,60 @@ export class ChatService {
             error: searchError,
           });
         } else {
-          searchStatus = 'success';
           searchResults = toolResult.data?.results || [];
 
-          onStatusUpdate?.('Reading sources...', {
-            query: searchDecision.query,
-            sourcesCount: searchResults.length,
-          });
+          // If initial search returned 0 results, attempt an automatic simplified query retry
+          if (searchResults.length === 0) {
+            const simplified = SearchDecisionService.simplifyQuery(searchDecision.query);
+            if (simplified && simplified.toLowerCase() !== searchDecision.query.toLowerCase()) {
+              onStatusUpdate?.('Searching the web...', { query: simplified });
+              try {
+                const retryResult = await ToolExecutor.executeTool(
+                  webTool,
+                  {
+                    query: simplified,
+                    maxResults: 5,
+                    searchDepth: 'basic',
+                    inspectPages: true,
+                    urlsToInspect: searchDecision.urlsToInspect,
+                  },
+                  {
+                    userId: payload.userId,
+                    conversationId: convId,
+                    userContext: payload.userContext,
+                  },
+                  {
+                    onStatusUpdate,
+                  }
+                );
+                if (retryResult.success && retryResult.data?.results && retryResult.data.results.length > 0) {
+                  searchResults = retryResult.data.results;
+                }
+              } catch (retryErr: any) {
+                console.warn('[ChatService] Simplified query retry error:', retryErr.message);
+              }
+            }
+          }
 
-          onStatusUpdate?.('Analyzing sources...', {
-            query: searchDecision.query,
-            sourcesCount: searchResults.length,
-          });
+          if (searchResults.length === 0) {
+            searchStatus = 'no_results';
+            onStatusUpdate?.('Processing information...', {
+              query: searchDecision.query,
+              sourcesCount: 0,
+            });
+          } else {
+            searchStatus = 'success';
+            onStatusUpdate?.('Reading sources...', {
+              query: searchDecision.query,
+              sourcesCount: searchResults.length,
+            });
 
-          // Persist research summary into research_history
-          if (searchResults.length > 0) {
+            onStatusUpdate?.('Analyzing sources...', {
+              query: searchDecision.query,
+              sourcesCount: searchResults.length,
+            });
+
+            // Persist research summary into research_history
             const topSources = searchResults.slice(0, 4).map((s) => ({
               title: s.title,
               url: s.url,
@@ -343,25 +386,36 @@ ${formattedSources}
 <<<END_UNTRUSTED_WEB_DATA>>>
 
 CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
-1. Multi-Source Synthesis: Compare facts across multiple independent sources. Synthesize findings into a coherent, direct answer rather than dumping raw search summaries.
+1. Multi-Source Synthesis: Compare facts across multiple independent sources. Synthesize findings into a coherent, direct answer rather than dumping raw search summaries. Default to natural paragraphs and focused prose as the default response format. Never force research summaries into tables unless comparing structured multi-attribute metrics or tabular data. Never emit literal HTML tags such as <br>.
 2. Distinguish Confirmed Facts vs Conflicts: If reports conflict or are unverified, communicate the uncertainty explicitly. Note differences between official government/authoritative statements and unverified commentary.
 3. Inaccessible Pages: If a source is marked [INACCESSIBLE / BLOCKED], do NOT pretend the page was opened or read. Be transparent about inaccessible URLs.
 4. Grounding & Anti-Hallucination: Ground your statements strictly in verified evidence. Never fabricate headlines, URLs, dates, or search results.
 5. Clean UI & Citations: The UI automatically provides interactive, collapsible source cards below your response with clickable links and favicons. Do not pollute the main text with repeated raw URLs. Keep any necessary citations connected to the specific claims they support.
 === END SEARCH RESULTS ===`;
+    } else if (searchPerformed && searchStatus === 'no_results') {
+      augmentedSystemPrompt += `\n\n=== LIVE WEB SEARCH NOTICE ===
+Live internet search was executed for "${searchDecision.query}", but returned 0 results or sources.
+CRITICAL INSTRUCTIONS:
+1. TRUTHFULNESS: State clearly and truthfully that live web search returned no results for this inquiry.
+2. NO FABRICATION: Do NOT invent fake sources, citations, URLs, dates, or pretend that live verification succeeded.
+3. GENERAL KNOWLEDGE FALLBACK: Provide whatever helpful context or explanation you have from baseline knowledge, while explicitly noting that live verification could not be confirmed.
+4. FORMATTING: Format your response using clean, natural paragraphs. Use tables only if the user explicitly requested tabular comparison. Never output literal HTML tags like <br>.`;
     } else if (searchPerformed && searchStatus === 'missing_key') {
       augmentedSystemPrompt += `\n\n=== LIVE WEB SEARCH NOTICE ===
 The user asked a question requiring live web search (Query: "${searchDecision.query}"), but the backend server does not have TAVILY_API_KEY configured.
 INSTRUCTIONS:
 1. State honestly that live web search is not currently configured on the server.
 2. Do not invent current real-time data or fabricate today's news.
-3. Answer what you know based on your general knowledge cutoff while clearly disclaiming that live verification was unavailable.`;
+3. Answer what you know based on your general knowledge cutoff while clearly disclaiming that live verification was unavailable.
+4. Format your response using clean paragraphs. Do not force into tables. Never output literal <br> tags.`;
     } else if (searchPerformed && searchStatus === 'failed') {
       augmentedSystemPrompt += `\n\n=== LIVE WEB SEARCH NOTICE ===
-The web search for "${searchDecision.query}" encountered an error (${searchError}).
+The web search for "${searchDecision.query}" encountered an error (${searchError || 'connection error'}).
 INSTRUCTIONS:
-1. Inform the user that live internet search could not be completed.
-2. Provide a helpful response from general knowledge, acknowledging that live sources could not be reached.`;
+1. Inform the user truthfully that live internet search could not be completed.
+2. Do not invent fake sources or pretend research succeeded.
+3. Provide a helpful response from general knowledge, acknowledging that live sources could not be reached.
+4. Format your response with readable paragraphs. Do not force into tables. Never output literal <br> tags.`;
     }
 
     // 11. Prepare answer
@@ -370,17 +424,25 @@ INSTRUCTIONS:
     let providerResponse;
     let fallbackUsed = false;
 
+    const genRequest = {
+      systemPrompt: augmentedSystemPrompt,
+      messages: assembled.formattedMessages,
+      temperature: 0.7,
+      maxTokens: 1200,
+    };
+
     try {
       if (!primaryProvider) {
         throw new Error(`AI Provider '${primaryProviderType}' is not available.`);
       }
 
-      providerResponse = await primaryProvider.generateResponse({
-        systemPrompt: augmentedSystemPrompt,
-        messages: assembled.formattedMessages,
-        temperature: 0.7,
-        maxTokens: 1200,
-      });
+      if (onChunk && typeof primaryProvider.streamResponse === 'function') {
+        providerResponse = await primaryProvider.streamResponse(genRequest, (chunk) => {
+          onChunk(chunk);
+        });
+      } else {
+        providerResponse = await primaryProvider.generateResponse(genRequest);
+      }
     } catch (primaryError: any) {
       console.warn(
         `[ChatService] Primary provider '${primaryProviderType}' failed:`,
@@ -395,12 +457,13 @@ INSTRUCTIONS:
       if (fallbackProvider) {
         try {
           console.log(`[ChatService] Attempting automatic failover to '${fallbackProviderType}'...`);
-          providerResponse = await fallbackProvider.generateResponse({
-            systemPrompt: augmentedSystemPrompt,
-            messages: assembled.formattedMessages,
-            temperature: 0.7,
-            maxTokens: 1200,
-          });
+          if (onChunk && typeof fallbackProvider.streamResponse === 'function') {
+            providerResponse = await fallbackProvider.streamResponse(genRequest, (chunk) => {
+              onChunk(chunk);
+            });
+          } else {
+            providerResponse = await fallbackProvider.generateResponse(genRequest);
+          }
           fallbackUsed = true;
           console.log(`[ChatService] Failover to '${fallbackProviderType}' succeeded.`);
         } catch (fallbackErr: any) {
@@ -417,12 +480,13 @@ INSTRUCTIONS:
         const localProvider = registry.getTextProvider('development_mock');
         if (localProvider) {
           try {
-            providerResponse = await localProvider.generateResponse({
-              systemPrompt: augmentedSystemPrompt,
-              messages: assembled.formattedMessages,
-              temperature: 0.7,
-              maxTokens: 1200,
-            });
+            if (onChunk && typeof localProvider.streamResponse === 'function') {
+              providerResponse = await localProvider.streamResponse(genRequest, (chunk) => {
+                onChunk(chunk);
+              });
+            } else {
+              providerResponse = await localProvider.generateResponse(genRequest);
+            }
             fallbackUsed = true;
           } catch (localErr: any) {
             console.error('[ChatService] Foundation fallback error:', localErr);

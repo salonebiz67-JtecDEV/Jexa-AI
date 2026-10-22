@@ -68,7 +68,7 @@ export interface ChatMessageMetadata {
   sources?: WebSearchResultItem[];
   searchQuery?: string;
   searchPerformed?: boolean;
-  searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded';
+  searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results';
   searchError?: string;
   searchDecisionCategory?: string;
   searchDecisionReason?: string;

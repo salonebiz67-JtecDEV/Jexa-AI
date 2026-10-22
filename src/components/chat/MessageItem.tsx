@@ -70,11 +70,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   // Helper to parse inline markdown: [label](url), citations [1], raw URLs, bold, inline code, strikethrough, and italics
   const renderInlineFormatting = (text: string) => {
-    const tokenRegex = /(\[[^\]]+\]\(https?:\/\/[^\s\)]+\)|\[\^?\d+(?:,\s*\^?\d+)*\]|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*]+\*|_[^_]+_|https?:\/\/[^\s<>"]+)/g;
+    // Non-capturing groups (?:...) inside ensure split only returns full tokens, preventing duplicated formatting
+    const tokenRegex = /(\[[^\]]+\]\((?:https?:\/\/[^\s\)]+|[^\s\)]+)\)|\[\^?\d+(?:,\s*\^?\d+)*\]|<br\s*\/?>|`[^`\n]+`|\*\*(?:[^*]|\*(?!\*))+\*\*|__(?:[^_]|_(?!_))+__|~~(?:[^~]|~(?!~))+~~|\*(?:[^*\s]|[^*\s].*?[^*\s])\*|\b_(?:[^_\s]|[^_\s].*?[^_\s])_\b|https?:\/\/[^\s<>"]+)/gi;
     const parts = text.split(tokenRegex);
 
     return parts.map((part, idx) => {
       if (!part) return null;
+
+      // Literal HTML line break tag
+      if (/<br\s*\/?>/i.test(part)) {
+        return <br key={idx} />;
+      }
 
       // Citation badge: [1], [2], [1, 2], [^1]
       const citMatch = part.match(/^\[\^?(\d+(?:,\s*\^?\d+)*)\]$/);
@@ -185,9 +191,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   // Robust line-by-line block markdown parser that prevents headings from running into paragraphs
   const renderFormattedContent = (content: string) => {
+    const isStreaming = message.status === 'streaming';
     const normalized = isUser
       ? content
-      : repairUnclosedMarkdown(cleanAndNormalizeResponseContent(content));
+      : repairUnclosedMarkdown(cleanAndNormalizeResponseContent(content, { isStreaming }));
 
     // Split out code blocks first
     const codeBlockTokens = normalized.split(/(```[\s\S]*?```)/g);
@@ -208,7 +215,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         return (
           <div
             key={segIdx}
-            className="my-3 rounded-2xl overflow-hidden border border-white/[0.08] bg-[#06080e] shadow-md"
+            className="my-3 w-full max-w-full rounded-2xl overflow-hidden border border-white/[0.08] bg-[#06080e] shadow-md"
           >
             <div className="flex items-center justify-between px-3.5 py-2 bg-[#0b0f1a] border-b border-white/[0.06] text-[11px] text-slate-400 font-mono">
               <span className="uppercase tracking-wider font-semibold text-slate-300">
@@ -257,7 +264,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               </div>
             </div>
 
-            <pre className="p-3.5 text-xs font-mono text-slate-200 overflow-x-auto leading-relaxed select-text">
+            <pre className="p-3.5 text-xs font-mono text-slate-200 overflow-x-auto max-w-full leading-relaxed select-text scrollbar-thin">
               <code>{codeContent}</code>
             </pre>
           </div>
@@ -268,8 +275,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       const lines = segment.split('\n');
       const blocks: React.ReactNode[] = [];
       let currentParagraph: string[] = [];
-      let currentList: { type: 'ul' | 'ol'; items: string[] } | null = null;
+      let currentList: { type: 'ul' | 'ol'; items: Array<{ text: string; isNested: boolean }> } | null = null;
       let currentTable: string[] = [];
+      let currentBlockquote: string[] = [];
       let blockCounter = 0;
 
       const flushParagraph = () => {
@@ -289,6 +297,21 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         }
       };
 
+      const flushBlockquote = () => {
+        if (currentBlockquote.length > 0) {
+          const text = currentBlockquote.join('\n');
+          currentBlockquote = [];
+          blocks.push(
+            <blockquote
+              key={`bq-${segIdx}-${blockCounter++}`}
+              className="pl-3.5 py-1.5 border-l-2 border-cyan-500/60 bg-white/[0.02] rounded-r-lg text-slate-300 italic my-2.5 text-[14px] leading-relaxed"
+            >
+              {renderInlineFormatting(text)}
+            </blockquote>
+          );
+        }
+      };
+
       const flushList = () => {
         if (currentList && currentList.items.length > 0) {
           if (currentList.type === 'ul') {
@@ -298,9 +321,18 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 className="space-y-2 my-2.5 pl-0.5 text-slate-200 text-[14.5px] sm:text-[15px]"
               >
                 {currentList.items.map((it, idx) => (
-                  <li key={idx} className="flex items-start gap-2.5 leading-relaxed">
-                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 mt-2 shrink-0 shadow-[0_0_6px_rgba(6,182,212,0.4)]" />
-                    <span className="flex-1 min-w-0 break-words">{renderInlineFormatting(it)}</span>
+                  <li
+                    key={idx}
+                    className={`flex items-start gap-2.5 leading-relaxed ${it.isNested ? 'ml-4 sm:ml-5' : ''}`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full mt-2 shrink-0 ${
+                        it.isNested
+                          ? 'border border-cyan-400 bg-transparent'
+                          : 'bg-cyan-400 shadow-[0_0_6px_rgba(6,182,212,0.4)]'
+                      }`}
+                    />
+                    <span className="flex-1 min-w-0 break-words">{renderInlineFormatting(it.text)}</span>
                   </li>
                 ))}
               </ul>
@@ -312,11 +344,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 className="space-y-2 my-2.5 pl-0.5 text-slate-200 text-[14.5px] sm:text-[15px]"
               >
                 {currentList.items.map((it, idx) => (
-                  <li key={idx} className="flex items-start gap-2.5 leading-relaxed">
+                  <li
+                    key={idx}
+                    className={`flex items-start gap-2.5 leading-relaxed ${it.isNested ? 'ml-4 sm:ml-5' : ''}`}
+                  >
                     <span className="w-5 h-5 rounded-md bg-white/[0.07] border border-white/[0.08] text-cyan-300 font-mono text-[11px] font-medium flex items-center justify-center shrink-0 mt-0.5">
                       {idx + 1}
                     </span>
-                    <span className="flex-1 min-w-0 break-words">{renderInlineFormatting(it)}</span>
+                    <span className="flex-1 min-w-0 break-words">{renderInlineFormatting(it.text)}</span>
                   </li>
                 ))}
               </ol>
@@ -331,12 +366,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           const tableLines = currentTable;
           currentTable = [];
 
-          // Find separator row (e.g. |---|:---|---:|)
+          // Find delimiter row (e.g. |---|---| or |:---|:---:|---:| or | - | - |)
           const delimiterIdx = tableLines.findIndex((l) =>
-            /^\|?\s*:?-{2,}:?\s*(\|?\s*:?-{2,}:?\s*)+\|?$/.test(l.trim())
+            /^\|?\s*:?-+:?\s*(\|?\s*:?-+:?\s*)+\|?$/.test(l.trim())
           );
 
-          if (delimiterIdx > 0) {
+          // Table is valid ONLY if there is a header before delimiter AND delimiter is at least index 1
+          if (delimiterIdx > 0 && tableLines[delimiterIdx - 1]) {
             const rawHeader = tableLines[delimiterIdx - 1];
             const headerCells = rawHeader
               .split('|')
@@ -347,54 +383,57 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 return true;
               });
 
-            const bodyRows = tableLines.slice(delimiterIdx + 1).map((rowLine) => {
-              const cells = rowLine.split('|').map((c) => c.trim());
-              if (cells[0] === '' && rowLine.trim().startsWith('|')) cells.shift();
-              if (cells[cells.length - 1] === '' && rowLine.trim().endsWith('|')) cells.pop();
-              return cells;
-            });
+            if (headerCells.length > 0) {
+              const bodyRows = tableLines.slice(delimiterIdx + 1).map((rowLine) => {
+                const cells = rowLine.split('|').map((c) => c.trim());
+                if (cells[0] === '' && rowLine.trim().startsWith('|')) cells.shift();
+                if (cells[cells.length - 1] === '' && rowLine.trim().endsWith('|')) cells.pop();
+                return cells;
+              });
 
-            blocks.push(
-              <div
-                key={`tbl-${segIdx}-${blockCounter++}`}
-                className="my-3 overflow-x-auto rounded-xl border border-white/[0.08] bg-[#070b14]/80 shadow-sm"
-              >
-                <table className="min-w-full divide-y divide-white/[0.08] text-xs sm:text-[13.5px]">
-                  <thead className="bg-white/[0.04]">
-                    <tr>
-                      {headerCells.map((h, i) => (
-                        <th
-                          key={i}
-                          className="px-3.5 py-2.5 text-left font-semibold text-cyan-200 uppercase tracking-wider font-mono text-[11px] sm:text-xs"
-                        >
-                          {renderInlineFormatting(h)}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/[0.04]">
-                    {bodyRows.map((row, rIdx) => (
-                      <tr key={rIdx} className="hover:bg-white/[0.02] transition-colors">
-                        {row.map((cell, cIdx) => (
-                          <td key={cIdx} className="px-3.5 py-2 text-slate-200">
-                            {renderInlineFormatting(cell)}
-                          </td>
+              blocks.push(
+                <div
+                  key={`tbl-${segIdx}-${blockCounter++}`}
+                  className="my-3 w-full max-w-full overflow-x-auto rounded-xl border border-white/[0.08] bg-[#070b14]/90 shadow-sm scrollbar-thin"
+                >
+                  <table className="w-full min-w-full border-collapse divide-y divide-white/[0.08] text-xs sm:text-[13.5px]">
+                    <thead className="bg-white/[0.04]">
+                      <tr>
+                        {headerCells.map((h, i) => (
+                          <th
+                            key={i}
+                            className="px-3.5 py-2.5 text-left font-semibold text-cyan-200 uppercase tracking-wider font-mono text-[11px] sm:text-xs whitespace-nowrap"
+                          >
+                            {renderInlineFormatting(h)}
+                          </th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-            return;
+                    </thead>
+                    <tbody className="divide-y divide-white/[0.04]">
+                      {bodyRows.map((row, rIdx) => (
+                        <tr key={rIdx} className="hover:bg-white/[0.02] transition-colors">
+                          {headerCells.map((_, cIdx) => (
+                            <td key={cIdx} className="px-3.5 py-2 text-slate-200 align-top break-words">
+                              {renderInlineFormatting(row[cIdx] || '')}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+              return;
+            }
           }
 
-          // Fallback if not complete table
+          // If NOT a valid table (e.g. casual pipe usage, or streaming single line):
+          // Render as standard paragraph text, NEVER forced monospaced or broken boxes
           for (const l of tableLines) {
             blocks.push(
               <p
                 key={`tbl-fallback-${segIdx}-${blockCounter++}`}
-                className="leading-relaxed text-slate-200 text-[14px] font-mono my-1"
+                className="leading-relaxed text-slate-100 text-[14.5px] sm:text-[15px] break-words my-2"
               >
                 {renderInlineFormatting(l)}
               </p>
@@ -412,6 +451,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           flushParagraph();
           flushList();
           flushTable();
+          flushBlockquote();
           continue;
         }
 
@@ -420,14 +460,16 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           flushParagraph();
           flushList();
           flushTable();
+          flushBlockquote();
           blocks.push(<hr key={`hr-${segIdx}-${blockCounter++}`} className="my-3 border-white/[0.08]" />);
           continue;
         }
 
         // Markdown Table Row
-        if (trimmed.startsWith('|') && trimmed.includes('|', 1)) {
+        if (trimmed.startsWith('|') && (trimmed.endsWith('|') || trimmed.includes('|', 1))) {
           flushParagraph();
           flushList();
+          flushBlockquote();
           currentTable.push(trimmed);
           continue;
         } else if (currentTable.length > 0) {
@@ -439,6 +481,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           flushParagraph();
           flushList();
           flushTable();
+          flushBlockquote();
 
           if (trimmed.startsWith('# ')) {
             blocks.push(
@@ -485,48 +528,52 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           flushParagraph();
           flushList();
           flushTable();
-          blocks.push(
-            <blockquote
-              key={`bq-${segIdx}-${blockCounter++}`}
-              className="pl-3.5 py-1 border-l-2 border-cyan-500/50 bg-white/[0.02] rounded-r-lg text-slate-300 italic my-2 text-[14px]"
-            >
-              {renderInlineFormatting(trimmed.replace(/^>\s*/, ''))}
-            </blockquote>
-          );
+          currentBlockquote.push(trimmed.replace(/^>\s*/, ''));
           continue;
+        } else if (currentBlockquote.length > 0) {
+          flushBlockquote();
         }
 
-        // List item continuation (indented line continuing the current bullet/item)
-        if (currentList && (line.startsWith('  ') || line.startsWith('\t')) && currentList.items.length > 0) {
+        const isBulletItem = /^[\*\-•\+]\s+/.test(trimmed);
+        const isOrderedItem = /^\d+[\.\)]\s+/.test(trimmed);
+
+        // List item continuation: Indented line that does NOT start with a bullet or number marker
+        if (currentList && (line.startsWith('  ') || line.startsWith('\t')) && !isBulletItem && !isOrderedItem) {
           const lastIndex = currentList.items.length - 1;
-          currentList.items[lastIndex] += ' ' + trimmed;
-          continue;
+          if (lastIndex >= 0) {
+            currentList.items[lastIndex].text += ' ' + trimmed;
+            continue;
+          }
         }
 
         // Unordered list item
-        if (/^[\*\-•\+]\s+/.test(trimmed)) {
+        if (isBulletItem) {
           flushParagraph();
           flushTable();
+          flushBlockquote();
           const cleanItem = trimmed.replace(/^[\*\-•\+]\s+/, '');
+          const isNested = line.startsWith('  ') || line.startsWith('\t');
           if (currentList && currentList.type === 'ul') {
-            currentList.items.push(cleanItem);
+            currentList.items.push({ text: cleanItem, isNested });
           } else {
             flushList();
-            currentList = { type: 'ul', items: [cleanItem] };
+            currentList = { type: 'ul', items: [{ text: cleanItem, isNested }] };
           }
           continue;
         }
 
         // Ordered list item
-        if (/^\d+[\.\)]\s+/.test(trimmed)) {
+        if (isOrderedItem) {
           flushParagraph();
           flushTable();
+          flushBlockquote();
           const cleanItem = trimmed.replace(/^\d+[\.\)]\s+/, '');
+          const isNested = line.startsWith('  ') || line.startsWith('\t');
           if (currentList && currentList.type === 'ol') {
-            currentList.items.push(cleanItem);
+            currentList.items.push({ text: cleanItem, isNested });
           } else {
             flushList();
-            currentList = { type: 'ol', items: [cleanItem] };
+            currentList = { type: 'ol', items: [{ text: cleanItem, isNested }] };
           }
           continue;
         }
@@ -536,16 +583,21 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           flushList();
         }
         flushTable();
+        flushBlockquote();
         currentParagraph.push(trimmed);
       }
 
       flushParagraph();
       flushList();
       flushTable();
+      flushBlockquote();
 
       return (
         <div key={segIdx} className="space-y-1">
           {blocks}
+          {isStreaming && segIdx === codeBlockTokens.length - 1 && (
+            <span className="inline-block w-1.5 h-4 ml-1 bg-cyan-400 animate-pulse align-middle rounded-sm" />
+          )}
         </div>
       );
     });
@@ -580,10 +632,34 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           <div className="space-y-1 text-slate-200 text-[14.5px] sm:text-[15px]">
             {/* Live Web Search indicator chip */}
             {message.metadata?.searchQuery && (
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-[11px] font-medium text-cyan-300 mb-1.5">
-                <Globe className="w-3 h-3 text-cyan-400" />
+              <div
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium mb-1.5 ${
+                  message.metadata.searchStatus === 'failed'
+                    ? 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
+                    : message.metadata.searchStatus === 'missing_key'
+                    ? 'bg-amber-500/10 border border-amber-500/30 text-amber-300'
+                    : message.metadata.searchStatus === 'no_results'
+                    ? 'bg-amber-500/10 border border-amber-500/30 text-amber-300'
+                    : 'bg-cyan-500/10 border border-cyan-500/25 text-cyan-300'
+                }`}
+              >
+                <Globe
+                  className={`w-3 h-3 ${
+                    message.metadata.searchStatus === 'failed'
+                      ? 'text-rose-400'
+                      : message.metadata.searchStatus === 'missing_key' || message.metadata.searchStatus === 'no_results'
+                      ? 'text-amber-400'
+                      : 'text-cyan-400'
+                  }`}
+                />
                 <span>
-                  {message.metadata.searchTrigger === 'manual'
+                  {message.metadata.searchStatus === 'failed'
+                    ? 'Search Failed:'
+                    : message.metadata.searchStatus === 'missing_key'
+                    ? 'Search Unavailable:'
+                    : message.metadata.searchStatus === 'no_results'
+                    ? 'Search (No Results Found):'
+                    : message.metadata.searchTrigger === 'manual'
                     ? 'Manual Search:'
                     : 'Live Research:'}
                 </span>

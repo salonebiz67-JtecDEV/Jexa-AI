@@ -41,13 +41,22 @@ export class ChatController {
       };
 
       try {
-        const result = await ChatService.processMessage(payload, (status, details) => {
-          sendEvent({
-            type: 'status',
-            status,
-            details,
-          });
-        });
+        const result = await ChatService.processMessage(
+          payload,
+          (status, details) => {
+            sendEvent({
+              type: 'status',
+              status,
+              details,
+            });
+          },
+          (chunk) => {
+            sendEvent({
+              type: 'chunk',
+              chunk,
+            });
+          }
+        );
 
         sendEvent({
           type: 'complete',

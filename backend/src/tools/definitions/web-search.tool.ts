@@ -135,6 +135,25 @@ export const webSearchTool: InternalToolDefinition<WebSearchToolArgs, WebSearchT
       return r;
     });
 
+    // If direct URLs were inspected that were not in search results, prepend them as primary sources
+    for (const page of inspectedPages) {
+      if (!resultsWithInspection.some((r) => r.url === page.url)) {
+        resultsWithInspection.unshift({
+          title: page.title || page.domain || page.url,
+          url: page.url,
+          domain: page.domain,
+          content: page.content?.slice(0, 600) || '',
+          extractedText: page.content || undefined,
+          isAccessible: page.accessible,
+          authoritative: page.authoritative,
+          inaccessibleReason: page.accessible ? undefined : (page.error || 'Page content could not be accessed'),
+          faviconUrl: page.domain
+            ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(page.domain)}&sz=64`
+            : undefined,
+        });
+      }
+    }
+
     const authoritativeSourcesCount = resultsWithInspection.filter((r) => r.authoritative).length;
 
     const sourceDisclosures = resultsWithInspection.map((r) => ({

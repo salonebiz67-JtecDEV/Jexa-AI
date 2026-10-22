@@ -18,6 +18,7 @@ export interface SearchDecision {
     | 'ai_decided_search'
     | 'none';
   isManual?: boolean;
+  urlsToInspect?: string[];
 }
 
 export class SearchDecisionService {
@@ -91,6 +92,19 @@ export class SearchDecisionService {
       };
     }
 
+    // 3b. Website Research & Direct URL inspection
+    const websiteMatch = this.checkWebsiteResearch(raw, lower);
+    if (websiteMatch.matches) {
+      return {
+        shouldSearch: true,
+        query: websiteMatch.query,
+        category: 'explicit_search',
+        reason: 'User requested research or inspection of specific website/URL',
+        isManual: false,
+        urlsToInspect: websiteMatch.urls,
+      };
+    }
+
     // 4. Explicit search commands
     const explicitMatch = this.extractExplicitSearch(raw);
     if (explicitMatch) {
@@ -110,6 +124,18 @@ export class SearchDecisionService {
         query: finalQuery,
         category: 'explicit_search',
         reason: 'User explicitly asked to research, look up, verify, find sources, or search online',
+        isManual: false,
+      };
+    }
+
+    // 4b. Officeholders, Global Leadership, or Election Winners
+    const leadershipMatch = this.checkOfficeholdersAndLeadership(lower, raw);
+    if (leadershipMatch.matches) {
+      return {
+        shouldSearch: true,
+        query: leadershipMatch.query,
+        category: 'current_events',
+        reason: 'Current political leadership, officeholder, or election winner inquiry',
         isManual: false,
       };
     }
@@ -202,6 +228,18 @@ export class SearchDecisionService {
       }
     }
 
+    // 10c. Temporal facts (2024-2026 events, awards, space missions, statistics)
+    const temporalMatch = this.checkTemporalFactInquiry(lower, raw);
+    if (temporalMatch.matches) {
+      return {
+        shouldSearch: true,
+        query: temporalMatch.query,
+        category: 'current_events',
+        reason: 'Recent temporal fact, milestone, or event status inquiry',
+        isManual: false,
+      };
+    }
+
     // 11. AI Provider Decision: For ambiguous or factual inquiries, ask active AI model
     if (aiProvider && aiProvider.isConfigured && aiProvider.providerType !== 'development_mock') {
       try {
@@ -247,7 +285,7 @@ export class SearchDecisionService {
     if (cleanMsg.length < 5) return null;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1600);
+    const timeout = setTimeout(() => controller.abort(), 3500);
 
     try {
       const todayStr = new Date().toISOString().split('T')[0];
@@ -350,17 +388,22 @@ Respond ONLY with a valid JSON object in this exact schema:
   }
 
   private static isPureCodingSyntaxOrAlgo(text: string): boolean {
-    return /^(write|code|create|implement|debug)\s+(a|an)?\s*(function|method|class|algorithm|regex|sql\s+query|loop)\s+(to|that|for)\s+[a-z0-9_\s]+$/i.test(text.trim()) &&
+    return /^(write|code|create|implement|debug|explain)\s+(?:a|an\s+)?(?:[a-z0-9_\-]+\s+)*(?:function|method|class|algorithm|regex|sql\s+query|loop|component|hook)\s+(?:to|that|for|in|using|with)\s+[a-z0-9_\s]+$/i.test(text.trim()) &&
       !/(latest|recent|current|2025|2026|tavily|supabase|groq|gemini|next\.js|react\s+19)/i.test(text);
   }
 
   // --- Positive Rule Helpers ---
 
   private static extractExplicitSearch(text: string): string | null {
+    // Exclude programming concepts containing "search" like binary search, linear search, depth-first search, breadth-first search
+    if (/\b(?:binary|linear|depth[-\s]first|breadth[-\s]first|grid|tree|graph|a\*)\s+search\b/i.test(text)) {
+      return null;
+    }
+
     const patterns = [
-      /(?:search|browse|look\s*up|google|find\s+online|research|verify\s+online)\s+(?:the\s+web\s+for|the\s+internet\s+for|online\s+for|for)?\s*(.+)/i,
-      /(?:can\s+you\s+)?(?:search|find\s+sources\s+for|look\s*up)\s+(.+)/i,
-      /(?:verify|check)\s+(?:online|on\s+the\s+web|sources\s+for)\s+(.+)/i,
+      /^(?:please\s+|plz\s+|can\s+you\s+)?(?:search|browse|look\s*up|google|find\s+online|research|verify\s+online)\s+(?:the\s+web\s+for|the\s+internet\s+for|online\s+for|for)?\s*(.+)/i,
+      /^(?:can\s+you\s+)?(?:search|find\s+sources\s+for|look\s*up)\s+(.+)/i,
+      /^(?:verify|check)\s+(?:online|on\s+the\s+web|sources\s+for)\s+(.+)/i,
     ];
 
     for (const pat of patterns) {
@@ -407,7 +450,7 @@ Respond ONLY with a valid JSON object in this exact schema:
   }
 
   private static checkLiveRatesOrWeather(lower: string, raw: string): { matches: boolean; query: string } {
-    const isRates = /(stock\s+price|crypto\s+price|bitcoin\s+price|ethereum\s+price|exchange\s+rate|market\s+price\s+of|gas\s+price|fuel\s+price|inflation\s+rate)/i.test(lower);
+    const isRates = /(stock\s+price|crypto\s+price|bitcoin\s+price|ethereum\s+price|price\s+of\s+(?:bitcoin|crypto|btc|eth|ethereum|gold|silver|oil|stocks?)|exchange\s+rate|market\s+price\s+of|gas\s+price|fuel\s+price|inflation\s+rate)/i.test(lower);
     const isWeather = /(weather\s+in|weather\s+today|forecast\s+for|temperature\s+in|is\s+it\s+raining\s+in)/i.test(lower);
 
     if (isRates || isWeather) {
@@ -464,7 +507,7 @@ Respond ONLY with a valid JSON object in this exact schema:
       userContext?.location && /sierra\s+leone|freetown|salone/i.test(userContext.location)
     );
     const mentionsSierraLeone = /(sierra\s+leone|freetown|salone|bo\s+city|makeni|kenema|kono|karpowership|bumbuna|egtc|npa)/i.test(lower);
-    const mentionsOutageOrPower = /(power\s+outage|blackout|electricity\s+outage|light\s+off|no\s+light|power\s+cut|load\s+shedding|current\s+off|electricity\s+status|power\s+status|why\s+is\s+there\s+no\s+power|why\s+did\s+power\s+go\s+off)/i.test(lower);
+    const mentionsOutageOrPower = /(power\s+outage|blackout|electricity\s+outage|light\s+off|no\s+light|power\s+cut|power\s+off|power\s+is\s+off|power\s+is\s+out|current\s+off|electricity\s+status|power\s+status|why\s+is\s+there\s+no\s+power|why\s+did\s+power\s+go\s+off|why\s+is\s+power\s+off)/i.test(lower);
     const mentionsGovOrLocalIssues = /(government\s+announcement|ministry\s+of\s+energy|state\s+house|parliament|fuel\s+price|water\s+shortage|guma\s+valley|public\s+notice)/i.test(lower);
 
     // Case 1: EDSA mentioned directly
@@ -498,6 +541,87 @@ Respond ONLY with a valid JSON object in this exact schema:
       return { matches: true, query: this.cleanQuery(raw) };
     }
     return { matches: false, query: '' };
+  }
+
+  private static extractUrls(text: string): string[] {
+    const urlRegex = /(https?:\/\/[^\s<>"'{}|\\^`]+)/gi;
+    const matches = text.match(urlRegex) || [];
+    const wwwRegex = /\b(www\.[a-z0-9\-]+(?:\.[a-z0-9\-]+)+[^\s<>"'{}|\\^`]*)/gi;
+    const wwwMatches = (text.match(wwwRegex) || []).map((u) => `https://${u}`);
+    const all = Array.from(new Set([...matches, ...wwwMatches]));
+    return all.map((u) => u.replace(/[.,;!?)]+$/, ''));
+  }
+
+  private static checkWebsiteResearch(raw: string, lower: string): { matches: boolean; query: string; urls?: string[] } {
+    const urls = this.extractUrls(raw);
+    const mentionsWebsite = /(?:research|check|inspect|analyze|summarize|read|look\s*at|visit)\s+(?:the\s+)?(?:website|web\s*site|url|page|site|link)\b/i.test(lower);
+    const explicitWebsiteRequest = /(?:research|investigate|inspect|check|explore)\s+https?:\/\//i.test(lower);
+
+    if (urls.length > 0 && (mentionsWebsite || explicitWebsiteRequest || /(?:what(?:'s|\s+is)\s+on|summarize)\s+/i.test(lower))) {
+      let cleanQuery = this.cleanQuery(raw);
+      cleanQuery = cleanQuery.replace(/^(?:research\s+(?:the\s+)?website|summarize|inspect|check\s+(?:the\s+)?website)\s*/i, '').trim();
+      return {
+        matches: true,
+        query: cleanQuery || urls[0],
+        urls,
+      };
+    }
+
+    if (urls.length > 0 && /(?:about|on|content\s+of)\s+https?:\/\//i.test(lower)) {
+      return {
+        matches: true,
+        query: this.cleanQuery(raw),
+        urls,
+      };
+    }
+
+    if (mentionsWebsite) {
+      const domainMatch = raw.match(/(?:website|site)\s+(?:of|for)\s+([a-z0-9\.\-\s]+)/i);
+      const target = domainMatch ? domainMatch[1].trim() : raw;
+      return {
+        matches: true,
+        query: this.cleanQuery(target),
+      };
+    }
+
+    return { matches: false, query: '' };
+  }
+
+  private static checkOfficeholdersAndLeadership(lower: string, raw: string): { matches: boolean; query: string } {
+    const leadershipPatterns = [
+      /(who\s+is\s+(?:the\s+)?(?:current\s+)?(?:prime\s+minister|president|ceo|chancellor|governor|mayor|secretary\s+of\s+state|attorney\s+general|chief\s+justice|foreign\s+minister|ambassador|director\s+general|vice\s+president|king|queen|pope|un\s+secretary\s+general)\b)/i,
+      /(current\s+(?:ceo|president|leader|minister|head|director)\s+of\b)/i,
+      /(who\s+(?:leads|heads|runs|is\s+in\s+charge\s+of|won\s+the\s+latest\s+election\s+in)\b)/i,
+      /(who\s+is\s+(?:the\s+)?current\s+[a-z0-9_\s]+\s+of\b)/i,
+    ];
+
+    for (const pat of leadershipPatterns) {
+      if (pat.test(lower)) {
+        return { matches: true, query: this.cleanQuery(raw) };
+      }
+    }
+    return { matches: false, query: '' };
+  }
+
+  private static checkTemporalFactInquiry(lower: string, raw: string): { matches: boolean; query: string } {
+    const hasYear = /\b(2024|2025|2026)\b/.test(lower);
+    const mentionsRecentFacts = /(status\s+of|milestone\s+for|mission\s+update|discovery\s+by|population\s+of|inflation\s+in|nobel\s+prize|oscar\s+winner|academy\s+award|olympic|world\s+cup|cop\s*\d+|summit\s+results)\b/i.test(lower);
+    const hasRecentQualifier = /(recently|latest|current|this\s+year|last\s+month|newest)\b/i.test(lower);
+
+    if (hasYear && (mentionsRecentFacts || hasRecentQualifier || /(who|what|where|when|did|is|are|has|how)\b/i.test(lower))) {
+      return { matches: true, query: this.cleanQuery(raw) };
+    }
+    return { matches: false, query: '' };
+  }
+
+  public static simplifyQuery(query: string): string {
+    return query
+      .replace(/https?:\/\/[^\s]+/gi, '')
+      .replace(/\b(?:site:\S+|filetype:\S+)\b/gi, '')
+      .replace(/\b(?:the|a|an|and|or|for|of|in|at|by|on|with|to|from|about|is|are|was|were|what|who|when|where|why|how|current|currently|recent|recently|latest)\b/gi, ' ')
+      .replace(/[^a-zA-Z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   public static cleanQuery(query: string): string {
