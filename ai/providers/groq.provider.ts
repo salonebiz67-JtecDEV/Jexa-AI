@@ -40,6 +40,8 @@ export class GroqTextAIProvider implements ITextAIProvider {
           name: m.name,
           content: m.content,
         });
+      } else if (m.role === 'assistant' && m.rawMessage) {
+        messages.push(m.rawMessage);
       } else if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
         messages.push({
           role: 'assistant',
@@ -237,6 +239,7 @@ export class GroqTextAIProvider implements ITextAIProvider {
       isMock: false,
       finishReason: hasToolCalls ? 'tool_call' : (choice?.finish_reason === 'length' ? 'length' : 'stop'),
       toolCalls: hasToolCalls ? detectedCalls : undefined,
+      rawMessage: choice?.message,
     };
   }
 

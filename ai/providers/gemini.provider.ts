@@ -68,6 +68,13 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           ],
         });
       } else if (m.role === 'assistant') {
+        if (m.rawModelParts && Array.isArray(m.rawModelParts) && m.rawModelParts.length > 0) {
+          contents.push({
+            role: 'model',
+            parts: m.rawModelParts,
+          });
+          continue;
+        }
         const parts: any[] = [];
         if (m.toolCalls && m.toolCalls.length > 0) {
           for (const tc of m.toolCalls) {
@@ -147,6 +154,8 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         const responseText = response.text || '';
         this.lastError = undefined;
 
+        const candidateParts = response.candidates?.[0]?.content?.parts;
+
         // Extract native function calls
         let detectedCalls: any[] = [];
         if (response.functionCalls && response.functionCalls.length > 0) {
@@ -156,7 +165,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
             args: fc.args || {},
           }));
         } else {
-          const parts = response.candidates?.[0]?.content?.parts || [];
+          const parts = candidateParts || [];
           const functionCallParts = parts.filter((p: any) => Boolean(p.functionCall));
           if (functionCallParts.length > 0) {
             detectedCalls = functionCallParts.map((p: any, idx: number) => ({
@@ -181,6 +190,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           isMock: false,
           finishReason: hasToolCalls ? 'tool_call' : 'stop',
           toolCalls: hasToolCalls ? detectedCalls : undefined,
+          rawModelParts: candidateParts,
         };
       } catch (error: any) {
         lastError = error;

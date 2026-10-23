@@ -326,27 +326,28 @@ export const ApiClient = {
               const dataStr = trimmed.slice(5).trim();
               if (!dataStr) continue;
 
+              let event: StreamChatEvent;
               try {
-                const event: StreamChatEvent = JSON.parse(dataStr);
-                if (event.type === 'status') {
-                  options?.onStatusUpdate?.(event.status, event.details);
-                } else if (event.type === 'chunk') {
-                  options?.onChunk?.(event.chunk);
-                } else if (event.type === 'complete') {
-                  finalResult = event.data;
-                  options?.onComplete?.(event.data);
-                } else if (event.type === 'error') {
-                  const err = new Error(event.error);
-                  options?.onError?.(err);
-                  throw err;
-                }
+                event = JSON.parse(dataStr);
               } catch (parseErr) {
                 console.warn('[ApiClient] Failed to parse SSE event chunk:', dataStr, parseErr);
+                continue;
+              }
+
+              if (event.type === 'status') {
+                options?.onStatusUpdate?.(event.status, event.details);
+              } else if (event.type === 'chunk') {
+                options?.onChunk?.(event.chunk);
+              } else if (event.type === 'complete') {
+                finalResult = event.data;
+                options?.onComplete?.(event.data);
+              } else if (event.type === 'error') {
+                const err = new ApiError(event.error || 'Server error during chat stream.', 500, event.code);
+                throw err;
               }
             }
           }
         } catch (streamErr: any) {
-          options?.onError?.(streamErr);
           throw streamErr;
         }
 

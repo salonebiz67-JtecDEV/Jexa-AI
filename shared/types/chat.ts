@@ -114,6 +114,7 @@ export interface StreamChatErrorEvent {
   type: 'error';
   error: string;
   status?: AIActivityStatus;
+  code?: string;
 }
 
 export type StreamChatEvent =

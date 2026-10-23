@@ -18,6 +18,8 @@ export interface TextGenerationMessage {
   toolCallId?: string;
   toolCalls?: ToolCallRequest[];
   name?: string;
+  rawModelParts?: any;
+  rawMessage?: any;
 }
 
 export interface TextGenerationRequest {
@@ -43,6 +45,8 @@ export interface TextGenerationResponse {
   isMock: boolean;
   finishReason: 'stop' | 'length' | 'tool_call';
   toolCalls?: ToolCallRequest[];
+  rawModelParts?: any;
+  rawMessage?: any;
 }
 
 export interface ITextAIProvider {
