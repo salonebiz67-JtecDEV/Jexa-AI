@@ -1,12 +1,34 @@
 import { TextProviderType } from '../../shared/types/provider';
 
+export interface ToolDeclaration {
+  name: string;
+  description: string;
+  parameters: Record<string, any>;
+}
+
+export interface ToolCallRequest {
+  id: string;
+  name: string;
+  args: Record<string, any>;
+}
+
+export interface TextGenerationMessage {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  toolCallId?: string;
+  toolCalls?: ToolCallRequest[];
+  name?: string;
+}
+
 export interface TextGenerationRequest {
   systemPrompt: string;
-  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
+  messages: TextGenerationMessage[];
   temperature?: number;
   maxTokens?: number;
   stream?: boolean;
   metadata?: Record<string, any>;
+  tools?: ToolDeclaration[];
+  toolChoice?: 'auto' | 'none' | 'required';
 }
 
 export interface TextGenerationResponse {
@@ -20,12 +42,14 @@ export interface TextGenerationResponse {
   };
   isMock: boolean;
   finishReason: 'stop' | 'length' | 'tool_call';
+  toolCalls?: ToolCallRequest[];
 }
 
 export interface ITextAIProvider {
   readonly providerType: TextProviderType;
   readonly isConfigured: boolean;
   readonly modelName: string;
+  readonly supportsTools?: boolean;
 
   generateResponse(request: TextGenerationRequest): Promise<TextGenerationResponse>;
   streamResponse(

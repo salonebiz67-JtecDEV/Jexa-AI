@@ -5,6 +5,7 @@ import { TextProviderType, ProviderError, formatCleanProviderError } from '../..
 export class GeminiTextAIProvider implements ITextAIProvider {
   public readonly providerType: TextProviderType = 'gemini';
   public readonly modelName: string;
+  public readonly supportsTools: boolean = true;
   private ai: GoogleGenAI | null = null;
   public readonly isConfigured: boolean = false;
   public lastError?: string;
@@ -42,6 +43,62 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     }
   }
 
+  private formatGeminiContents(messages: TextGenerationRequest['messages']): any[] {
+    const contents: any[] = [];
+    for (const m of messages) {
+      if (m.role === 'tool') {
+        let outputObj: any;
+        try {
+          outputObj = typeof m.content === 'string' ? JSON.parse(m.content) : m.content;
+        } catch {
+          outputObj = { output: m.content };
+        }
+        if (!outputObj || typeof outputObj !== 'object' || Array.isArray(outputObj)) {
+          outputObj = { output: outputObj };
+        }
+        contents.push({
+          role: 'user',
+          parts: [
+            {
+              functionResponse: {
+                name: m.name || 'tool',
+                response: outputObj,
+              },
+            },
+          ],
+        });
+      } else if (m.role === 'assistant') {
+        const parts: any[] = [];
+        if (m.toolCalls && m.toolCalls.length > 0) {
+          for (const tc of m.toolCalls) {
+            parts.push({
+              functionCall: {
+                name: tc.name,
+                args: tc.args || {},
+              },
+            });
+          }
+        }
+        if (m.content) {
+          parts.push({ text: m.content });
+        }
+        if (parts.length === 0) {
+          parts.push({ text: '' });
+        }
+        contents.push({
+          role: 'model',
+          parts,
+        });
+      } else {
+        contents.push({
+          role: 'user',
+          parts: [{ text: m.content }],
+        });
+      }
+    }
+    return contents;
+  }
+
   public async generateResponse(request: TextGenerationRequest): Promise<TextGenerationResponse> {
     if (!this.ai || !this.isConfigured) {
       throw new ProviderError(
@@ -53,10 +110,29 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       );
     }
 
-    const contents = request.messages.map((m) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
+    const contents = this.formatGeminiContents(request.messages);
+
+    const config: any = {
+      systemInstruction: request.systemPrompt,
+      temperature: request.temperature ?? 0.7,
+      maxOutputTokens: request.maxTokens ?? 1200,
+    };
+
+    if (request.tools && request.tools.length > 0) {
+      config.tools = [
+        {
+          functionDeclarations: request.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            parameters: {
+              type: 'object',
+              properties: t.parameters.properties || {},
+              required: t.parameters.required || [],
+            },
+          })),
+        },
+      ];
+    }
 
     let lastError: any = null;
 
@@ -65,15 +141,33 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         const response = await this.ai.models.generateContent({
           model: this.modelName,
           contents,
-          config: {
-            systemInstruction: request.systemPrompt,
-            temperature: request.temperature ?? 0.7,
-            maxOutputTokens: request.maxTokens ?? 1024,
-          },
+          config,
         });
 
         const responseText = response.text || '';
         this.lastError = undefined;
+
+        // Extract native function calls
+        let detectedCalls: any[] = [];
+        if (response.functionCalls && response.functionCalls.length > 0) {
+          detectedCalls = response.functionCalls.map((fc: any, idx: number) => ({
+            id: `call_${Date.now()}_${idx}`,
+            name: fc.name,
+            args: fc.args || {},
+          }));
+        } else {
+          const parts = response.candidates?.[0]?.content?.parts || [];
+          const functionCallParts = parts.filter((p: any) => Boolean(p.functionCall));
+          if (functionCallParts.length > 0) {
+            detectedCalls = functionCallParts.map((p: any, idx: number) => ({
+              id: `call_${Date.now()}_${idx}`,
+              name: p.functionCall.name,
+              args: p.functionCall.args || {},
+            }));
+          }
+        }
+
+        const hasToolCalls = detectedCalls.length > 0;
 
         return {
           content: responseText,
@@ -81,11 +175,12 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           provider: this.providerType,
           tokensUsed: {
             prompt: Math.ceil(request.systemPrompt.length / 4),
-            completion: Math.ceil(responseText.length / 4),
-            total: Math.ceil((request.systemPrompt.length + responseText.length) / 4),
+            completion: Math.ceil((responseText.length || 20) / 4),
+            total: Math.ceil((request.systemPrompt.length + (responseText.length || 20)) / 4),
           },
           isMock: false,
-          finishReason: 'stop',
+          finishReason: hasToolCalls ? 'tool_call' : 'stop',
+          toolCalls: hasToolCalls ? detectedCalls : undefined,
         };
       } catch (error: any) {
         lastError = error;
@@ -127,19 +222,18 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     }
 
     try {
-      const contents = request.messages.map((m) => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-      }));
+      const contents = this.formatGeminiContents(request.messages);
+
+      const config: any = {
+        systemInstruction: request.systemPrompt,
+        temperature: request.temperature ?? 0.7,
+        maxOutputTokens: request.maxTokens ?? 1200,
+      };
 
       const responseStream = await this.ai.models.generateContentStream({
         model: this.modelName,
         contents,
-        config: {
-          systemInstruction: request.systemPrompt,
-          temperature: request.temperature ?? 0.7,
-          maxOutputTokens: request.maxTokens ?? 1024,
-        },
+        config,
       });
 
       let fullText = '';

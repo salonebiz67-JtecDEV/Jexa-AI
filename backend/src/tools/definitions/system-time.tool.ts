@@ -16,7 +16,8 @@ export interface SystemTimeToolData {
 export const systemTimeTool: InternalToolDefinition<SystemTimeToolArgs, SystemTimeToolData> = {
   name: 'system_time',
   displayName: 'Current Time & Temporal Grounding',
-  description: 'Get the exact current date, time, day of the week, year, and timezone for accurate temporal reasoning and time-sensitive answers.',
+  description:
+    'Get the exact current date, time, day of the week, year, and timezone. Use when the user asks for the current time, date, or day, or when temporal grounding is needed to determine what is current today.',
   category: 'system',
   permissionLevel: 'read_only',
   timeoutMs: 1500,

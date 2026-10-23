@@ -353,6 +353,12 @@ export class TavilyService {
       'kubernetes.io',
       'developer.apple.com',
       'developer.android.com',
+      'capacitorjs.com',
+      'ionicframework.com',
+      'tanstack.com',
+      'zod.dev',
+      'graphql.org',
+      'electronjs.org',
       'stackoverflow.com',
     ];
     return authoritativeList.some((auth) => lower === auth || lower.endsWith('.' + auth));

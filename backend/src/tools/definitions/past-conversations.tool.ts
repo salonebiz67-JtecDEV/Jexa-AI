@@ -21,7 +21,8 @@ export interface PastConversationsToolData {
 export const pastConversationsTool: InternalToolDefinition<PastConversationsToolArgs, PastConversationsToolData> = {
   name: 'past_conversations_search',
   displayName: 'Conversation Archive Search',
-  description: 'Search past conversation messages and earlier discussions across all chats belonging to the authenticated user.',
+  description:
+    'Search past conversation messages and earlier discussions across all previous chat sessions with the user. Use when the user asks what was discussed earlier, refers to previous chats, or asks what they told you before.',
   category: 'search',
   permissionLevel: 'read_only',
   timeoutMs: 5000,

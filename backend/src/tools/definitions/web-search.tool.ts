@@ -22,7 +22,8 @@ export interface WebSearchToolData {
 export const webSearchTool: InternalToolDefinition<WebSearchToolArgs, WebSearchToolData> = {
   name: 'web_search',
   displayName: 'Web Research',
-  description: 'Search the live internet for recent news, sports scores, current laws, technical docs, Sierra Leone / EDSA utilities, or real-time factual verification.',
+  description:
+    'Search the live web for anything that may have changed recently, real-time facts, local news (e.g. Sierra Leone news, EDSA electricity and power outage announcements), changing prices, sports scores, people in current roles, modern software documentation, version compatibility, changelogs, and recent releases. Do NOT use this tool for casual greetings, ordinary conversation, creative writing, basic coding algorithms, math, or established static facts you already know.',
   category: 'search',
   permissionLevel: 'read_only',
   timeoutMs: 12000,
@@ -31,7 +32,7 @@ export const webSearchTool: InternalToolDefinition<WebSearchToolArgs, WebSearchT
     properties: {
       query: {
         type: 'string',
-        description: 'The search query string to look up on the live web.',
+        description: 'The specific search query string to look up on the live web.',
       },
       maxResults: {
         type: 'number',
@@ -55,7 +56,7 @@ export const webSearchTool: InternalToolDefinition<WebSearchToolArgs, WebSearchT
     additionalProperties: false,
   },
   isAvailable: (_context?: InternalToolContext): boolean => {
-    return TavilyService.isConfigured();
+    return true;
   },
   execute: async (
     args: WebSearchToolArgs,

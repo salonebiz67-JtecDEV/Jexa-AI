@@ -4,6 +4,7 @@ import { TextProviderType, ProviderError } from '../../shared/types/provider';
 export class GroqTextAIProvider implements ITextAIProvider {
   public readonly providerType: TextProviderType = 'groq';
   public readonly modelName: string;
+  public readonly supportsTools: boolean = true;
   private readonly apiKey: string;
   public readonly isConfigured: boolean;
   public lastError?: string;
@@ -26,6 +27,39 @@ export class GroqTextAIProvider implements ITextAIProvider {
     }
   }
 
+  private formatGroqMessages(request: TextGenerationRequest): Array<Record<string, any>> {
+    const messages: Array<Record<string, any>> = [];
+    if (request.systemPrompt) {
+      messages.push({ role: 'system', content: request.systemPrompt });
+    }
+    for (const m of request.messages) {
+      if (m.role === 'tool') {
+        messages.push({
+          role: 'tool',
+          tool_call_id: m.toolCallId || 'call_0',
+          name: m.name,
+          content: m.content,
+        });
+      } else if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+        messages.push({
+          role: 'assistant',
+          content: m.content || null,
+          tool_calls: m.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.name,
+              arguments: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args),
+            },
+          })),
+        });
+      } else {
+        messages.push({ role: m.role, content: m.content });
+      }
+    }
+    return messages;
+  }
+
   public async generateResponse(request: TextGenerationRequest): Promise<TextGenerationResponse> {
     if (!this.isConfigured || !this.apiKey) {
       throw new ProviderError(
@@ -36,13 +70,7 @@ export class GroqTextAIProvider implements ITextAIProvider {
       );
     }
 
-    const messages: Array<{ role: string; content: string }> = [];
-    if (request.systemPrompt) {
-      messages.push({ role: 'system', content: request.systemPrompt });
-    }
-    for (const m of request.messages) {
-      messages.push({ role: m.role, content: m.content });
-    }
+    const messages = this.formatGroqMessages(request);
 
     try {
       return await this.executeChatCompletion(this.modelName, messages, request);
@@ -89,21 +117,39 @@ export class GroqTextAIProvider implements ITextAIProvider {
 
   private async executeChatCompletion(
     model: string,
-    messages: Array<{ role: string; content: string }>,
+    messages: Array<Record<string, any>>,
     request: TextGenerationRequest
   ): Promise<TextGenerationResponse> {
+    const payloadBody: any = {
+      model,
+      messages,
+      temperature: request.temperature ?? 0.7,
+      max_tokens: request.maxTokens ?? 1200,
+    };
+
+    if (request.tools && request.tools.length > 0) {
+      payloadBody.tools = request.tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: {
+            type: 'object',
+            properties: t.parameters.properties || {},
+            required: t.parameters.required || [],
+          },
+        },
+      }));
+      payloadBody.tool_choice = request.toolChoice || 'auto';
+    }
+
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: request.temperature ?? 0.7,
-        max_tokens: request.maxTokens ?? 1024,
-      }),
+      body: JSON.stringify(payloadBody),
     });
 
     if (!response.ok) {
@@ -157,17 +203,40 @@ export class GroqTextAIProvider implements ITextAIProvider {
     const choice = data.choices?.[0];
     const content = choice?.message?.content || '';
 
+    // Extract tool calls
+    let detectedCalls: any[] = [];
+    if (choice?.message?.tool_calls && Array.isArray(choice.message.tool_calls) && choice.message.tool_calls.length > 0) {
+      detectedCalls = choice.message.tool_calls.map((tc: any) => {
+        let parsedArgs: any = {};
+        try {
+          parsedArgs = typeof tc.function?.arguments === 'string'
+            ? JSON.parse(tc.function.arguments)
+            : tc.function?.arguments || {};
+        } catch {
+          parsedArgs = {};
+        }
+        return {
+          id: tc.id || `call_${Date.now()}`,
+          name: tc.function?.name || '',
+          args: parsedArgs,
+        };
+      });
+    }
+
+    const hasToolCalls = detectedCalls.length > 0;
+
     return {
       content,
       model,
       provider: this.providerType,
       tokensUsed: {
         prompt: data.usage?.prompt_tokens ?? Math.ceil(request.systemPrompt.length / 4),
-        completion: data.usage?.completion_tokens ?? Math.ceil(content.length / 4),
-        total: data.usage?.total_tokens ?? Math.ceil((request.systemPrompt.length + content.length) / 4),
+        completion: data.usage?.completion_tokens ?? Math.ceil((content.length || 20) / 4),
+        total: data.usage?.total_tokens ?? Math.ceil((request.systemPrompt.length + (content.length || 20)) / 4),
       },
       isMock: false,
-      finishReason: choice?.finish_reason === 'length' ? 'length' : 'stop',
+      finishReason: hasToolCalls ? 'tool_call' : (choice?.finish_reason === 'length' ? 'length' : 'stop'),
+      toolCalls: hasToolCalls ? detectedCalls : undefined,
     };
   }
 

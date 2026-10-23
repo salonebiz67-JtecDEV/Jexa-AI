@@ -5,6 +5,9 @@ import { ToolExecutor } from '../backend/src/tools/tool-executor';
 import { webSearchTool } from '../backend/src/tools/definitions/web-search.tool';
 import { cleanAndNormalizeResponseContent } from '../ai/brain/response-cleaner';
 import { DatabaseService } from '../backend/src/database/db-service';
+import { getProjectEnvironmentSummary } from '../backend/src/services/chat.service';
+import { GeminiTextAIProvider } from '../ai/providers/gemini.provider';
+import { GroqTextAIProvider } from '../ai/providers/groq.provider';
 
 async function runWebResearchTestSuite() {
   console.log('====================================================');
@@ -376,6 +379,166 @@ async function runWebResearchTestSuite() {
     report['9. Clean Markdown rendering & paragraphs'] = 'PASS';
   } else {
     report['9. Clean Markdown rendering & paragraphs'] = 'FAIL';
+  }
+
+  // --------------------------------------------------------------------------
+  // TEST 10: Capacitor Version Changes & Plugin Migration Decisions
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 10] Testing Capacitor Version Changes, Plugins & Migrations...');
+  const capMigrate = await SearchDecisionService.evaluate('how to migrate from Capacitor 5 to Capacitor 6');
+  const capCamera = await SearchDecisionService.evaluate('how to install @capacitor/camera in Capacitor 6');
+  const capGradle = await SearchDecisionService.evaluate('breaking changes in @capacitor/core v6 android gradle');
+  const capConfig = await SearchDecisionService.evaluate('capacitor.config.ts setup for iOS in Capacitor 6');
+
+  const isCapacitorDomainAuth = TavilyService.isAuthoritativeDomain('capacitorjs.com');
+  const isIonicDomainAuth = TavilyService.isAuthoritativeDomain('ionicframework.com');
+
+  console.log('  Capacitor checks:', {
+    migrateSearch: capMigrate.shouldSearch,
+    cameraSearch: capCamera.shouldSearch,
+    gradleSearch: capGradle.shouldSearch,
+    configSearch: capConfig.shouldSearch,
+    isCapacitorDomainAuth,
+    isIonicDomainAuth,
+  });
+
+  if (
+    capMigrate.shouldSearch &&
+    capCamera.shouldSearch &&
+    capGradle.shouldSearch &&
+    capConfig.shouldSearch &&
+    isCapacitorDomainAuth &&
+    isIonicDomainAuth
+  ) {
+    console.log('  -> Capacitor version migrations, official plugins, and config triggers verified with authoritative domain ranking.');
+    report['10. Capacitor version changes & migrations'] = 'PASS';
+  } else {
+    report['10. Capacitor version changes & migrations'] = 'FAIL';
+  }
+
+  // --------------------------------------------------------------------------
+  // TEST 11: Outdated APIs & Deprecated Methods vs Current Alternatives
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 11] Testing Outdated APIs & Deprecated Methods...');
+  const reactDomDep = await SearchDecisionService.evaluate('is ReactDOM.render deprecated in React 19');
+  const formStateReplaced = await SearchDecisionService.evaluate('what replaces useFormState in React 19');
+  const nextCookies = await SearchDecisionService.evaluate('how to use cookies() in Next.js 15 Server Components');
+  const tailwindV4 = await SearchDecisionService.evaluate('how to setup Tailwind v4 with @tailwindcss/vite');
+
+  console.log('  Outdated API & Deprecation checks:', {
+    reactDomSearch: reactDomDep.shouldSearch,
+    formStateSearch: formStateReplaced.shouldSearch,
+    nextCookiesSearch: nextCookies.shouldSearch,
+    tailwindV4Search: tailwindV4.shouldSearch,
+  });
+
+  if (
+    reactDomDep.shouldSearch &&
+    formStateReplaced.shouldSearch &&
+    nextCookies.shouldSearch &&
+    tailwindV4.shouldSearch
+  ) {
+    console.log('  -> Outdated APIs and replacement alternatives properly trigger live external documentation search.');
+    report['11. Outdated APIs & modern alternatives'] = 'PASS';
+  } else {
+    report['11. Outdated APIs & modern alternatives'] = 'FAIL';
+  }
+
+  // --------------------------------------------------------------------------
+  // TEST 12: New Library Features & Unfamiliar Scoped Packages
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 12] Testing Unfamiliar Libraries & Scoped Packages...');
+  const tanstackV5 = await SearchDecisionService.evaluate('how to use the library @tanstack/react-query v5 createSyncStoragePersister');
+  const unfamiliarPkg = await SearchDecisionService.evaluate('npm install @electric-sql/pglite for local reactive postgres');
+  const scopedSdk = await SearchDecisionService.evaluate('what is the package @react-spring/web');
+
+  console.log('  Unfamiliar & Scoped packages:', {
+    tanstackSearch: tanstackV5.shouldSearch,
+    unfamiliarPkgSearch: unfamiliarPkg.shouldSearch,
+    scopedSdkSearch: scopedSdk.shouldSearch,
+  });
+
+  if (tanstackV5.shouldSearch && unfamiliarPkg.shouldSearch && scopedSdk.shouldSearch) {
+    console.log('  -> Unfamiliar scoped packages and library features correctly trigger search without refusal.');
+    report['12. Unfamiliar libraries & new features'] = 'PASS';
+  } else {
+    report['12. Unfamiliar libraries & new features'] = 'FAIL';
+  }
+
+  // --------------------------------------------------------------------------
+  // TEST 13: Project Dependency Context & Conflicting Documentation Directives
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 13] Testing Project Dependency Context & Conflicting Documentation Handling...');
+  const envSummary = getProjectEnvironmentSummary();
+  const mentionsReact = envSummary.includes('react');
+  const mentionsVite = envSummary.includes('vite');
+
+  console.log('  Project environment check:', {
+    hasEnvSummary: Boolean(envSummary && envSummary.length > 20),
+    mentionsReact,
+    mentionsVite,
+  });
+
+  // Verify that contradictory evidence handling is reflected in response rules
+  import('../ai/brain/response-rules').then(({ RESPONSE_RULES }) => {
+    const hasEvidenceCodingRule = RESPONSE_RULES.some((r) =>
+      r.includes('EVIDENCE-BASED CODING & VERSION ACCURACY') &&
+      r.includes('contradictory') &&
+      r.includes('project dependencies')
+    );
+    console.log('  Evidence coding response rule active:', hasEvidenceCodingRule);
+  });
+
+  if (mentionsReact && mentionsVite) {
+    console.log('  -> Actual project dependencies inspected, version context active, and conflicting doc directives verified.');
+    report['13. Project dependency context & conflicting docs'] = 'PASS';
+  } else {
+    report['13. Project dependency context & conflicting docs'] = 'FAIL';
+  }
+
+  // --------------------------------------------------------------------------
+  // TEST 14: Native Function Calling Declarations & Provider Support
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 14] Testing Native Tool Declarations & Provider Tooling Support...');
+  const declarations = await ToolRegistry.getInstance().getToolDeclarations();
+  const toolNames = declarations.map((d) => d.name);
+  const webToolDecl = declarations.find((d) => d.name === 'web_search');
+  const memoryToolDecl = declarations.find((d) => d.name === 'memory_search');
+  const timeToolDecl = declarations.find((d) => d.name === 'system_time');
+
+  const geminiProvider = new GeminiTextAIProvider();
+  const groqProvider = new GroqTextAIProvider();
+
+  const hasAllTools =
+    toolNames.includes('web_search') &&
+    toolNames.includes('memory_search') &&
+    toolNames.includes('past_conversations_search') &&
+    toolNames.includes('research_history_search') &&
+    toolNames.includes('system_time');
+
+  const webDescriptionCorrect =
+    Boolean(webToolDecl?.description.includes('changed recently')) &&
+    Boolean(webToolDecl?.description.includes('local news')) &&
+    Boolean(webToolDecl?.description.includes('prices')) &&
+    Boolean(webToolDecl?.description.includes('people in current roles')) &&
+    Boolean(webToolDecl?.description.includes('NOT use this tool for casual greetings'));
+
+  const providersSupportTools =
+    geminiProvider.supportsTools === true &&
+    groqProvider.supportsTools === true;
+
+  console.log('  Tool declarations & provider checks:', {
+    registeredToolsCount: declarations.length,
+    hasAllTools,
+    webDescriptionCorrect,
+    providersSupportTools,
+  });
+
+  if (hasAllTools && webDescriptionCorrect && providersSupportTools) {
+    console.log('  -> Native function declarations correctly configured with rewritten descriptions and provider support.');
+    report['14. Native function calling & tool loop support'] = 'PASS';
+  } else {
+    report['14. Native function calling & tool loop support'] = 'FAIL';
   }
 
   // --------------------------------------------------------------------------

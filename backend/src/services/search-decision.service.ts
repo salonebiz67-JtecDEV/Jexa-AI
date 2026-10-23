@@ -389,7 +389,7 @@ Respond ONLY with a valid JSON object in this exact schema:
 
   private static isPureCodingSyntaxOrAlgo(text: string): boolean {
     return /^(write|code|create|implement|debug|explain)\s+(?:a|an\s+)?(?:[a-z0-9_\-]+\s+)*(?:function|method|class|algorithm|regex|sql\s+query|loop|component|hook)\s+(?:to|that|for|in|using|with)\s+[a-z0-9_\s]+$/i.test(text.trim()) &&
-      !/(latest|recent|current|2025|2026|tavily|supabase|groq|gemini|next\.js|react\s+19)/i.test(text);
+      !/(latest|recent|current|2025|2026|tavily|supabase|groq|gemini|next\.js|react\s*19|capacitor|tailwind\s*v?4|drizzle|v[0-9]|version|migrate|upgrade|deprecated|plugin|breaking|config)/i.test(text);
   }
 
   // --- Positive Rule Helpers ---
@@ -493,11 +493,25 @@ Respond ONLY with a valid JSON object in this exact schema:
     const techDocPatterns = [
       /(?:what\s+is\s+new\s+in|latest\s+version\s+of|release\s+notes\s+for|changelog\s+for|new\s+features\s+in)\s+[a-z0-9_\s\.\-]+/i,
       /(?:docs\s+for|documentation\s+(?:for|of)|api\s+reference\s+for|official\s+docs\s+for)\s+[a-z0-9_\s\.\-]+/i,
-      /(?:breaking\s+changes?\s+(?:in|for)|migration\s+guide\s+(?:for|to)|how\s+to\s+migrate\s+to)\s+[a-z0-9_\s\.\-]+/i,
-      /(?:how\s+to\s+(?:use|configure|setup|install)|syntax\s+for)\s+[a-z0-9_\s\.\-]+\s+(?:in|with)\s+(?:react\s+19|next(?:\.js)?\s*1[45]|tailwind(?:\s*v?4)?|vite|bun|drizzle|prisma|supabase|vue\s*3|angular|astro|node\s*2[02]|typescript\s*5|python\s*3\.1[23])/i,
-      /(?:is|has)\s+[a-z0-9_\s\.\-]+\s+(?:released?|out\s+yet|deprecated|supported\s+in)\b/i,
+      /(?:breaking\s+changes?\s+(?:in|for)|migration\s+guide\s+(?:for|to)|how\s+to\s+migrate\s+(?:to|from)|upgrade\s+(?:to|from)|how\s+to\s+upgrade)\s+[a-z0-9_\s\.\-]+/i,
+      // Capacitor specific patterns: version changes, plugins, and CLI commands
+      /\bcapacitor\s*(?:[567]|v[567]|version\s*[567]|plugin|migration|upgrade|config|cli|camera|geolocation|push\s*notifications?|filesystem|device|preferences|splash\s*screen|status\s*bar)\b/i,
+      /(?:@capacitor\/[a-z0-9_\-]+|npx\s+cap\s+[a-z0-9_\-]+|capacitor\.config\.[a-z]+)/i,
+      // Package installation & config commands
+      /(?:how\s+to\s+(?:use|configure|setup|install)|syntax\s+for|package\s+(?:name|command)\s+for|install\s+command\s+for)\s+[a-z0-9_\s\.\-]+\s+(?:in|with|for)\s+(?:react(?:\s*1[89])?|next(?:\.js)?(?:\s*1[45])?|tailwind(?:\s*v?4)?|vite|bun|drizzle|prisma|supabase|capacitor|vue\s*3|angular|astro|node\s*2[02]|typescript\s*5|python\s*3\.1[23])/i,
+      // Deprecated APIs & Outdated alternatives
+      /(?:is\s+[a-z0-9_\.\-]+\s+(?:deprecated|removed|obsolete|replaced)|deprecated\s+in\s+[a-z0-9_\.\-]+|what\s+replaces\s+[a-z0-9_\.\-]+|replacement\s+for\s+[a-z0-9_\.\-]+|alternative\s+to\s+[a-z0-9_\.\-]+)/i,
+      // Unfamiliar libraries, packages, or plugins
+      /(?:how\s+to\s+use\s+(?:the\s+)?(?:library|package|framework|sdk|plugin)\s+[a-z0-9_\@\/\.\-]+|what\s+is\s+(?:the\s+)?(?:library|package|framework|sdk|plugin)\s+[a-z0-9_\@\/\.\-]+)/i,
+      /(?:library|package|sdk|plugin)\s+@[a-z0-9_\-]+\/[a-z0-9_\-]+/i,
+      /npm\s+i(?:nstall)?\s+@[a-z0-9_\-]+\/[a-z0-9_\-]+/i,
+      // Release & Version compatibility status
+      /(?:is|has)\s+[a-z0-9_\s\.\-]+\s+(?:released?|out\s+yet|deprecated|supported\s+in|compatible\s+with)\b/i,
+      /(?:version\s+compatibility|compatible\s+with\s+(?:react\s*19|capacitor|next(?:\.js)?|node|typescript))\b/i,
+      // Troubleshooting & Errors
       /(?:troubleshoot|fix|how\s+to\s+resolve)\s+(?:error|bug|issue|exception|typeerror)\s+[a-z0-9_\s\.\-]+/i,
-      /\b(?:react\s+19|next(?:\.js)?\s*1[45]|tailwind\s*v?4|drizzle\s+orm|supabase\s+v?2|bun\s+1\.\d|python\s*3\.1[23])\b/i,
+      // Modern versioned frameworks
+      /\b(?:react\s+19|next(?:\.js)?\s*1[45]|tailwind\s*v?4|drizzle\s+orm|supabase\s+v?2|bun\s+1\.\d|python\s*3\.1[23]|capacitor\s*[567]|tanstack\s*(?:query)?\s*v?5|zustand\s*v?5)\b/i,
     ];
 
     const isRecentTech = techDocPatterns.some((pattern) => pattern.test(lower));
