@@ -5,6 +5,33 @@ import { DEFAULT_USER_ID, toValidUUID } from '../database/db-service';
 export interface AuthenticatedRequest extends Request {
   verifiedUserId?: string;
   isGuestUser?: boolean;
+  isOwner?: boolean;
+}
+
+/**
+ * Evaluates whether an incoming request is authorized as the system owner.
+ * Strictly verifies that the header 'x-owner-key' matches the environment variable 'OWNER_ACCESS_KEY'.
+ * If OWNER_ACCESS_KEY is not set or empty, nobody is the owner.
+ */
+export function checkOwnerStatus(req: Request): boolean {
+  const serverKey = process.env.OWNER_ACCESS_KEY?.trim();
+  if (!serverKey) {
+    return false;
+  }
+  const requestKey = (req.headers['x-owner-key'] as string | undefined)?.trim();
+  return Boolean(requestKey && requestKey === serverKey);
+}
+
+/**
+ * Dedicated Express middleware to evaluate owner lock on incoming requests.
+ */
+export function ownerMiddleware(
+  req: AuthenticatedRequest,
+  _res: Response,
+  next: NextFunction
+): void {
+  req.isOwner = checkOwnerStatus(req);
+  next();
 }
 
 /**
@@ -16,6 +43,9 @@ export async function authenticateRequest(
   res: Response,
   next: NextFunction
 ): Promise<void> {
+  // Always evaluate owner authorization status from x-owner-key header
+  req.isOwner = checkOwnerStatus(req);
+
   const authHeader = req.headers.authorization;
   const client = getSupabaseClient();
 
@@ -64,3 +94,15 @@ export function getResolvedUserId(req: Request): string {
   const requested = (req.headers['x-user-id'] as string) || (req.body?.userId as string) || (req.query?.userId as string);
   return requested ? toValidUUID(requested) : DEFAULT_USER_ID;
 }
+
+/**
+ * Helper to check if request is by the verified owner.
+ */
+export function isRequestOwner(req: Request): boolean {
+  const authReq = req as AuthenticatedRequest;
+  if (authReq.isOwner !== undefined) {
+    return authReq.isOwner;
+  }
+  return checkOwnerStatus(req);
+}
+

@@ -4,6 +4,8 @@ import { memorySearchTool } from './definitions/memory-search.tool';
 import { pastConversationsTool } from './definitions/past-conversations.tool';
 import { researchHistoryTool } from './definitions/research-history.tool';
 import { systemTimeTool } from './definitions/system-time.tool';
+import { systemCheckTool } from './definitions/system-check.tool';
+import { recentErrorsTool } from './definitions/recent-errors.tool';
 
 export class ToolRegistry {
   private static instance: ToolRegistry;
@@ -26,6 +28,8 @@ export class ToolRegistry {
     this.registerTool(pastConversationsTool);
     this.registerTool(researchHistoryTool);
     this.registerTool(systemTimeTool);
+    this.registerTool(systemCheckTool);
+    this.registerTool(recentErrorsTool);
   }
 
   /**

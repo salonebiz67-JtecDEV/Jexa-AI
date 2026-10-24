@@ -289,6 +289,106 @@ async function runMemoryTestSuite() {
   }
 
   // --------------------------------------------------------------------------
+  // TEST 11: Multi-Fact Extraction (Array of facts per message)
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 11] Testing Multi-Fact Extraction (Array of facts)...');
+  const multiExtract = await AIMemoryExtractor.analyze(
+    'My preferred name is Sahr and I live in Koidu, Sierra Leone.',
+    []
+  );
+
+  console.log('  Candidates extracted:', multiExtract.candidates.length);
+  if (
+    multiExtract.candidates.length >= 2 &&
+    multiExtract.candidates.some((c) => c.fact.includes('Sahr')) &&
+    multiExtract.candidates.some((c) => c.fact.includes('Koidu'))
+  ) {
+    console.log('  -> Multiple facts correctly extracted into an array from a single message.');
+    report['Multi-fact array extraction'] = 'PASS';
+  } else {
+    console.error('  -> Multi-fact extraction failed:', multiExtract);
+    report['Multi-fact array extraction'] = 'FAIL';
+  }
+
+  // --------------------------------------------------------------------------
+  // TEST 12: Memory Caching & Cache Invalidation (60-second TTL)
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 12] Testing 60-Second Memory Cache & Invalidation...');
+  const cacheTestUser = '00000000-0000-0000-0000-000000000099';
+  await DatabaseService.createMemory(
+    { category: 'user_profile', fact: 'User initial cached fact', memoryType: 'confirmed_fact' },
+    cacheTestUser
+  );
+
+  const firstFetch = await DatabaseService.getMemories(cacheTestUser);
+  const secondFetch = await DatabaseService.getMemories(cacheTestUser);
+  const cacheHit = firstFetch.length > 0 && secondFetch.length === firstFetch.length;
+
+  // Invalidate by adding another memory
+  await DatabaseService.createMemory(
+    { category: 'preferences_settings', fact: 'User secondary fact', memoryType: 'confirmed_fact' },
+    cacheTestUser
+  );
+  const postInvalidateFetch = await DatabaseService.getMemories(cacheTestUser);
+  const invalidationSuccess = postInvalidateFetch.length === firstFetch.length + 1;
+
+  if (cacheHit && invalidationSuccess) {
+    console.log('  -> Memory cache operates with fast retrieval and invalidates on write.');
+    report['60s memory caching and invalidation'] = 'PASS';
+  } else {
+    console.error('  -> Caching test failed:', { firstFetch, secondFetch, postInvalidateFetch });
+    report['60s memory caching and invalidation'] = 'FAIL';
+  }
+
+  // Clean up cache test user
+  await DatabaseService.invalidateMemoryCache(cacheTestUser);
+
+  // --------------------------------------------------------------------------
+  // TEST 13: memory_type Field Persistence ('confirmed_fact' vs 'insight')
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 13] Testing memory_type Field Persistence...');
+  const memTypeItem = await DatabaseService.createMemory(
+    {
+      category: 'conversation_insights',
+      fact: 'User shows strong analytical discipline during debugging sessions.',
+      memoryType: 'insight',
+    },
+    testUserId
+  );
+
+  const updatedMemType = await DatabaseService.updateMemory(
+    memTypeItem.id,
+    { memoryType: 'insight', fact: 'User shows strong analytical discipline and systematic debugging habits.' },
+    testUserId
+  );
+
+  if (memTypeItem.memoryType === 'insight' && updatedMemType.memoryType === 'insight') {
+    console.log('  -> memory_type correctly persisted and updated in memory records.');
+    report['memory_type field persistence'] = 'PASS';
+  } else {
+    console.error('  -> memory_type persistence failed:', { memTypeItem, updatedMemType });
+    report['memory_type field persistence'] = 'FAIL';
+  }
+
+  // --------------------------------------------------------------------------
+  // TEST 14: Trivial Chit-Chat vs Substantive Messages Filter
+  // --------------------------------------------------------------------------
+  console.log('\n[Test 14] Testing Trivial Chit-Chat vs General Extraction Filter...');
+  const trivial1 = MemoryService.isTrivialGreetingOrChitChat('hi');
+  const trivial2 = MemoryService.isTrivialGreetingOrChitChat('hello how are you');
+  const trivial3 = MemoryService.isTrivialGreetingOrChitChat('thanks a lot');
+  const nonTrivial1 = MemoryService.isTrivialGreetingOrChitChat('I am developing a fintech payment gateway for West Africa');
+  const nonTrivial2 = MemoryService.isTrivialGreetingOrChitChat('My sister is visiting from London next month');
+
+  if (trivial1 && trivial2 && trivial3 && !nonTrivial1 && !nonTrivial2) {
+    console.log('  -> Trivial greetings cleanly identified without blocking substantive messages.');
+    report['Trivial chit-chat filter'] = 'PASS';
+  } else {
+    console.error('  -> Trivial filter test failed:', { trivial1, trivial2, trivial3, nonTrivial1, nonTrivial2 });
+    report['Trivial chit-chat filter'] = 'FAIL';
+  }
+
+  // --------------------------------------------------------------------------
   // FINAL SUMMARY
   // --------------------------------------------------------------------------
   console.log('\n====================================================');

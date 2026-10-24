@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { ITextAIProvider, TextGenerationRequest, TextGenerationResponse } from './text-provider.interface';
 import { TextProviderType, ProviderError, formatCleanProviderError } from '../../shared/types/provider';
+import { ErrorLogService } from '../../backend/src/services/error-log.service';
 
 export class GeminiTextAIProvider implements ITextAIProvider {
   public readonly providerType: TextProviderType = 'gemini';
@@ -205,6 +206,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     }
 
     console.error('[GeminiTextAIProvider] API call failed:', lastError);
+    ErrorLogService.log('ai_provider', lastError, { provider: 'gemini', model: this.modelName });
     const formatted = formatCleanProviderError(lastError);
     this.lastError = formatted.cleanMessage;
 
@@ -270,6 +272,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       };
     } catch (error: any) {
       console.error('[GeminiTextAIProvider] Streaming failed:', error);
+      ErrorLogService.log('ai_provider', error, { provider: 'gemini', model: this.modelName, stream: true });
       const formatted = formatCleanProviderError(error);
       this.lastError = formatted.cleanMessage;
       throw new ProviderError(

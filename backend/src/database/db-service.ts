@@ -5,6 +5,7 @@ import { MemoryItem, MemoryCreateInput, ResearchHistoryItem, ResearchHistorySour
 import { BrainProfile } from '../../../shared/types/brain';
 import { DatabaseDiagnosticsResult, DatabaseHealthResponse, TestStepStatus } from '../../../shared/types/database';
 import { JEXA_IDENTITY } from '../../../ai/brain/identity';
+import { ErrorLogService } from '../services/error-log.service';
 
 export const DEFAULT_USER_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -968,8 +969,26 @@ export class DatabaseService {
   // MEMORY PERSISTENCE
   // =========================================================================
 
+  private static userMemoriesCache: Map<string, { memories: MemoryItem[]; cachedAt: number }> = new Map();
+  private static readonly MEMORY_CACHE_TTL_MS = 60 * 1000; // 60 seconds
+
+  public static invalidateMemoryCache(userId?: string): void {
+    if (userId) {
+      this.userMemoriesCache.delete(toValidUUID(userId));
+    } else {
+      this.userMemoriesCache.clear();
+    }
+  }
+
   public static async getMemories(userId?: string): Promise<MemoryItem[]> {
     const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+
+    // Fast check: return from 60-second in-memory server cache if fresh
+    const cached = this.userMemoriesCache.get(validUserId);
+    if (cached && (Date.now() - cached.cachedAt) < this.MEMORY_CACHE_TTL_MS) {
+      return cached.memories.map((m) => ({ ...m }));
+    }
+
     const client = getSupabaseClient();
     if (client) {
       let query = client
@@ -985,7 +1004,7 @@ export class DatabaseService {
       }
 
       if (data) {
-        return data.map((d) => ({
+        const loaded = data.map((d) => ({
           id: d.id,
           userId: d.user_id,
           category: normalizeCategory(d.category),
@@ -997,10 +1016,12 @@ export class DatabaseService {
           lastReinforcedAt: d.last_reinforced_at,
           createdAt: d.created_at,
         }));
+        this.userMemoriesCache.set(validUserId, { memories: loaded, cachedAt: Date.now() });
+        return loaded;
       }
     }
 
-    return Array.from(memoryStore.memories.values())
+    const fallback = Array.from(memoryStore.memories.values())
       .filter((m) => (userId ? m.userId === validUserId : m.userId === DEFAULT_USER_ID))
       .map((m) => ({
         ...m,
@@ -1008,6 +1029,9 @@ export class DatabaseService {
         memoryType: m.memoryType || 'confirmed_fact',
       }))
       .sort((a, b) => new Date(b.lastReinforcedAt).getTime() - new Date(a.lastReinforcedAt).getTime());
+
+    this.userMemoriesCache.set(validUserId, { memories: fallback, cachedAt: Date.now() });
+    return fallback;
   }
 
   public static async createMemory(input: MemoryCreateInput, userId?: string): Promise<MemoryItem> {
@@ -1027,6 +1051,14 @@ export class DatabaseService {
       createdAt: new Date().toISOString(),
     };
 
+    const isProduction =
+      process.env.NODE_ENV === 'production' ||
+      Boolean(process.env.RENDER);
+
+    if (isProduction && !isSupabaseConfigured) {
+      throw new Error('Supabase is not configured in production. Permanent memory storage is unavailable.');
+    }
+
     const client = getSupabaseClient();
     if (client) {
       await this.ensureUserExists(validUserId);
@@ -1035,6 +1067,7 @@ export class DatabaseService {
         user_id: validUserId,
         category: newMemory.category,
         fact: newMemory.fact,
+        memory_type: newMemory.memoryType || 'confirmed_fact',
         confidence: newMemory.confidence,
         source_conversation_id: newMemory.sourceConversationId || null,
         last_reinforced_at: newMemory.lastReinforcedAt,
@@ -1042,6 +1075,13 @@ export class DatabaseService {
       };
 
       let { error } = await client.from('memories').insert(insertPayload);
+
+      // If the Supabase instance is missing the memory_type column, retry without it
+      if (error && ((error as any).code === '42703' || error.message?.includes('memory_type'))) {
+        delete insertPayload.memory_type;
+        const retryType = await client.from('memories').insert(insertPayload);
+        error = retryType.error;
+      }
 
       // If the Supabase instance has an older check constraint, retry with legacy category
       if (error && (error.message?.includes('check constraint') || (error as any).code === '23514')) {
@@ -1053,20 +1093,29 @@ export class DatabaseService {
           conversation_insights: 'user_fact',
         };
         const legacyCat = legacyCategoryMap[newMemory.category] || 'user_fact';
-        const retryResult = await client.from('memories').insert({
+        const retryPayload: Record<string, any> = {
           ...insertPayload,
           category: legacyCat,
-        });
-        error = retryResult.error;
+        };
+        const retryResult = await client.from('memories').insert(retryPayload);
+        if (retryResult.error && ((retryResult.error as any).code === '42703' || retryResult.error.message?.includes('memory_type'))) {
+          delete retryPayload.memory_type;
+          const retryType2 = await client.from('memories').insert(retryPayload);
+          error = retryType2.error;
+        } else {
+          error = retryResult.error;
+        }
       }
 
       if (error) {
         console.error('[DatabaseService] Failed to insert memory to Supabase:', error.message);
+        ErrorLogService.log('supabase', error.message, { operation: 'insert_memory', userId: validUserId });
         throw new Error(`Failed to persist memory to Supabase: ${error.message}`);
       }
     }
 
     memoryStore.memories.set(id, newMemory);
+    this.invalidateMemoryCache(validUserId);
     return newMemory;
   }
 
@@ -1079,11 +1128,20 @@ export class DatabaseService {
     const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
     const client = getSupabaseClient();
 
+    const isProduction =
+      process.env.NODE_ENV === 'production' ||
+      Boolean(process.env.RENDER);
+
+    if (isProduction && !isSupabaseConfigured) {
+      throw new Error('Supabase is not configured in production. Permanent memory storage is unavailable.');
+    }
+
     const updatePayload: Record<string, any> = {
       last_reinforced_at: new Date().toISOString(),
     };
     if (updates.fact) updatePayload.fact = updates.fact;
     if (updates.category) updatePayload.category = normalizeCategory(updates.category);
+    if (updates.memoryType) updatePayload.memory_type = updates.memoryType;
     if (updates.confidence !== undefined) updatePayload.confidence = updates.confidence;
 
     if (client) {
@@ -1092,6 +1150,16 @@ export class DatabaseService {
         query = query.eq('user_id', validUserId);
       }
       let { data, error } = await query.select().single();
+
+      // If column memory_type is missing in Supabase, retry without memory_type
+      if (error && updates.memoryType && ((error as any).code === '42703' || error.message?.includes('memory_type'))) {
+        delete updatePayload.memory_type;
+        let retryQuery = client.from('memories').update(updatePayload).eq('id', validId);
+        if (userId) retryQuery = retryQuery.eq('user_id', validUserId);
+        const retryResult = await retryQuery.select().single();
+        data = retryResult.data;
+        error = retryResult.error;
+      }
 
       // If legacy check constraint rejects category on update, retry with legacy category
       if (error && updates.category && (error.message?.includes('check constraint') || (error as any).code === '23514')) {
@@ -1113,6 +1181,7 @@ export class DatabaseService {
 
       if (error) {
         console.error('[DatabaseService] Failed to update memory in Supabase:', error.message);
+        ErrorLogService.log('supabase', error.message, { operation: 'update_memory', id: validId, userId: validUserId });
         throw new Error(`Failed to update memory in Supabase: ${error.message}`);
       }
       if (data) {
@@ -1129,6 +1198,7 @@ export class DatabaseService {
           createdAt: data.created_at,
         };
         memoryStore.memories.set(validId, updatedItem);
+        this.invalidateMemoryCache(validUserId);
         return updatedItem;
       }
     }
@@ -1145,6 +1215,7 @@ export class DatabaseService {
       lastReinforcedAt: new Date().toISOString(),
     };
     memoryStore.memories.set(validId, updated);
+    this.invalidateMemoryCache(validUserId);
     return updated;
   }
 
@@ -1169,6 +1240,7 @@ export class DatabaseService {
     }
     memoryStore.memories.delete(validId);
     memoryStore.memories.delete(id);
+    this.invalidateMemoryCache(validUserId);
     return true;
   }
 

@@ -1,4 +1,5 @@
 import { WebSearchResultItem } from '../../../shared/types/chat';
+import { ErrorLogService } from './error-log.service';
 
 export interface TavilySearchOptions {
   maxResults?: number;
@@ -238,6 +239,10 @@ export class TavilyService {
         : `Network error connecting to Tavily: ${err.message}`;
 
       console.error('[TavilyService] Exception during search:', errorMessage);
+      ErrorLogService.log('web_search', errorMessage, {
+        query: trimmedQuery,
+        code: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+      });
       return {
         success: false,
         query: trimmedQuery,

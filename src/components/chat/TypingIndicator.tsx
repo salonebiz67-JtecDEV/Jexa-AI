@@ -13,6 +13,9 @@ import {
   Compass,
   Brain,
   BookmarkCheck,
+  Server,
+  Database,
+  ClipboardList,
 } from 'lucide-react';
 import { AIActivityStatus } from '../../../shared/types';
 
@@ -77,6 +80,39 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
     }
 
     switch (currentStatus) {
+      case 'Checking servers…':
+      case 'Checking servers...':
+        return {
+          icon: Server,
+          color: 'text-cyan-400',
+          bg: 'bg-cyan-500/10',
+          border: 'border-cyan-500/30',
+          dotColor: 'bg-cyan-400',
+          glow: 'shadow-[0_0_12px_rgba(6,182,212,0.25)]',
+          pulseIcon: true,
+        };
+      case 'Checking Supabase…':
+      case 'Checking Supabase...':
+        return {
+          icon: Database,
+          color: 'text-emerald-400',
+          bg: 'bg-emerald-500/10',
+          border: 'border-emerald-500/30',
+          dotColor: 'bg-emerald-400',
+          glow: 'shadow-[0_0_12px_rgba(16,185,129,0.25)]',
+          pulseIcon: true,
+        };
+      case 'Reading error logs…':
+      case 'Reading error logs...':
+        return {
+          icon: ClipboardList,
+          color: 'text-amber-400',
+          bg: 'bg-amber-500/10',
+          border: 'border-amber-500/30',
+          dotColor: 'bg-amber-400',
+          glow: 'shadow-[0_0_12px_rgba(245,158,11,0.25)]',
+          pulseIcon: true,
+        };
       case 'Selecting tool...':
         return {
           icon: Compass,

@@ -153,6 +153,10 @@ export class ToolExecutor {
     // 4. Status update: Inform UI of tool execution
     if (tool.name === 'web_search') {
       options.onStatusUpdate?.('Using web research...', { query: (args as any)?.query });
+    } else if (tool.name === 'system_check') {
+      options.onStatusUpdate?.('Checking servers…');
+    } else if (tool.name === 'recent_errors') {
+      options.onStatusUpdate?.('Reading error logs…');
     } else if (tool.name === 'memory_search') {
       options.onStatusUpdate?.('Checking memories...', { query: (args as any)?.query });
     } else {
@@ -173,6 +177,7 @@ export class ToolExecutor {
       try {
         const executionPromise = tool.execute(args, {
           ...context,
+          onStatusUpdate: options.onStatusUpdate || context.onStatusUpdate,
           signal: abortController.signal,
         });
 

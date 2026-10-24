@@ -19,11 +19,11 @@ export interface AIMemoryExtractionDecision {
 
 // Regex to detect sensitive credentials that should NEVER be stored as memory
 const SENSITIVE_SECRETS_PATTERN =
-  /(?:password\s*(?:is|:)|api[_\s]?key\s*(?:is|:)|secret\s*(?:is|:)|bearer\s+[a-z0-9_\-\.]+|sk[-_][a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|BEGIN\s+PRIVATE\s+KEY|auth(?:entication)?\s+code\s*(?:is|:)|2fa\s*(?:is|:)|otp\s*(?:is|:))/i;
+  /(?:password\s*(?:is|:)|api[_\s]?key\s*(?:is|:)|secret\s*(?:is|:)|bearer\s+[a-z0-9_\-\.]+|sk[-_][a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|BEGIN\s+PRIVATE\s+KEY|auth(?:entication)?\s+code\s*(?:is|:)|2fa\s*(?:is|:)|otp\s*(?:is|:)|private\s*key\s*(?:is|:))/i;
 
 // Regex to detect sensitive financial or private medical data that should never be stored automatically
 const SENSITIVE_PRIVATE_DATA_PATTERN =
-  /(?:credit\s*card\s*(?:is|number|#)?\s*(?:is|:)?\s*\d{4}|\b(?:\d{4}[-\s]?){3}\d{4}\b|cvv\s*(?:is|:)?\s*\d{3,4}|bank\s*account\s*(?:#|number)?\s*(?:is|:)|routing\s*number\s*(?:is|:)|ssn\s*(?:is|:)|social\s*security\s*number|medical\s+record|prescription\s+dosage|diagnosed\s+with\s+(?:hiv|cancer|schizophrenia|bipolar)|psychotherapy\s+session|clinical\s+diagnosis)/i;
+  /(?:credit\s*card\s*(?:is|number|#)?\s*(?:is|:)?\s*\d{4}|\b(?:\d{4}[-\s]?){3}\d{4}\b|cvv\s*(?:is|:)?\s*\d{3,4}|debit\s*card|bank\s*account\s*(?:#|number)?\s*(?:is|:)|routing\s*number\s*(?:is|:)|ssn\s*(?:is|:)|social\s*security\s*number|medical\s+record|prescription\s+dosage|diagnosed\s+with\s+(?:hiv|cancer|schizophrenia|bipolar|depression|diabetes)|psychotherapy\s+session|clinical\s+diagnosis|patient\s+record|health\s+record)/i;
 
 const PRIVACY_PATTERN =
   /(?:don'?t|do\s+not|never)\s+(?:remember|save|store)\s+(?:this|that|my)?|(?:off\s+the\s+record|keep\s+this\s+private|do\s+not\s+save\s+to\s+memory|don'?t\s+save\s+to\s+memory)/i;
@@ -145,30 +145,32 @@ FIVE CONNECTED MEMORY CATEGORIES:
 5. "conversation_insights": High-level recurring habits, observed patterns, thinking tendencies, derived observations (mark as memoryType: "insight").
 
 RULES:
-1. AUTOMATIC EXTRACTION:
-   - Identify useful, meaningful, long-term information automatically without requiring the user to say "remember this".
-   - Understand the meaning and context of the entire message rather than relying only on keywords.
-   - Do NOT store transient small talk, momentary requests ("what is the weather today"), or speculative guesses.
-2. DEDUPLICATION & UPDATES:
-   - If the fact or core information is ALREADY covered in existing memories (even if phrased slightly differently, e.g. "My preferred name is Alex" when an existing memory already mentions their name is Alex), return action: "already_remembered". Do NOT mark as "updated" or "saved" unless the information has actually changed or contains new facts.
-   - If the new statement UPDATES, CHANGES, or SUPERSEDES an existing memory with new/different values (e.g. user changed their name, moved to a different city, or switched jobs), return action: "updated" and set updatesMemoryId to that memory's ID.
-   - If it is genuinely new information, return action: "saved".
-3. FACT VS INSIGHT:
-   - "confirmed_fact": Direct user statements, confirmed personal details, explicit instructions.
-   - "insight": AI-derived behavioral tendencies or higher-level patterns.
-4. IMPERFECT ENGLISH, SLANG & CONTEXTUAL REASONING:
-   - Accurately interpret imperfect English, typos (e.g. 'sistr', 'projek', 'bday', 'nam'), phonetic spellings, contractions ('wanna', 'gonna'), and colloquial slang (e.g. 'bro', Krio 'me sista', 'na', 'wok', 'salone').
-   - Focus on intended meaning and factual substance. Resolve pronouns or references using recent dialogue context if provided.
+1. EXTRACT ALL PERTINENT FACTS (AN ARRAY):
+   - A single message may contain multiple facts (e.g. "My name is John, I live in Freetown, and I code in TypeScript").
+   - Extract ALL distinct facts as separate objects in the "facts" array.
+   - For each fact, assign the appropriate category, memoryType ("confirmed_fact" or "insight"), confidence (0.80 - 1.0), and concise 3rd person factual declarative statement.
+2. AUTOMATIC EXTRACTION:
+   - Identify useful, durable personal information automatically without requiring the user to say "remember this".
+   - Do NOT store transient small talk or momentary queries.
+3. DEDUPLICATION & UPDATES:
+   - If a fact is ALREADY in existing memories with no new information, mark that fact's action as "already_remembered".
+   - If a fact UPDATES or REPLACES an existing memory, mark action as "updated" and provide updatesMemoryId.
+   - If it is new information, mark action as "saved".
 
 OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra prose):
 {
   "action": "saved" | "updated" | "already_remembered" | "none",
-  "category": "user_profile" | "preferences_settings" | "relationships_dates" | "projects_goals" | "conversation_insights",
-  "memoryType": "confirmed_fact" | "insight",
-  "fact": "concise factual declarative statement in 3rd person (e.g. User lives in Freetown, Sierra Leone)",
-  "confidence": 0.95,
-  "updatesMemoryId": "string-uuid-or-null",
-  "feedbackMessage": "Natural concise confirmation phrase (e.g. I'll remember that you live in Freetown.)"
+  "facts": [
+    {
+      "action": "saved" | "updated" | "already_remembered",
+      "category": "user_profile" | "preferences_settings" | "relationships_dates" | "projects_goals" | "conversation_insights",
+      "memoryType": "confirmed_fact" | "insight",
+      "fact": "concise factual declarative statement in 3rd person (e.g. User lives in Freetown, Sierra Leone)",
+      "confidence": 0.95,
+      "updatesMemoryId": "string-uuid-or-null"
+    }
+  ],
+  "feedbackMessage": "Natural concise confirmation phrase summarizing what was remembered"
 }`;
 
         const promptContent = `User Message: "${trimmed}"${recentDialogue ? `\nRecent Context: "${recentDialogue}"` : ''}`;
@@ -182,7 +184,7 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
             systemPrompt: extractionSystemPrompt,
             messages: [{ role: 'user', content: promptContent }],
             temperature: 0.1,
-            maxTokens: 300,
+            maxTokens: 400,
           }),
           timeoutPromise,
         ]);
@@ -191,28 +193,59 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
         const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
-          if (parsed && parsed.action && parsed.action !== 'none') {
-            if (parsed.action === 'already_remembered') {
-              return { action: 'already_remembered', candidates: [], feedbackMessage: parsed.feedbackMessage };
+          if (parsed && (parsed.action !== 'none' || (Array.isArray(parsed.facts) && parsed.facts.length > 0))) {
+            const rawFacts: any[] = Array.isArray(parsed.facts)
+              ? parsed.facts
+              : Array.isArray(parsed.candidates)
+              ? parsed.candidates
+              : parsed.fact
+              ? [parsed]
+              : [];
+
+            const candidates: ExtractedMemoryCandidate[] = [];
+            let hasUpdated = false;
+            let allAlreadyRemembered = rawFacts.length > 0;
+
+            for (const item of rawFacts) {
+              if (item.action === 'already_remembered') {
+                continue;
+              }
+              allAlreadyRemembered = false;
+              if (item.fact && typeof item.fact === 'string' && item.fact.trim().length > 3) {
+                const cleanFact = item.fact.trim().slice(0, 240);
+                const validCat = normalizeCategory(item.category || 'user_profile');
+                const validMemType: MemoryType = item.memoryType === 'insight' ? 'insight' : 'confirmed_fact';
+                const confidence = typeof item.confidence === 'number' ? item.confidence : 0.92;
+                const updatesMemoryId = item.updatesMemoryId || undefined;
+
+                if (item.action === 'updated' || updatesMemoryId) {
+                  hasUpdated = true;
+                }
+
+                candidates.push({
+                  category: validCat,
+                  fact: cleanFact,
+                  memoryType: validMemType,
+                  confidence,
+                  updatesMemoryId,
+                });
+              }
             }
 
-            if (parsed.fact && typeof parsed.fact === 'string' && parsed.fact.trim().length > 3) {
-              const cleanFact = parsed.fact.trim().slice(0, 240);
-              const validCat = normalizeCategory(parsed.category || 'user_profile');
-              const validMemType: MemoryType = parsed.memoryType === 'insight' ? 'insight' : 'confirmed_fact';
-
+            if (candidates.length > 0) {
+              const finalAction = hasUpdated || parsed.action === 'updated' ? 'updated' : 'saved';
               return {
-                action: parsed.action === 'updated' ? 'updated' : 'saved',
-                candidates: [
-                  {
-                    category: validCat,
-                    fact: cleanFact,
-                    memoryType: validMemType,
-                    confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.90,
-                    updatesMemoryId: parsed.updatesMemoryId || undefined,
-                  },
-                ],
-                feedbackMessage: parsed.feedbackMessage || `I'll remember that.`,
+                action: finalAction,
+                candidates,
+                feedbackMessage: parsed.feedbackMessage || (finalAction === 'updated' ? "I've updated that in your memory." : "I'll remember that."),
+              };
+            }
+
+            if (parsed.action === 'already_remembered' || allAlreadyRemembered) {
+              return {
+                action: 'already_remembered',
+                candidates: [],
+                feedbackMessage: parsed.feedbackMessage || 'I already remember that.',
               };
             }
           }
@@ -222,7 +255,7 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       }
     }
 
-    // 6. Fast Heuristic Engine Fallback
+    // 6. Fast Heuristic Engine Fallback (Supports multi-fact extraction)
     return this.fallbackHeuristicExtraction(trimmed, existingMemories);
   }
 
@@ -317,7 +350,12 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       }
     }
 
-    // 3. Category: User Profile (Name / Identity / Location / Career) - with slang & typo tolerance
+    // 3. Multi-Fact Automatic Extraction across categories
+    const candidates: ExtractedMemoryCandidate[] = [];
+    let hasUpdated = false;
+    let anyAlreadyRemembered = false;
+
+    // User Profile: Name / Preferred Name
     const nameMatch = trimmed.match(
       /(?:(?:my|me|mi)\s+(?:name|nam|preffered\s+name|preferred\s+name)\s+(?:is|na|b|called)?|i'm\s+called|call\s+me|am\s+called)\s+([a-zA-Z0-9_\- ]+?)(?:\.|$|,|!|\s+and)/i
     );
@@ -326,20 +364,18 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       const fact = `User's preferred name is ${name}.`;
       const existing = existingMemories.find((m) => m.fact.includes("preferred name is"));
       if (existing) {
-        if (existing.fact === fact) return { action: 'already_remembered', candidates: [] };
-        return {
-          action: 'updated',
-          candidates: [{ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.98, updatesMemoryId: existing.id }],
-          feedbackMessage: `I've updated your name in memory to ${name}.`,
-        };
+        if (existing.fact === fact) {
+          anyAlreadyRemembered = true;
+        } else {
+          hasUpdated = true;
+          candidates.push({ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.98, updatesMemoryId: existing.id });
+        }
+      } else {
+        candidates.push({ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.98 });
       }
-      return {
-        action: 'saved',
-        candidates: [{ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.98 }],
-        feedbackMessage: `I'll remember that your preferred name is ${name}.`,
-      };
     }
 
+    // User Profile: Residence / Location
     const locMatch = trimmed.match(
       /(?:(?:i|a|me)\s+(?:live|liv|living|based|base|moved|de)\s+(?:in|at|na)|reside\s+in)\s+([a-zA-Z0-9_\- ,]+?)(?:\.|$|!|\s+and)/i
     );
@@ -348,20 +384,18 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       const fact = `User lives in ${loc}.`;
       const existing = existingMemories.find((m) => m.fact.includes('User lives in'));
       if (existing) {
-        if (existing.fact === fact) return { action: 'already_remembered', candidates: [] };
-        return {
-          action: 'updated',
-          candidates: [{ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.95, updatesMemoryId: existing.id }],
-          feedbackMessage: `I've updated your location in memory to ${loc}.`,
-        };
+        if (existing.fact === fact) {
+          anyAlreadyRemembered = true;
+        } else {
+          hasUpdated = true;
+          candidates.push({ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.95, updatesMemoryId: existing.id });
+        }
+      } else {
+        candidates.push({ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.95 });
       }
-      return {
-        action: 'saved',
-        candidates: [{ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.95 }],
-        feedbackMessage: `I'll remember that you live in ${loc}.`,
-      };
     }
 
+    // User Profile: Profession / Career Role
     const careerMatch = trimmed.match(
       /(?:(?:i|a|me)\s+(?:work|wok|am|a|m)\s+(?:as|like)?|my\s+job\s+is)\s+([a-zA-Z0-9_\- ]+?)\s+(?:at|for|na|wit)\s+([a-zA-Z0-9_\- ]+)/i
     );
@@ -369,14 +403,20 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       const role = careerMatch[1].trim();
       const company = careerMatch[2].trim().replace(/[.?!]+$/, '');
       const fact = `User works as ${role} at ${company}.`;
-      return {
-        action: 'saved',
-        candidates: [{ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.95 }],
-        feedbackMessage: `I'll remember that you work as ${role} at ${company}.`,
-      };
+      const existing = existingMemories.find((m) => m.fact.includes(`User works as ${role}`));
+      if (existing) {
+        if (existing.fact === fact) {
+          anyAlreadyRemembered = true;
+        } else {
+          hasUpdated = true;
+          candidates.push({ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.95, updatesMemoryId: existing.id });
+        }
+      } else {
+        candidates.push({ category: 'user_profile', fact, memoryType: 'confirmed_fact', confidence: 0.95 });
+      }
     }
 
-    // 4. Category: Relationships & Important Dates - with slang & typo tolerance
+    // Relationships & Important Dates: Family / Friends
     const relMatch = trimmed.match(
       /(?:(?:my|me|mi)\s+(wife|husband|partner|son|daughter|kid|child|brother|broda|sister|sista|sistr|mother|father|mom|dad|friend|dog|cat|pet))\s+(?:is|is\s+named|called|na)\s+([a-zA-Z0-9_\- ]+)/i
     );
@@ -388,78 +428,91 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
       const fact = `User's ${rel} is ${person}.`;
       const existing = existingMemories.find((m) => m.fact.includes(`User's ${rel} is`));
       if (existing) {
-        if (existing.fact === fact) return { action: 'already_remembered', candidates: [] };
-        return {
-          action: 'updated',
-          candidates: [{ category: 'relationships_dates', fact, memoryType: 'confirmed_fact', confidence: 0.95, updatesMemoryId: existing.id }],
-          feedbackMessage: `I've updated your ${rel}'s name in memory to ${person}.`,
-        };
+        if (existing.fact === fact) {
+          anyAlreadyRemembered = true;
+        } else {
+          hasUpdated = true;
+          candidates.push({ category: 'relationships_dates', fact, memoryType: 'confirmed_fact', confidence: 0.95, updatesMemoryId: existing.id });
+        }
+      } else {
+        candidates.push({ category: 'relationships_dates', fact, memoryType: 'confirmed_fact', confidence: 0.95 });
       }
-      return {
-        action: 'saved',
-        candidates: [{ category: 'relationships_dates', fact, memoryType: 'confirmed_fact', confidence: 0.95 }],
-        feedbackMessage: `I'll remember that your ${rel} is ${person}.`,
-      };
     }
 
+    // Relationships & Dates: Birthday / Anniversary
     const dateMatch = trimmed.match(
       /(?:(?:my|her|his|our)\s+(?:birthday|bday|anniversary)\s+is|born\s+on)\s+([a-zA-Z0-9_\- ,]+?)(?:\.|$|!)/i
     );
     if (dateMatch && dateMatch[1]?.trim()) {
       const dateStr = dateMatch[1].trim().replace(/[.?!]+$/, '');
       const fact = `Important date: "${trimmed.slice(0, 140)}".`;
-      return {
-        action: 'saved',
-        candidates: [{ category: 'relationships_dates', fact, memoryType: 'confirmed_fact', confidence: 0.95 }],
-        feedbackMessage: `I've saved that date to your memory.`,
-      };
+      const existing = existingMemories.find((m) => m.fact.toLowerCase() === fact.toLowerCase());
+      if (existing) {
+        anyAlreadyRemembered = true;
+      } else {
+        candidates.push({ category: 'relationships_dates', fact, memoryType: 'confirmed_fact', confidence: 0.95 });
+      }
     }
 
-    // 5. Category: Preferences & Settings
+    // Preferences & Settings: Tech stack & tooling
     if (/(?:my stack is|our stack is|we build with|i build with|i code in|my primary stack is)/i.test(lower) && trimmed.length >= 12) {
       const fact = `Technical stack & tooling: "${trimmed.slice(0, 160)}".`;
       const existing = existingMemories.find((m) => m.fact.includes('Technical stack'));
       if (existing) {
-        return {
-          action: 'updated',
-          candidates: [{ category: 'preferences_settings', fact, memoryType: 'confirmed_fact', confidence: 0.93, updatesMemoryId: existing.id }],
-          feedbackMessage: `I've updated your technical stack in memory.`,
-        };
+        hasUpdated = true;
+        candidates.push({ category: 'preferences_settings', fact, memoryType: 'confirmed_fact', confidence: 0.93, updatesMemoryId: existing.id });
+      } else {
+        candidates.push({ category: 'preferences_settings', fact, memoryType: 'confirmed_fact', confidence: 0.93 });
       }
-      return {
-        action: 'saved',
-        candidates: [{ category: 'preferences_settings', fact, memoryType: 'confirmed_fact', confidence: 0.93 }],
-        feedbackMessage: `I've saved your technical stack to memory.`,
-      };
     }
 
+    // Preferences general
     if (/(?:i prefer|my preference is|my favorite|my favourite)/i.test(lower) && !/(?:eating|today|right now)/i.test(lower)) {
       const fact = `User preference: "${trimmed.slice(0, 140)}".`;
-      return {
-        action: 'saved',
-        candidates: [{ category: 'preferences_settings', fact, memoryType: 'confirmed_fact', confidence: 0.90 }],
-        feedbackMessage: `I've noted your preference.`,
-      };
+      const existing = existingMemories.find((m) => m.fact.toLowerCase() === fact.toLowerCase());
+      if (existing) {
+        anyAlreadyRemembered = true;
+      } else {
+        candidates.push({ category: 'preferences_settings', fact, memoryType: 'confirmed_fact', confidence: 0.90 });
+      }
     }
 
-    // 6. Category: Projects & Goals
+    // Projects & Goals
     if (/(?:my goal is|our goal is|i am working on|i'm working on|we plan to launch|we launched|project progress|deadline is)/i.test(lower) && trimmed.length >= 14) {
       const fact = `User goal / project progress: "${trimmed.slice(0, 160)}".`;
+      const existing = existingMemories.find((m) => m.fact.toLowerCase() === fact.toLowerCase());
+      if (existing) {
+        anyAlreadyRemembered = true;
+      } else {
+        candidates.push({ category: 'projects_goals', fact, memoryType: 'confirmed_fact', confidence: 0.92 });
+      }
+    }
+
+    // Conversation Insights
+    if (/(?:i tend to|my habit is|i usually struggle with|my workflow usually)/i.test(lower) && trimmed.length >= 20) {
+      const fact = `Observed insight: User noted that "${trimmed.slice(0, 150)}".`;
+      const existing = existingMemories.find((m) => m.fact.toLowerCase() === fact.toLowerCase());
+      if (existing) {
+        anyAlreadyRemembered = true;
+      } else {
+        candidates.push({ category: 'conversation_insights', fact, memoryType: 'insight', confidence: 0.88 });
+      }
+    }
+
+    if (candidates.length > 0) {
+      const action = hasUpdated ? 'updated' : 'saved';
+      const feedbackMessage = candidates.length > 1
+        ? (action === 'updated' ? `I've updated your information in memory.` : `I'll remember those details for you.`)
+        : (action === 'updated' ? `I've updated that in your memory.` : `I'll remember that.`);
       return {
-        action: 'saved',
-        candidates: [{ category: 'projects_goals', fact, memoryType: 'confirmed_fact', confidence: 0.92 }],
-        feedbackMessage: `I've saved your project goal & progress to memory.`,
+        action,
+        candidates,
+        feedbackMessage,
       };
     }
 
-    // 7. Category: Conversation Insights (Recurring patterns, self-described tendencies)
-    if (/(?:i tend to|my habit is|i usually struggle with|my workflow usually)/i.test(lower) && trimmed.length >= 20) {
-      const fact = `Observed insight: User noted that "${trimmed.slice(0, 150)}".`;
-      return {
-        action: 'saved',
-        candidates: [{ category: 'conversation_insights', fact, memoryType: 'insight', confidence: 0.88 }],
-        feedbackMessage: `I've noted that pattern in your workflow.`,
-      };
+    if (anyAlreadyRemembered) {
+      return { action: 'already_remembered', candidates: [] };
     }
 
     return { action: 'none', candidates: [] };

@@ -1,4 +1,5 @@
 import { DatabaseService } from '../database/db-service';
+import { isSupabaseConfigured } from '../database/supabase';
 import {
   MemoryItem,
   MemoryCreateInput,
@@ -11,15 +12,16 @@ import { AIActivityStatus } from '../../../shared/types/chat';
 import { AIMemoryExtractor } from './ai-memory-extractor.service';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { ITextAIProvider } from '../../../ai/providers/text-provider.interface';
+import { ErrorLogService } from './error-log.service';
 
 export class MemoryService {
   /**
    * Fast check to determine if the message contains explicit remember directives,
-   * privacy requests, removal instructions, or personal disclosure.
+   * privacy requests, or removal instructions.
    */
   public static detectMemoryIntent(text: string): {
     hasIntent: boolean;
-    type: 'explicit' | 'privacy' | 'forget' | 'implicit' | 'none';
+    type: 'explicit' | 'privacy' | 'forget' | 'none';
   } {
     const trimmed = text.trim();
     if (!trimmed || trimmed.length < 3) return { hasIntent: false, type: 'none' };
@@ -35,28 +37,58 @@ export class MemoryService {
       return { hasIntent: true, type: 'explicit' };
     }
 
-    // Natural personal statements
-    const personalPatterns = [
-      /(?:my\s+name\s+is|i'm\s+called|call\s+me|my\s+preferred\s+name\s+is)\b/i,
-      /(?:my\s+(?:wife|husband|partner|son|daughter|kid|child|brother|sister|mother|father|mom|dad|friend|boss|coworker|dog|cat|pet))\s+(?:is|is\s+named|called)\b/i,
-      /(?:i\s+live\s+in|i\s+am\s+based\s+in|i'm\s+based\s+in|i\s+moved\s+to)\b/i,
-      /(?:my\s+stack\s+is|our\s+stack\s+is|we\s+build\s+with|i\s+build\s+with|i\s+code\s+in|my\s+primary\s+stack\s+is)\b/i,
-      /(?:my\s+goal\s+is|our\s+goal\s+is|i\s+am\s+working\s+on|i'm\s+working\s+on|we\s+plan\s+to\s+launch)\b/i,
-      /(?:i\s+work\s+as|my\s+job\s+is|i\s+work\s+at|i\s+am\s+a\s+[a-zA-Z0-9_\- ]+\s+at)\b/i,
-      /(?:i\s+prefer|my\s+preference\s+is|my\s+favorite\s+[a-zA-Z0-9_\- ]+\s+is)\b/i,
-      /(?:my\s+birthday\s+is|i\s+am\s+allergic\s+to|i\s+graduated\s+from)\b/i,
-    ];
-
-    if (personalPatterns.some((p) => p.test(trimmed))) {
-      return { hasIntent: true, type: 'implicit' };
-    }
-
-    // Substantive personal disclosure (> 30 chars with first-person pronouns)
-    if (trimmed.length >= 30 && /\b(i|my|mine|we|our)\b/i.test(trimmed) && !/^(hi|hello|how|what|why|who)\b/i.test(trimmed)) {
-      return { hasIntent: true, type: 'implicit' };
-    }
-
     return { hasIntent: false, type: 'none' };
+  }
+
+  /**
+   * Identifies casual trivial greetings and very short chit-chat that should not trigger automatic extraction.
+   */
+  public static isTrivialGreetingOrChitChat(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed.length < 3) return true;
+    const lower = trimmed.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+
+    const trivialPhrases = new Set([
+      'hi', 'hello', 'hey', 'yo', 'howdy', 'sup', 'heya',
+      'good morning', 'good afternoon', 'good evening', 'good day',
+      'how are you', 'how are you doing', 'hows it going', 'whats up',
+      'ok', 'okay', 'k', 'cool', 'nice', 'great', 'awesome', 'good',
+      'thanks', 'thank you', 'thx', 'ty', 'bye', 'goodbye', 'cya', 'see ya',
+      'lol', 'haha', 'hahaha', 'yes', 'no', 'yep', 'nope', 'sure'
+    ]);
+    if (trivialPhrases.has(lower)) return true;
+
+    if (
+      trimmed.length < 30 &&
+      /^(?:hi|hello|hey|yo|howdy|good\s+(?:morning|afternoon|evening)|how\s+are\s+you|what'?s\s+up|thanks|thank\s+you|bye|see\s+ya)\b/i.test(trimmed) &&
+      !/(?:remember|name|live|work|stack|goal|prefer|born|wife|husband|sister|brother|friend)/i.test(trimmed)
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Fast ranking helper that operates on pre-fetched memories without issuing another database read.
+   */
+  public static rankMemories(
+    query: string,
+    allMemories: MemoryItem[],
+    limit: number = 8,
+    recentDialogue?: string
+  ): MemoryItem[] {
+    if (!allMemories || allMemories.length === 0) {
+      return [];
+    }
+    const ranked: MemorySearchResult[] = searchRelevantMemories(
+      query,
+      allMemories,
+      limit,
+      0.4,
+      recentDialogue ? { recentDialogue } : undefined
+    );
+    return ranked.map((r: MemorySearchResult) => r.item);
   }
 
   /**
@@ -70,17 +102,7 @@ export class MemoryService {
   ): Promise<MemoryItem[]> {
     try {
       const allMemories = await DatabaseService.getMemories(userId);
-      if (!allMemories || allMemories.length === 0) {
-        return [];
-      }
-      const ranked: MemorySearchResult[] = searchRelevantMemories(
-        query,
-        allMemories,
-        limit,
-        0.4,
-        recentDialogue ? { recentDialogue } : undefined
-      );
-      return ranked.map((r: MemorySearchResult) => r.item);
+      return this.rankMemories(query, allMemories, limit, recentDialogue);
     } catch (err: any) {
       console.warn('[MemoryService] getRelevantMemories warning:', err.message);
       return [];
@@ -108,8 +130,8 @@ export class MemoryService {
 
   /**
    * AI-powered memory extraction pipeline:
-   * Evaluates user statements with contextual intelligence, supports explicit instructions,
-   * updates conflicting information, respects privacy and deletion directives, and persists to Supabase.
+   * Evaluates user statements with contextual intelligence, supports multiple facts per message,
+   * updates conflicting information, respects privacy directives, and persists to Supabase.
    */
   public static async extractAndStoreFromMessage(
     userMessage: string,
@@ -117,16 +139,33 @@ export class MemoryService {
     userId?: string,
     onStatusUpdate?: (status: AIActivityStatus, details?: any) => void,
     provider?: ITextAIProvider,
-    recentDialogue?: string
+    recentDialogue?: string,
+    providedMemories?: MemoryItem[]
   ): Promise<MemoryExtractionResult> {
     const trimmed = userMessage.trim();
     if (!trimmed || trimmed.length < 3) {
       return { action: 'none', memories: [] };
     }
 
+    const isProduction =
+      process.env.NODE_ENV === 'production' ||
+      Boolean(process.env.RENDER);
+
+    if (isProduction && !isSupabaseConfigured) {
+      const reason = 'Permanent memory storage is unavailable because Supabase is not configured in production (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are missing).';
+      console.warn('[MemoryService] ' + reason);
+      onStatusUpdate?.('Memory storage unavailable', { error: reason });
+      return {
+        action: 'failed',
+        memories: [],
+        error: reason,
+        feedbackMessage: 'Memory storage is currently unavailable in production because database credentials are not configured.',
+      };
+    }
+
     try {
-      // 1. Load existing memories belonging to the authenticated user for deduplication & context
-      const existingMemories = await DatabaseService.getMemories(userId);
+      // 1. Re-use existing memories if provided, or load once
+      const existingMemories = providedMemories || (await DatabaseService.getMemories(userId));
 
       // 2. Resolve active text provider for intelligent AI extraction if not provided
       let activeProvider = provider;
@@ -170,100 +209,82 @@ export class MemoryService {
         };
       }
 
-      if (decision.action === 'updated' && decision.candidates.length > 0) {
-        const candidate = decision.candidates[0];
-        onStatusUpdate?.('Saving memory…', { memoryFact: candidate.fact });
-
-        let updatedItem: MemoryItem;
-        if (candidate.updatesMemoryId) {
-          updatedItem = await DatabaseService.updateMemory(
-            candidate.updatesMemoryId,
-            {
-              fact: candidate.fact,
-              category: candidate.category,
-              memoryType: candidate.memoryType || 'confirmed_fact',
-              confidence: candidate.confidence,
-            },
-            userId
-          );
-        } else {
-          // Fallback if target ID was not specified: find matching subject or create
-          const existing = existingMemories.find((m) => m.category === candidate.category);
-          if (existing) {
-            updatedItem = await DatabaseService.updateMemory(
-              existing.id,
-              { fact: candidate.fact, confidence: candidate.confidence, memoryType: candidate.memoryType || 'confirmed_fact' },
-              userId
-            );
-          } else {
-            updatedItem = await DatabaseService.createMemory(
-              {
-                category: candidate.category,
-                fact: candidate.fact,
-                memoryType: candidate.memoryType || 'confirmed_fact',
-                confidence: candidate.confidence,
-                sourceConversationId: conversationId,
-              },
-              userId
-            );
-          }
-        }
-
-        const catLabel = getCategoryLabel(updatedItem.category);
-        onStatusUpdate?.((`Memory updated — ${catLabel}`) as any, {
-          memoryFact: candidate.fact,
-          memoryAction: 'updated',
-          category: updatedItem.category,
-        });
-
-        return {
-          action: 'updated',
-          memories: [updatedItem],
-          feedbackMessage: decision.feedbackMessage || `I've updated that in your memory.`,
-          factSummary: candidate.fact,
-        };
-      }
-
-      if (decision.action === 'saved' && decision.candidates.length > 0) {
-        const createdItems: MemoryItem[] = [];
+      if ((decision.action === 'saved' || decision.action === 'updated') && decision.candidates.length > 0) {
+        const processedItems: MemoryItem[] = [];
 
         for (const candidate of decision.candidates) {
           onStatusUpdate?.('Saving memory…', { memoryFact: candidate.fact });
 
-          const created = await DatabaseService.createMemory(
-            {
-              category: candidate.category,
-              fact: candidate.fact,
-              memoryType: candidate.memoryType || 'confirmed_fact',
-              confidence: candidate.confidence,
-              sourceConversationId: conversationId,
-            },
-            userId
-          );
-          createdItems.push(created);
+          if (candidate.updatesMemoryId) {
+            const updated = await DatabaseService.updateMemory(
+              candidate.updatesMemoryId,
+              {
+                fact: candidate.fact,
+                category: candidate.category,
+                memoryType: candidate.memoryType || 'confirmed_fact',
+                confidence: candidate.confidence,
+              },
+              userId
+            );
+            processedItems.push(updated);
+          } else {
+            // Check if there is an existing memory with same category & starting fact to update
+            const existing = existingMemories.find((m) =>
+              m.category === candidate.category &&
+              m.fact.toLowerCase().slice(0, 30) === candidate.fact.toLowerCase().slice(0, 30)
+            );
+            if (existing) {
+              const updated = await DatabaseService.updateMemory(
+                existing.id,
+                {
+                  fact: candidate.fact,
+                  memoryType: candidate.memoryType || 'confirmed_fact',
+                  confidence: candidate.confidence,
+                },
+                userId
+              );
+              processedItems.push(updated);
+            } else {
+              const created = await DatabaseService.createMemory(
+                {
+                  category: candidate.category,
+                  fact: candidate.fact,
+                  memoryType: candidate.memoryType || 'confirmed_fact',
+                  confidence: candidate.confidence,
+                  sourceConversationId: conversationId,
+                },
+                userId
+              );
+              processedItems.push(created);
+            }
+          }
         }
 
-        const primaryFact = createdItems[0]?.fact || 'New memory';
-        const primaryCat = createdItems[0]?.category || decision.candidates[0].category;
+        const primaryCat = processedItems[0]?.category || decision.candidates[0].category;
         const catLabel = getCategoryLabel(primaryCat);
+        const actionLabel = decision.action === 'updated' ? 'Memory updated' : 'Memory saved';
+        const displayLabel = processedItems.length > 1
+          ? `${actionLabel} — ${catLabel} (${processedItems.length} facts)`
+          : `${actionLabel} — ${catLabel}`;
 
-        onStatusUpdate?.((`Memory saved — ${catLabel}`) as any, {
-          memoryFact: primaryFact,
-          memoryAction: 'saved',
+        onStatusUpdate?.(displayLabel as any, {
+          memoryFact: processedItems.map((m) => m.fact).join('; '),
+          memoryAction: decision.action,
           category: primaryCat,
         });
 
         return {
-          action: 'saved',
-          memories: createdItems,
-          feedbackMessage: decision.feedbackMessage || `I'll remember that.`,
-          factSummary: primaryFact,
+          action: decision.action,
+          memories: processedItems,
+          feedbackMessage: decision.feedbackMessage || (decision.action === 'updated' ? `I've updated that in your memory.` : `I'll remember that.`),
+          factSummary: processedItems.map((m) => m.fact).join('; '),
         };
       }
 
       return { action: 'none', memories: [] };
     } catch (err: any) {
       console.error('[MemoryService] Persistence error saving memory:', err);
+      ErrorLogService.log('memory', err, { userId, conversationId });
       onStatusUpdate?.('Memory storage unavailable', { error: err.message });
       return {
         action: 'failed',

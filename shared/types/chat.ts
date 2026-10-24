@@ -37,6 +37,9 @@ export type AIActivityStatus =
   | 'Preparing answer...'
   | 'Answer complete'
   | 'Search failed — retry available'
+  | 'Checking servers…'
+  | 'Checking Supabase…'
+  | 'Reading error logs…'
   | (string & {});
 
 export interface WebSearchResultItem {
@@ -144,6 +147,7 @@ export interface SendMessagePayload {
   personaId?: string;
   textProvider?: TextProviderType;
   isVoiceMode?: boolean;
+  isOwner?: boolean;
   userContext?: {
     userName?: string;
     timezone?: string;

@@ -1,11 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { DatabaseService } from '../database/db-service';
+import { isSupabaseConfigured } from '../database/supabase';
 import { MemoryService } from './memory.service';
 import { TavilyService } from './tavily.service';
 import { SearchDecisionService } from './search-decision.service';
 import { ToolRegistry } from '../tools/tool-registry';
 import { ToolExecutor } from '../tools/tool-executor';
+import { ErrorLogService } from './error-log.service';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { assembleConversationContext } from '../../../ai/brain/context-handler';
 import { cleanAndNormalizeResponseContent } from '../../../ai/brain/response-cleaner';
@@ -108,77 +110,14 @@ export class ChatService {
       .map((m) => `${m.role.toUpperCase()}: ${m.content.slice(0, 200)}`)
       .join('\n');
 
-    // 5. Memory Management: Scoped to authenticated user across ALL conversations
+    // 5. Memory Management & Parallel Context Loading
+    const isProduction =
+      process.env.NODE_ENV === 'production' ||
+      Boolean(process.env.RENDER);
+
     let relevantMemories: any[] = [];
     let activeMemoryResult: MemoryExtractionResult | undefined;
-
-    if (profile.memorySettings.enabled) {
-      onStatusUpdate?.('Checking memories...');
-      try {
-        relevantMemories = await MemoryService.getRelevantMemories(
-          payload.message,
-          profile.memorySettings.maxContextMemories || 8,
-          payload.userId,
-          recentDialogueSnippet
-        );
-      } catch (err: any) {
-        console.warn('[ChatService] Memory retrieval notice:', err.message);
-        onStatusUpdate?.('Memory retrieval failed', { error: err.message });
-      }
-
-      // Check if current user message contains explicit remember instructions or durable personal facts
-      const memoryIntent = MemoryService.detectMemoryIntent(payload.message);
-      const isExplicitInstruction =
-        memoryIntent.type === 'explicit' ||
-        memoryIntent.type === 'forget' ||
-        memoryIntent.type === 'privacy';
-      const shouldExtract =
-        isExplicitInstruction ||
-        (profile.memorySettings.autoExtract && memoryIntent.hasIntent);
-
-      if (shouldExtract) {
-        try {
-          activeMemoryResult = await MemoryService.extractAndStoreFromMessage(
-            payload.message,
-            convId,
-            payload.userId,
-            onStatusUpdate,
-            primaryProvider,
-            recentDialogueSnippet
-          );
-
-          // If a memory was successfully saved or updated, include it in context memories
-          if (activeMemoryResult && (activeMemoryResult.action === 'saved' || activeMemoryResult.action === 'updated')) {
-            if (activeMemoryResult.memories && activeMemoryResult.memories.length > 0) {
-              const newMem = activeMemoryResult.memories[0];
-              const exists = relevantMemories.some((m) => m.id === newMem.id);
-              if (!exists) {
-                relevantMemories = [newMem, ...relevantMemories];
-              }
-            }
-          }
-        } catch (err: any) {
-          console.error('[ChatService] Memory extraction/storage error:', err);
-          activeMemoryResult = {
-            action: 'failed',
-            memories: [],
-            error: err.message,
-            feedbackMessage: 'Could not persist memory to database.',
-          };
-          onStatusUpdate?.('Memory storage unavailable', { error: err.message });
-        }
-      }
-    }
-
-    // 6. Cross-conversation Research History
     let relevantResearch: ResearchHistoryItem[] = [];
-    try {
-      relevantResearch = await DatabaseService.getResearchHistory(payload.userId, undefined, 4);
-    } catch (err: any) {
-      console.warn('[ChatService] Research history retrieval notice:', err.message);
-    }
-
-    // 6b. Cross-conversation Past Messages (Connected history across all chats)
     let relevantPastConversations: Array<{
       conversationId: string;
       conversationTitle: string;
@@ -186,23 +125,111 @@ export class ChatService {
       content: string;
       createdAt: string;
     }> = [];
-    try {
-      const isPastChatInquiry =
-        /(?:past\s+conversation|earlier\s+chat|other\s+chat|previous\s+chat|what\s+have\s+i\s+told\s+you|analyze\s+my\s+past|what\s+patterns\s+do\s+you\s+notice|last\s+time\s+we\s+talked|remember\s+when|we\s+discussed|did\s+i\s+mention)/i.test(
-          payload.message
-        );
 
-      const pastMsgs = await DatabaseService.searchPastMessages(
-        payload.userId,
-        isPastChatInquiry ? payload.message : undefined,
-        convId,
-        4
-      );
-      if (pastMsgs && pastMsgs.length > 0) {
-        relevantPastConversations = pastMsgs;
+    // Warn clearly if Supabase is unconfigured in production environment
+    if (profile.memorySettings.enabled && !isSupabaseConfigured && isProduction) {
+      onStatusUpdate?.('Memory storage unavailable', {
+        error: 'Permanent memory storage is unavailable because Supabase is not configured in production (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY missing).',
+      });
+    }
+
+    // Step A: Fetch user memories ONCE per message (leveraging the 60s server cache in DatabaseService)
+    let userMemories: any[] = [];
+    if (profile.memorySettings.enabled) {
+      onStatusUpdate?.('Checking memories...');
+      try {
+        userMemories = await DatabaseService.getMemories(payload.userId);
+        relevantMemories = MemoryService.rankMemories(
+          payload.message,
+          userMemories,
+          profile.memorySettings.maxContextMemories || 8,
+          recentDialogueSnippet
+        );
+      } catch (err: any) {
+        console.warn('[ChatService] Memory retrieval notice:', err.message);
+        onStatusUpdate?.('Memory retrieval failed', { error: err.message });
       }
-    } catch (err: any) {
+    }
+
+    // Step B: Determine if extraction should run
+    // Run AIMemoryExtractor on every message except trivial greetings and very short chit-chat.
+    // Keep the regex only for explicit remember, forget and privacy commands.
+    const memoryIntent = MemoryService.detectMemoryIntent(payload.message);
+    const isExplicitDirective =
+      memoryIntent.type === 'explicit' ||
+      memoryIntent.type === 'forget' ||
+      memoryIntent.type === 'privacy';
+    const isTrivial = MemoryService.isTrivialGreetingOrChitChat(payload.message);
+    const shouldExtract =
+      profile.memorySettings.enabled &&
+      (isExplicitDirective || (profile.memorySettings.autoExtract && !isTrivial));
+
+    // Step C: Run extraction AT THE SAME TIME as the other context loading (research history and past conversations)
+    const extractionPromise = shouldExtract
+      ? MemoryService.extractAndStoreFromMessage(
+          payload.message,
+          convId,
+          payload.userId,
+          onStatusUpdate,
+          primaryProvider,
+          recentDialogueSnippet,
+          userMemories
+        ).catch((err: any) => {
+          console.error('[ChatService] Memory extraction/storage error:', err);
+          onStatusUpdate?.('Memory storage unavailable', { error: err.message });
+          return {
+            action: 'failed' as const,
+            memories: [],
+            error: err.message,
+            feedbackMessage: 'Could not persist memory to database.',
+          };
+        })
+      : Promise.resolve(undefined);
+
+    const researchPromise = DatabaseService.getResearchHistory(payload.userId, undefined, 4)
+      .catch((err: any) => {
+        console.warn('[ChatService] Research history retrieval notice:', err.message);
+        return [] as ResearchHistoryItem[];
+      });
+
+    const isPastChatInquiry =
+      /(?:past\s+conversation|earlier\s+chat|other\s+chat|previous\s+chat|what\s+have\s+i\s+told\s+you|analyze\s+my\s+past|what\s+patterns\s+do\s+you\s+notice|last\s+time\s+we\s+talked|remember\s+when|we\s+discussed|did\s+i\s+mention)/i.test(
+        payload.message
+      );
+
+    const pastConversationsPromise = DatabaseService.searchPastMessages(
+      payload.userId,
+      isPastChatInquiry ? payload.message : undefined,
+      convId,
+      4
+    ).catch((err: any) => {
       console.warn('[ChatService] Past messages retrieval notice:', err.message);
+      return [];
+    });
+
+    // Await extraction and other context loading in parallel
+    const [extractionRes, researchRes, pastConvsRes] = await Promise.all([
+      extractionPromise,
+      researchPromise,
+      pastConversationsPromise,
+    ]);
+
+    activeMemoryResult = extractionRes;
+    relevantResearch = researchRes;
+    if (pastConvsRes && pastConvsRes.length > 0) {
+      relevantPastConversations = pastConvsRes;
+    }
+
+    // If new memory/memories were saved or updated, include all of them in relevantMemories for immediate context
+    if (activeMemoryResult && (activeMemoryResult.action === 'saved' || activeMemoryResult.action === 'updated')) {
+      if (activeMemoryResult.memories && activeMemoryResult.memories.length > 0) {
+        for (const newMem of activeMemoryResult.memories) {
+          const exists = relevantMemories.some((m) => m.id === newMem.id);
+          if (!exists) {
+            relevantMemories = [newMem, ...relevantMemories];
+          }
+        }
+      }
     }
 
     // 7. Assemble modular brain context
@@ -293,6 +320,8 @@ ${projectEnv}
       const toolContext = {
         userId: payload.userId,
         conversationId: convId,
+        isOwner: payload.isOwner,
+        onStatusUpdate,
         userContext: payload.userContext,
       };
       const toolDeclarations = await toolRegistry.getToolDeclarations(toolContext);
@@ -318,6 +347,11 @@ ${projectEnv}
           currentResponse = await primaryProvider.generateResponse(genRequest);
         } catch (callErr: any) {
           console.warn(`[ChatService] Native tool round ${round} error with ${primaryProviderType}:`, callErr.message);
+          ErrorLogService.log('ai_provider', callErr, {
+            provider: primaryProviderType,
+            round,
+            conversationId: convId,
+          });
           if (searchResults.length > 0) {
             console.log('[ChatService] Tool round failed after web search returned results. Recovering with plain-text synthesis...');
             break;
@@ -357,6 +391,10 @@ ${projectEnv}
               searchDecisionCategory = 'technical_docs';
               searchDecisionReason = 'Model dynamically invoked web search';
               onStatusUpdate?.('Searching the web...', { query: finalSearchQuery });
+            } else if (tc.name === 'system_check') {
+              onStatusUpdate?.('Checking servers…');
+            } else if (tc.name === 'recent_errors') {
+              onStatusUpdate?.('Reading error logs…');
             } else if (tc.name === 'memory_search') {
               onStatusUpdate?.('Recalling personal context...');
             } else if (tc.name === 'past_conversations_search') {
@@ -377,6 +415,10 @@ ${projectEnv}
               );
             } catch (toolExecErr: any) {
               console.warn(`[ChatService] Tool execution error for ${tc.name}:`, toolExecErr.message);
+              ErrorLogService.log('system', toolExecErr, {
+                toolName: tc.name,
+                conversationId: convId,
+              });
               toolResult = { success: false, error: toolExecErr.message };
             }
 

@@ -32,6 +32,8 @@ import {
   Brain,
   Trash2,
   Edit2,
+  Key,
+  ShieldCheck,
 } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useBrainSettings } from '../../hooks/useBrainSettings';
@@ -47,7 +49,7 @@ import {
 } from '../../../shared/types';
 import { MemoryItem, getCategoryLabel } from '../../../shared/types/memory';
 import { safeStorage } from '../../services/storage';
-import { ApiClient, ProviderTestResult } from '../../services/api.client';
+import { ApiClient, ProviderTestResult, getOwnerAccessKey, setOwnerAccessKey } from '../../services/api.client';
 import { AudioPlayer } from '../../services/audioPlayer';
 import { PersonalVoiceSetupModal } from '../voice/PersonalVoiceSetupModal';
 
@@ -74,6 +76,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [streamText, setStreamText] = useState(true);
   const [soundEffects, setSoundEffects] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // Owner Authorization Key (Stored on this device only)
+  const [ownerKey, setOwnerKey] = useState<string>(() => getOwnerAccessKey());
+  const [showOwnerKey, setShowOwnerKey] = useState(false);
 
   // Independent AI Provider Selections
   const [textProvider, setTextProvider] = useState<TextProviderType>(() => {
@@ -459,6 +465,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     safeStorage.setItem('jexa_text_provider', textProvider);
     safeStorage.setItem('jexa_voice_provider', voiceProvider);
     safeStorage.setItem('jexa_voice_name', voiceName);
+    setOwnerAccessKey(ownerKey);
     setSaveError(null);
 
     try {
@@ -1979,6 +1986,51 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   className="w-4 h-4 rounded accent-emerald-500 cursor-pointer"
                 />
               </div>
+            </div>
+          </div>
+
+          {/* Owner Key Section (Saved on this device only) */}
+          <div className="space-y-2 pt-3 border-t border-white/[0.06]">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Owner Authorization</span>
+              </label>
+              <span className="text-[9px] text-slate-500 font-mono">This device only</span>
+            </div>
+
+            <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-medium text-white flex items-center gap-1.5">
+                    <Key className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Owner key</span>
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Saved on this device only. Grants access to self-check diagnostics & error logs.
+                  </div>
+                </div>
+              </div>
+
+              <div className="relative flex items-center">
+                <input
+                  type={showOwnerKey ? 'text' : 'password'}
+                  value={ownerKey}
+                  onChange={(e) => setOwnerKey(e.target.value)}
+                  placeholder="Enter OWNER_ACCESS_KEY..."
+                  className="w-full px-3 py-2 text-xs font-mono bg-black/40 border border-white/[0.1] rounded-lg text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500/60 pr-12"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowOwnerKey(!showOwnerKey)}
+                  className="absolute right-2 px-2 py-1 text-slate-400 hover:text-slate-200 text-[10px] font-medium"
+                >
+                  {showOwnerKey ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              <p className="text-[9px] text-slate-500">
+                Matches the server's <code className="text-slate-400 font-mono">OWNER_ACCESS_KEY</code>. If unset on the server, nobody is the owner.
+              </p>
             </div>
           </div>
 

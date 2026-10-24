@@ -49,6 +49,22 @@ export function getClientUserId(): string {
   return uid;
 }
 
+const OWNER_KEY_STORAGE = 'jexa_owner_key';
+
+export function getOwnerAccessKey(): string {
+  return safeStorage.getItem(OWNER_KEY_STORAGE) || '';
+}
+
+export function setOwnerAccessKey(key: string): void {
+  const trimmed = key ? key.trim() : '';
+  if (trimmed) {
+    safeStorage.setItem(OWNER_KEY_STORAGE, trimmed);
+  } else {
+    safeStorage.removeItem(OWNER_KEY_STORAGE);
+  }
+}
+
+
 // =========================================================================
 // Centralized API Configuration for GitHub Pages & Render Deployment
 // =========================================================================
@@ -147,6 +163,10 @@ async function fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 
   const customHeaders: Record<string, string> = {
     'x-user-id': uid,
   };
+  const ownerKey = getOwnerAccessKey();
+  if (ownerKey) {
+    customHeaders['x-owner-key'] = ownerKey;
+  }
   if (authenticatedToken) {
     customHeaders['Authorization'] = `Bearer ${authenticatedToken}`;
   }
@@ -279,6 +299,10 @@ export const ApiClient = {
     const uid = getClientUserId();
     if (uid) {
       headers['x-user-id'] = uid;
+    }
+    const ownerKey = getOwnerAccessKey();
+    if (ownerKey) {
+      headers['x-owner-key'] = ownerKey;
     }
     if (authenticatedToken) {
       headers['Authorization'] = `Bearer ${authenticatedToken}`;

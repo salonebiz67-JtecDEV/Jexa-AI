@@ -285,3 +285,23 @@ CREATE TABLE IF NOT EXISTS public.research_history (
 ALTER TABLE public.research_history ENABLE ROW LEVEL SECURITY;
 CREATE INDEX IF NOT EXISTS idx_research_history_user ON public.research_history(user_id, searched_at DESC);
 
+-- =========================================================================
+-- 12. SYSTEM ERROR LOGS TABLE (Operational Health & Error Tracking)
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.system_error_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source TEXT NOT NULL,
+    message TEXT NOT NULL,
+    details JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.system_error_logs ENABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS idx_system_error_logs_created ON public.system_error_logs(created_at DESC);
+
+-- Policy for system error logs: accessible by service role and authenticated checks
+DROP POLICY IF EXISTS "Service role can manage system_error_logs" ON public.system_error_logs;
+CREATE POLICY "Service role can manage system_error_logs" ON public.system_error_logs
+    FOR ALL USING (true) WITH CHECK (true);
+
+
