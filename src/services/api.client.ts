@@ -252,6 +252,9 @@ export interface SendMessageStreamOptions {
       sources?: WebSearchResultItem[];
       searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results';
       searchTrigger?: 'manual' | 'automatic' | 'none';
+      provider?: string;
+      model?: string;
+      fallbackUsed?: boolean;
     }
   ) => void;
   onChunk?: (chunk: string) => void;
@@ -367,6 +370,9 @@ export const ApiClient = {
                 options?.onComplete?.(event.data);
               } else if (event.type === 'error') {
                 const err = new ApiError(event.error || 'Server error during chat stream.', 500, event.code);
+                (err as any).provider = event.provider;
+                (err as any).model = event.model;
+                (err as any).fallbackUsed = event.fallbackUsed;
                 throw err;
               }
             }
@@ -385,7 +391,10 @@ export const ApiClient = {
       const body = await response.json();
       if (body.success === false) {
         const errorMsg = body?.error || body?.message || 'Chat request failed';
-        throw new ApiError(errorMsg, response.status, body?.code, body?.provider);
+        const err = new ApiError(errorMsg, response.status, body?.code, body?.provider || body?.details?.provider);
+        (err as any).model = body?.model || body?.details?.model;
+        (err as any).fallbackUsed = body?.fallbackUsed || body?.details?.fallbackUsed;
+        throw err;
       }
       const result: ChatResponsePayload = body.data !== undefined ? body.data : body;
       options?.onStatusUpdate?.('Answer complete');

@@ -78,6 +78,9 @@ export class ChatController {
           type: 'error',
           error: formatted.cleanMessage,
           status: 'Search failed — retry available',
+          provider: error.provider || formatted.provider,
+          model: error.model,
+          fallbackUsed: Boolean(error.fallbackUsed),
         });
         res.end();
       }
@@ -103,7 +106,9 @@ export class ChatController {
 
       res.status(formatted.statusCode).json({
         success: false,
-        provider: error.provider || 'text_ai',
+        provider: error.provider || formatted.provider || 'text_ai',
+        model: error.model,
+        fallbackUsed: Boolean(error.fallbackUsed),
         code: formatted.code,
         message: formatted.cleanMessage,
         error: formatted.cleanMessage,

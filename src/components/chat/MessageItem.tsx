@@ -781,6 +781,19 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   )}
                 </div>
               )}
+
+              {/* Provider & Model metadata tag */}
+              {message.metadata?.provider && (
+                <div className="ml-auto flex items-center gap-1.5 text-[10px] font-mono text-slate-500 select-none">
+                  <span className="capitalize">{message.metadata.provider}</span>
+                  {message.metadata.model && <span>({message.metadata.model})</span>}
+                  {message.metadata.fallbackUsed && (
+                    <span className="text-amber-400 font-sans text-[9px] font-semibold bg-amber-500/15 px-1 rounded border border-amber-500/30">
+                      Fallback
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Collapsible ChatGPT-style Sources section directly underneath answer and action buttons */}

@@ -206,6 +206,10 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     }
 
     console.error('[GeminiTextAIProvider] API call failed:', lastError);
+    if (lastError && typeof lastError === 'object') {
+      (lastError as any).provider = 'gemini';
+      (lastError as any).model = this.modelName;
+    }
     ErrorLogService.log('ai_provider', lastError, { provider: 'gemini', model: this.modelName });
     const formatted = formatCleanProviderError(lastError);
     this.lastError = formatted.cleanMessage;
@@ -215,7 +219,8 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       'gemini',
       formatted.code,
       formatted.statusCode,
-      this.modelName
+      this.modelName,
+      formatted.retryAfterSeconds
     );
   }
 
@@ -272,6 +277,10 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       };
     } catch (error: any) {
       console.error('[GeminiTextAIProvider] Streaming failed:', error);
+      if (error && typeof error === 'object') {
+        (error as any).provider = 'gemini';
+        (error as any).model = this.modelName;
+      }
       ErrorLogService.log('ai_provider', error, { provider: 'gemini', model: this.modelName, stream: true });
       const formatted = formatCleanProviderError(error);
       this.lastError = formatted.cleanMessage;
@@ -280,7 +289,8 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         'gemini',
         formatted.code,
         formatted.statusCode,
-        this.modelName
+        this.modelName,
+        formatted.retryAfterSeconds
       );
     }
   }

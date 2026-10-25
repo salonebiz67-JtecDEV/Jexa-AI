@@ -41,6 +41,38 @@ export class MemoryService {
   }
 
   /**
+   * Identifies questions or system/tool commands where automatic AI memory extraction
+   * should be skipped to conserve tokens and avoid redundant AI calls.
+   */
+  public static isQuestionOrCommand(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+
+    // Check for system or slash commands
+    if (
+      trimmed.startsWith('/') ||
+      /^(?:system_check|recent_errors|check\s+(?:the\s+)?systems?|check\s+servers?|check\s+supabase|is\s+supabase\s+(?:ok|okay)|are\s+systems\s+up|error\s+logs?|any\s+(?:bugs|errors)\??|ping|status\s+check|run\s+test|diagnose)\b/i.test(trimmed)
+    ) {
+      return true;
+    }
+
+    // Check for questions: ends with question mark or begins with standard question phrases
+    if (trimmed.endsWith('?')) {
+      return true;
+    }
+
+    if (
+      /^(?:what|who|where|when|why|how|which|whose|whom|can\s+you|could\s+you|would\s+you|should\s+i|should\s+you|do\s+you|did\s+you|does\s+it|is\s+it|is\s+there|are\s+there|are\s+you|will\s+it|tell\s+me\s+about|explain|describe|search\s+for|find\s+out|look\s+up)\b/i.test(
+        trimmed
+      )
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
    * Identifies casual trivial greetings and very short chit-chat that should not trigger automatic extraction.
    */
   public static isTrivialGreetingOrChitChat(text: string): boolean {
@@ -144,6 +176,16 @@ export class MemoryService {
   ): Promise<MemoryExtractionResult> {
     const trimmed = userMessage.trim();
     if (!trimmed || trimmed.length < 3) {
+      return { action: 'none', memories: [] };
+    }
+
+    // Skip AI extraction for questions and system/tool commands unless explicit directive
+    const memoryIntent = this.detectMemoryIntent(trimmed);
+    const isExplicitDirective =
+      memoryIntent.type === 'explicit' ||
+      memoryIntent.type === 'forget' ||
+      memoryIntent.type === 'privacy';
+    if (!isExplicitDirective && this.isQuestionOrCommand(trimmed)) {
       return { action: 'none', memories: [] };
     }
 
@@ -283,6 +325,19 @@ export class MemoryService {
 
       return { action: 'none', memories: [] };
     } catch (err: any) {
+      const errStr = String(err?.message || err?.details || err || '').toLowerCase();
+      const isRateLimit =
+        err?.status === 429 ||
+        err?.statusCode === 429 ||
+        err?.code === 429 ||
+        err?.code === 'RESOURCE_EXHAUSTED' ||
+        /rate[-_\s]?limit|quota|resource_exhausted|too\s+many\s+requests|high\s+demand/i.test(errStr);
+
+      if (isRateLimit) {
+        console.warn('[MemoryService] AI Provider rate limit encountered during memory extraction. Skipping extraction silently.');
+        return { action: 'none', memories: [] };
+      }
+
       console.error('[MemoryService] Persistence error saving memory:', err);
       ErrorLogService.log('memory', err, { userId, conversationId });
       onStatusUpdate?.('Memory storage unavailable', { error: err.message });

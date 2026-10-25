@@ -58,8 +58,33 @@ export type StatusUpdateCallback = (
     sources?: WebSearchResultItem[];
     searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results';
     searchTrigger?: 'manual' | 'automatic' | 'none';
+    provider?: string;
+    model?: string;
+    fallbackUsed?: boolean;
   }
 ) => void;
+
+function isRateLimitOrQuotaError(err: any): boolean {
+  if (!err) return false;
+  if (err.status === 429 || err.statusCode === 429 || err.code === 429 || err.code === 'RESOURCE_EXHAUSTED') {
+    return true;
+  }
+  const str = String(err.message || err.details || err || '').toLowerCase();
+  return /rate[-_\s]?limit|quota|resource_exhausted|too\s+many\s+requests|high\s+demand/i.test(str);
+}
+
+function extractRetryAfterSeconds(err: any): number | undefined {
+  if (typeof err?.retryAfterSeconds === 'number' && !isNaN(err.retryAfterSeconds)) {
+    return err.retryAfterSeconds;
+  }
+  const str = String(err?.message || err?.details || err || '');
+  const match = str.match(/retry(?:-after|\s+after|\s+in)?\s*(?:about\s*)?(\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?/i);
+  if (match && match[1]) {
+    const val = parseFloat(match[1]);
+    if (!isNaN(val)) return val;
+  }
+  return undefined;
+}
 
 export type ChunkCallback = (chunk: string) => void;
 
@@ -152,19 +177,20 @@ export class ChatService {
     }
 
     // Step B: Determine if extraction should run
-    // Run AIMemoryExtractor on every message except trivial greetings and very short chit-chat.
-    // Keep the regex only for explicit remember, forget and privacy commands.
+    // Skip extraction for questions and system/tool commands to reduce AI calls per message.
     const memoryIntent = MemoryService.detectMemoryIntent(payload.message);
     const isExplicitDirective =
       memoryIntent.type === 'explicit' ||
       memoryIntent.type === 'forget' ||
       memoryIntent.type === 'privacy';
     const isTrivial = MemoryService.isTrivialGreetingOrChitChat(payload.message);
+    const isQuestionOrCmd = MemoryService.isQuestionOrCommand(payload.message);
     const shouldExtract =
       profile.memorySettings.enabled &&
-      (isExplicitDirective || (profile.memorySettings.autoExtract && !isTrivial));
+      (isExplicitDirective || (profile.memorySettings.autoExtract && !isTrivial && !isQuestionOrCmd));
 
     // Step C: Run extraction AT THE SAME TIME as the other context loading (research history and past conversations)
+    // Extraction runs at most once per message, skips silently if provider is rate limited, and never blocks or breaks the reply.
     const extractionPromise = shouldExtract
       ? MemoryService.extractAndStoreFromMessage(
           payload.message,
@@ -174,14 +200,11 @@ export class ChatService {
           primaryProvider,
           recentDialogueSnippet,
           userMemories
-        ).catch((err: any) => {
-          console.error('[ChatService] Memory extraction/storage error:', err);
-          onStatusUpdate?.('Memory storage unavailable', { error: err.message });
+        ).catch(() => {
+          // Silently skip extraction on any error or rate limit to guarantee chat reply is never broken
           return {
-            action: 'failed' as const,
+            action: 'none' as const,
             memories: [],
-            error: err.message,
-            feedbackMessage: 'Could not persist memory to database.',
           };
         })
       : Promise.resolve(undefined);
@@ -314,7 +337,14 @@ ${projectEnv}
 
     // PATH 1: Native Function Calling Tool Loop (AI decides dynamically when to use tools)
     if (providerSupportsTools && !isManualSearchToggle && primaryProvider) {
-      onStatusUpdate?.('Processing information...');
+      let activeProvider = primaryProvider;
+      let activeProviderType = primaryProviderType;
+
+      onStatusUpdate?.('Processing information...', {
+        provider: activeProviderType,
+        model: activeProvider.modelName,
+        fallbackUsed,
+      });
 
       const toolRegistry = ToolRegistry.getInstance();
       const toolContext = {
@@ -333,31 +363,97 @@ ${projectEnv}
       while (round < MAX_ROUNDS) {
         round++;
 
+        // Shrink second-round+ requests: send only the last 6 messages of history in tool rounds
+        const roundMessages = round > 1 ? activeMessages.slice(-6) : activeMessages;
+
         const genRequest: TextGenerationRequest = {
           systemPrompt: augmentedSystemPrompt,
-          messages: activeMessages,
+          messages: roundMessages,
           temperature: 0.7,
           maxTokens: 1200,
           tools: toolDeclarations,
           toolChoice: 'auto',
         };
 
-        let currentResponse: TextGenerationResponse;
+        let currentResponse: TextGenerationResponse | null = null;
         try {
-          currentResponse = await primaryProvider.generateResponse(genRequest);
+          currentResponse = await activeProvider.generateResponse(genRequest);
         } catch (callErr: any) {
-          console.warn(`[ChatService] Native tool round ${round} error with ${primaryProviderType}:`, callErr.message);
+          console.warn(`[ChatService] Native tool round ${round} error with ${activeProviderType}:`, callErr.message);
           ErrorLogService.log('ai_provider', callErr, {
-            provider: primaryProviderType,
+            provider: activeProviderType,
             round,
             conversationId: convId,
           });
-          if (searchResults.length > 0) {
-            console.log('[ChatService] Tool round failed after web search returned results. Recovering with plain-text synthesis...');
-            break;
+
+          // In tool loop rounds after the first one, retry on rate limit / quota error
+          if (round > 1 && isRateLimitOrQuotaError(callErr)) {
+            const retryAfter = extractRetryAfterSeconds(callErr);
+            let recovered = false;
+
+            // If error includes a retry-after under 5 seconds, wait that long and retry once on same provider first
+            if (retryAfter !== undefined && retryAfter > 0 && retryAfter <= 5) {
+              const waitMs = Math.ceil(retryAfter * 1000) + 100;
+              console.log(`[ChatService] Rate limit with retry-after ${retryAfter}s <= 5s. Waiting ${waitMs}ms to retry on ${activeProviderType}...`);
+              await new Promise((resolve) => setTimeout(resolve, waitMs));
+              try {
+                currentResponse = await activeProvider.generateResponse(genRequest);
+                recovered = true;
+              } catch (retryErr: any) {
+                console.warn(`[ChatService] Retry on same provider ${activeProviderType} failed:`, retryErr.message);
+              }
+            }
+
+            // If still not recovered, retry the same conversation (including tool results) on the other provider before giving up
+            if (!recovered) {
+              const otherProviderType: TextProviderType = activeProviderType === 'gemini' ? 'groq' : 'gemini';
+              const otherProvider = registry.getTextProvider(otherProviderType);
+
+              if (otherProvider && otherProvider.providerType !== 'development_mock') {
+                console.log(`[ChatService] Failing over tool round ${round} to alternate provider '${otherProviderType}'...`);
+                try {
+                  activeProvider = otherProvider;
+                  activeProviderType = otherProviderType;
+                  fallbackUsed = true;
+                  onStatusUpdate?.('Processing information...', {
+                    provider: activeProviderType,
+                    model: activeProvider.modelName,
+                    fallbackUsed: true,
+                  });
+                  currentResponse = await activeProvider.generateResponse(genRequest);
+                  recovered = true;
+                  console.log(`[ChatService] Failover to '${otherProviderType}' succeeded for tool round ${round}.`);
+                } catch (otherErr: any) {
+                  console.error(`[ChatService] Failover to '${otherProviderType}' also failed:`, otherErr.message);
+                  ErrorLogService.log('ai_provider', otherErr, {
+                    provider: otherProviderType,
+                    round,
+                    conversationId: convId,
+                  });
+                  callErr = otherErr;
+                }
+              }
+            }
+
+            if (!recovered) {
+              if (searchResults.length > 0) {
+                console.log('[ChatService] Tool round failed after web search returned results. Recovering with plain-text synthesis...');
+                break;
+              }
+              throw callErr;
+            }
+          } else {
+            if (searchResults.length > 0) {
+              console.log('[ChatService] Tool round failed after web search returned results. Recovering with plain-text synthesis...');
+              break;
+            }
+            if (round === 1) break; // Allow fallback to take over
+            throw callErr;
           }
-          if (round === 1) break; // Allow fallback to take over
-          throw callErr;
+        }
+
+        if (!currentResponse) {
+          break;
         }
 
         if (
@@ -532,6 +628,14 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
               toolContentForModel = JSON.stringify(toolResult.data || { result: toolResult.success, error: toolResult.error });
             }
 
+            // Shrink the request: cut each tool result to about 1500 characters
+            const MAX_TOOL_CHARS = 1500;
+            if (toolContentForModel && toolContentForModel.length > MAX_TOOL_CHARS) {
+              toolContentForModel =
+                toolContentForModel.slice(0, MAX_TOOL_CHARS) +
+                '\n... [truncated to 1500 characters for token conservation]';
+            }
+
             activeMessages.push({
               role: 'tool',
               toolCallId: tc.id,
@@ -550,7 +654,11 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
       // Make one final call without tools, giving the model the search results as plain text,
       // so the user still gets an answer with sources.
       if (!providerResponse && searchResults.length > 0) {
-        onStatusUpdate?.('Synthesizing research results...');
+        onStatusUpdate?.('Synthesizing research results...', {
+          provider: activeProviderType,
+          model: activeProvider.modelName,
+          fallbackUsed,
+        });
         const formattedSources = searchResults
           .map((src, idx) => {
             const authBadge = src.authoritative ? ' [AUTHORITATIVE SOURCE]' : '';
@@ -591,34 +699,34 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
 
         const fallbackRequest: TextGenerationRequest = {
           systemPrompt: synthesisSystemPrompt,
-          messages: assembled.formattedMessages,
+          messages: round > 1 ? activeMessages.slice(-6) : assembled.formattedMessages,
           temperature: 0.7,
           maxTokens: 1200,
           toolChoice: 'none',
         };
 
         try {
-          if (onChunk && typeof primaryProvider.streamResponse === 'function') {
-            providerResponse = await primaryProvider.streamResponse(fallbackRequest, (chunk) => {
+          if (onChunk && typeof activeProvider.streamResponse === 'function') {
+            providerResponse = await activeProvider.streamResponse(fallbackRequest, (chunk) => {
               onChunk(chunk);
             });
           } else {
-            providerResponse = await primaryProvider.generateResponse(fallbackRequest);
+            providerResponse = await activeProvider.generateResponse(fallbackRequest);
           }
         } catch (synthErr: any) {
-          console.warn('[ChatService] Plain-text synthesis round with primary provider failed:', synthErr.message);
+          console.warn('[ChatService] Plain-text synthesis round with active provider failed:', synthErr.message);
         }
       } else if (!providerResponse) {
         // If loop finished rounds without final text and without search results, request final synthesis without tools
         const finalReq: TextGenerationRequest = {
           systemPrompt: augmentedSystemPrompt,
-          messages: activeMessages,
+          messages: round > 1 ? activeMessages.slice(-6) : activeMessages,
           temperature: 0.7,
           maxTokens: 1200,
           toolChoice: 'none',
         };
         try {
-          providerResponse = await primaryProvider.generateResponse(finalReq);
+          providerResponse = await activeProvider.generateResponse(finalReq);
         } catch (finalErr: any) {
           console.warn('[ChatService] Error in final synthesis round:', finalErr.message);
         }
@@ -857,7 +965,11 @@ INSTRUCTIONS:
 4. Format your response with readable paragraphs. Do not force into tables. Never output literal <br> tags.`;
       }
 
-      onStatusUpdate?.('Preparing answer...');
+      onStatusUpdate?.('Preparing answer...', {
+        provider: primaryProviderType,
+        model: primaryProvider?.modelName,
+        fallbackUsed: false,
+      });
 
       const genRequest: TextGenerationRequest = {
         systemPrompt: fallbackSystemPrompt,
@@ -892,6 +1004,11 @@ INSTRUCTIONS:
         if (fallbackProvider) {
           try {
             console.log(`[ChatService] Attempting automatic failover to '${fallbackProviderType}'...`);
+            onStatusUpdate?.('Preparing answer...', {
+              provider: fallbackProviderType,
+              model: fallbackProvider.modelName,
+              fallbackUsed: true,
+            });
             if (onChunk && typeof fallbackProvider.streamResponse === 'function') {
               providerResponse = await fallbackProvider.streamResponse(genRequest, (chunk) => {
                 onChunk(chunk);

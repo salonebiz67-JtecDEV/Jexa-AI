@@ -136,18 +136,33 @@ export class ProviderError extends Error {
   public code: string;
   public statusCode: number;
   public model?: string;
+  public retryAfterSeconds?: number;
 
-  constructor(message: string, provider: string, code = 'PROVIDER_ERROR', statusCode = 500, model?: string) {
+  constructor(
+    message: string,
+    provider: string,
+    code = 'PROVIDER_ERROR',
+    statusCode = 500,
+    model?: string,
+    retryAfterSeconds?: number
+  ) {
     super(message);
     this.name = 'ProviderError';
     this.provider = provider;
     this.code = code;
     this.statusCode = statusCode;
     this.model = model;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
-export function formatCleanProviderError(error: any): { cleanMessage: string; code: string; statusCode: number } {
+export function formatCleanProviderError(error: any): {
+  cleanMessage: string;
+  code: string;
+  statusCode: number;
+  provider?: string;
+  retryAfterSeconds?: number;
+} {
   const rawMsg = typeof error === 'string' ? error : error?.message || '';
   let parsedJson: any = null;
   const jsonMatch = rawMsg.match(/\{[\s\S]*\}/);
@@ -162,26 +177,76 @@ export function formatCleanProviderError(error: any): { cleanMessage: string; co
   const errObj = parsedJson?.error || parsedJson || {};
   const statusNum = error?.statusCode || error?.status || errObj.code || 500;
   const innerMsg = errObj.message || rawMsg;
-  const fullText = `${rawMsg} ${innerMsg} ${error?.code || ''}`.toLowerCase();
+  const rawProvider = (error?.provider || errObj.provider || '').toString().toLowerCase();
+  const fullText = `${rawMsg} ${innerMsg} ${error?.code || ''} ${rawProvider}`.toLowerCase();
 
-  // 1. Quota / 429
+  // Detect genuine provider and counterpart
+  let providerName = 'AI';
+  let alternateProviderName = 'another provider';
+  let resolvedProviderKey: string | undefined = rawProvider || undefined;
+
+  if (rawProvider.includes('groq') || fullText.includes('groq')) {
+    providerName = 'Groq';
+    alternateProviderName = 'Gemini';
+    resolvedProviderKey = 'groq';
+  } else if (rawProvider.includes('gemini') || fullText.includes('gemini') || fullText.includes('google')) {
+    providerName = 'Gemini';
+    alternateProviderName = 'Groq';
+    resolvedProviderKey = 'gemini';
+  } else if (rawProvider) {
+    providerName = rawProvider.charAt(0).toUpperCase() + rawProvider.slice(1);
+    alternateProviderName = 'another provider in Settings';
+  }
+
+  // Extract retry-after if provided
+  let retryAfterSeconds: number | undefined = error?.retryAfterSeconds;
+  if (!retryAfterSeconds) {
+    const retryMatch =
+      fullText.match(/retry(?:-|\s+)after[:\s]+([0-9.]+)(?:s|ms|sec)?/i) ||
+      fullText.match(/try\s+again\s+in\s+([0-9.]+)\s*(?:s|seconds)?/i) ||
+      fullText.match(/wait\s+([0-9.]+)\s*(?:s|seconds)?/i);
+    if (retryMatch) {
+      const parsed = parseFloat(retryMatch[1]);
+      if (!isNaN(parsed)) {
+        retryAfterSeconds = fullText.includes('ms') && parsed > 100 ? parsed / 1000 : parsed;
+      }
+    }
+  }
+
+  // 1. Quota / Rate limit / 429
   if (
     statusNum === 429 ||
     error?.code === 'QUOTA_EXHAUSTED' ||
+    error?.code === 'RATE_LIMITED' ||
     fullText.includes('429') ||
     fullText.includes('resource_exhausted') ||
     fullText.includes('quota') ||
-    fullText.includes('rate_limited')
+    fullText.includes('rate_limited') ||
+    fullText.includes('rate limit') ||
+    fullText.includes('too many requests')
   ) {
     const isVoice =
-      (error?.provider === 'gemini' || error?.provider === 'elevenlabs') &&
+      (resolvedProviderKey === 'gemini' || resolvedProviderKey === 'elevenlabs' || fullText.includes('elevenlabs')) &&
       (error?.model?.includes('tts') || error?.model?.includes('voice') || fullText.includes('voice') || fullText.includes('synthesize'));
+
+    if (isVoice) {
+      const voiceProvider = resolvedProviderKey === 'elevenlabs' ? 'ElevenLabs' : 'Gemini Voice';
+      const altVoice = resolvedProviderKey === 'elevenlabs' ? 'Gemini' : 'ElevenLabs';
+      return {
+        cleanMessage: `${voiceProvider} quota is temporarily exhausted. Try again later or switch to ${altVoice} in Settings.`,
+        code: 'QUOTA_EXHAUSTED',
+        statusCode: 429,
+        provider: resolvedProviderKey || 'voice',
+        retryAfterSeconds,
+      };
+    }
+
     return {
-      cleanMessage: isVoice
-        ? 'Gemini Voice quota is temporarily exhausted. Try again later or switch to ElevenLabs in Settings.'
-        : 'Gemini AI quota is currently rate-limited or experiencing high traffic. Please try again in a moment or switch provider in Settings.',
+      cleanMessage: `${providerName} rate limit reached. Wait about a minute or switch to ${alternateProviderName} in Settings.`,
       code: 'QUOTA_EXHAUSTED',
       statusCode: 429,
+      provider: resolvedProviderKey || providerName.toLowerCase(),
+      retryAfterSeconds,
     };
   }
 
@@ -229,9 +294,10 @@ export function formatCleanProviderError(error: any): { cleanMessage: string; co
     fullText.includes('unauthorized')
   ) {
     return {
-      cleanMessage: 'Provider authentication or permission failed.',
+      cleanMessage: `${providerName} authentication or permission failed. Check your API key in environment variables.`,
       code: 'AUTHENTICATION_ERROR',
       statusCode: 401,
+      provider: resolvedProviderKey || providerName.toLowerCase(),
     };
   }
 
@@ -245,9 +311,10 @@ export function formatCleanProviderError(error: any): { cleanMessage: string; co
     fullText.includes('overloaded')
   ) {
     return {
-      cleanMessage: 'The provider is temporarily unavailable.',
+      cleanMessage: `${providerName} is temporarily unavailable or experiencing high demand. Please try again shortly.`,
       code: 'PROVIDER_UNAVAILABLE',
       statusCode: 503,
+      provider: resolvedProviderKey || providerName.toLowerCase(),
     };
   }
 
@@ -262,20 +329,23 @@ export function formatCleanProviderError(error: any): { cleanMessage: string; co
         cleanMessage: 'Personal Voice sample not recorded yet. Record or upload your voice sample in Settings.',
         code: 'NOT_CONFIGURED',
         statusCode: 400,
+        provider: 'personal',
       };
     }
     return {
       cleanMessage: 'Personal voice engine not configured.',
       code: 'NOT_CONFIGURED',
       statusCode: 400,
+      provider: 'personal',
     };
   }
 
   // Fallback: strip raw JSON blob if any
   const stripped = rawMsg.replace(/\{[\s\S]*\}/, '').trim();
   return {
-    cleanMessage: stripped || 'The provider encountered an error.',
+    cleanMessage: stripped || `${providerName} encountered an unexpected error.`,
     code: error?.code || 'PROVIDER_ERROR',
     statusCode: typeof statusNum === 'number' && statusNum >= 400 && statusNum < 600 ? statusNum : 500,
+    provider: resolvedProviderKey || providerName.toLowerCase(),
   };
 }

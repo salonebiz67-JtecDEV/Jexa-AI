@@ -21,6 +21,9 @@ export function useChat() {
     searchTrigger?: any;
     memoryFact?: string;
     memoryAction?: string;
+    provider?: string;
+    model?: string;
+    fallbackUsed?: boolean;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -345,15 +348,25 @@ export function useChat() {
         console.error('[useChat] Send message failed:', err);
         setError("Couldn't save. Please try again.");
         setActivityStatus('Search failed — retry available');
-        setActivityDetails({ error: err.message });
+        setActivityDetails({
+          error: err.message,
+          provider: err.provider,
+          model: err.model,
+          fallbackUsed: err.fallbackUsed,
+        });
 
-        let userHelpMessage = `I encountered an issue connecting to the AI provider: ${err.message}.`;
+        let providerInfo = '';
+        if (err.provider) {
+          providerInfo = ` [Provider: ${err.provider}${err.model ? `, Model: ${err.model}` : ''}${err.fallbackUsed ? ', Fallback attempted' : ''}]`;
+        }
+
+        let userHelpMessage = `I encountered an issue connecting to the AI provider${providerInfo}: ${err.message}`;
         if (err.code === 'MODEL_NOT_FOUND') {
-          userHelpMessage = `The configured model was not found (${err.message}). You can switch to Google Gemini in Settings or configure a supported model in GROQ_TEXT_MODEL on Render.`;
+          userHelpMessage = `The configured model was not found${providerInfo} (${err.message}). You can switch providers in Settings or configure a supported model in environment settings.`;
         } else if (err.code === 'AUTHENTICATION_ERROR') {
-          userHelpMessage = `Authentication failed for the selected provider. Please verify your API key in Render environment settings or switch to an active provider in Settings.`;
+          userHelpMessage = `Authentication failed for ${err.provider || 'the selected provider'}. Please verify your API key in environment settings or switch to an active provider in Settings.`;
         } else if (err.code === 'MISSING_CREDENTIALS') {
-          userHelpMessage = `The selected provider is missing its API key. Please configure the required API key in your Render environment variables or switch to an active provider in Settings.`;
+          userHelpMessage = `The selected provider (${err.provider || 'AI'}) is missing its API key. Please configure the required API key in your environment variables or switch to an active provider in Settings.`;
         }
 
         // Append non-crashing friendly error message in the chat
@@ -366,6 +379,11 @@ export function useChat() {
             content: userHelpMessage,
             createdAt: new Date().toISOString(),
             status: 'error',
+            metadata: {
+              provider: err.provider,
+              model: err.model,
+              fallbackUsed: err.fallbackUsed,
+            },
           },
         ]);
         setIsSending(false);

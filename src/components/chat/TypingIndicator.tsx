@@ -27,6 +27,9 @@ export interface TypingIndicatorProps {
     error?: string;
     memoryFact?: string;
     memoryAction?: string;
+    provider?: string;
+    model?: string;
+    fallbackUsed?: boolean;
   } | null;
   onRetry?: () => void;
 }
@@ -296,7 +299,7 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
         <div className="absolute top-0 left-0 right-0 h-[1.5px] bg-gradient-to-r from-transparent via-cyan-400/50 to-transparent animate-shimmer" />
 
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {/* Animated Micro Dots */}
             {currentStatus !== 'Answer complete' && (
               <div className="flex items-center gap-1">
@@ -326,13 +329,26 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
                 className="text-xs font-medium text-slate-200 tracking-wide flex items-center gap-1.5"
               >
                 <span>{currentStatus}</span>
-                {details?.sourcesCount && details.sourcesCount > 0 && (
+                {details?.sourcesCount && details.sourcesCount > 0 ? (
                   <span className="text-[10px] text-cyan-400/90 font-mono px-1.5 py-0.2 rounded bg-cyan-500/10 border border-cyan-500/20">
                     {details.sourcesCount} sources
                   </span>
-                )}
+                ) : null}
               </motion.span>
             </AnimatePresence>
+
+            {/* Active Provider & Model Pill */}
+            {details?.provider && (
+              <span className="text-[10px] text-cyan-300 font-mono px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/20 flex items-center gap-1">
+                <span className="capitalize">{details.provider}</span>
+                {details.model && <span className="text-slate-400">({details.model})</span>}
+                {details.fallbackUsed && (
+                  <span className="text-amber-400 font-sans text-[9px] font-semibold bg-amber-500/20 px-1 rounded border border-amber-500/30">
+                    Fallback
+                  </span>
+                )}
+              </span>
+            )}
           </div>
 
           {/* Retry Action if Search Failed */}
@@ -372,15 +388,24 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           </motion.div>
         )}
 
-        {/* Memory Error Chip if persistence failed */}
-        {details?.error && currentStatus === 'Memory unavailable' && (
+        {/* Error Notice Chip showing error details, provider, and model */}
+        {details?.error && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
-            className="mt-1.5 pt-1.5 border-t border-white/[0.05] flex items-center gap-1.5 text-[11px] font-mono text-amber-300/90 truncate"
+            className="mt-1.5 pt-1.5 border-t border-white/[0.05] flex flex-col gap-1 text-[11px] font-mono text-amber-300/90"
           >
-            <span className="text-amber-500 uppercase text-[9px] tracking-wider shrink-0 font-sans">Notice:</span>
-            <span className="truncate max-w-[260px] sm:max-w-xs text-amber-200">{details.error}</span>
+            <div className="flex items-start gap-1.5">
+              <span className="text-amber-500 uppercase text-[9px] tracking-wider shrink-0 font-sans mt-0.5">Notice:</span>
+              <span className="text-amber-200 break-words">{details.error}</span>
+            </div>
+            {details.provider && (
+              <div className="text-[10px] text-slate-400 font-sans flex items-center gap-2">
+                <span>Provider: <strong className="text-slate-200 capitalize">{details.provider}</strong></span>
+                {details.model && <span>• Model: <strong className="text-slate-200">{details.model}</strong></span>}
+                {details.fallbackUsed && <span className="text-amber-400 font-semibold">• Fallback used</span>}
+              </div>
+            )}
           </motion.div>
         )}
       </div>

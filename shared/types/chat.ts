@@ -100,6 +100,9 @@ export interface StreamChatStatusEvent {
     sources?: WebSearchResultItem[];
     searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results';
     searchTrigger?: 'manual' | 'automatic' | 'none';
+    provider?: string;
+    model?: string;
+    fallbackUsed?: boolean;
   };
 }
 
@@ -118,6 +121,9 @@ export interface StreamChatErrorEvent {
   error: string;
   status?: AIActivityStatus;
   code?: string;
+  provider?: string;
+  model?: string;
+  fallbackUsed?: boolean;
 }
 
 export type StreamChatEvent =

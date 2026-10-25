@@ -166,6 +166,13 @@ export class GroqTextAIProvider implements ITextAIProvider {
       const groqCode = parsedError?.error?.code || parsedError?.error?.type;
       const groqMsg = parsedError?.error?.message || errorText;
 
+      const retryAfterHeader = response.headers.get('retry-after');
+      let retryAfterSeconds: number | undefined;
+      if (retryAfterHeader) {
+        const parsed = parseFloat(retryAfterHeader);
+        if (!isNaN(parsed)) retryAfterSeconds = parsed;
+      }
+
       if (response.status === 404 || groqCode === 'model_not_found') {
         throw new ProviderError(
           `Groq model '${model}' not found on Groq Cloud. Please configure GROQ_TEXT_MODEL.`,
@@ -184,11 +191,12 @@ export class GroqTextAIProvider implements ITextAIProvider {
         );
       } else if (response.status === 429) {
         throw new ProviderError(
-          'Groq API rate limit reached. Please wait a moment or try another provider.',
+          'Groq rate limit reached. Wait about a minute or switch to Gemini in Settings.',
           'groq',
           'RATE_LIMITED',
           429,
-          model
+          model,
+          retryAfterSeconds
         );
       } else {
         throw new ProviderError(
@@ -196,7 +204,8 @@ export class GroqTextAIProvider implements ITextAIProvider {
           'groq',
           'PROVIDER_ERROR',
           response.status,
-          model
+          model,
+          retryAfterSeconds
         );
       }
     }
@@ -290,6 +299,13 @@ export class GroqTextAIProvider implements ITextAIProvider {
       const groqCode = parsedError?.error?.code;
       const groqMsg = parsedError?.error?.message || errorText;
 
+      const retryAfterHeader = response.headers.get('retry-after');
+      let retryAfterSeconds: number | undefined;
+      if (retryAfterHeader) {
+        const parsed = parseFloat(retryAfterHeader);
+        if (!isNaN(parsed)) retryAfterSeconds = parsed;
+      }
+
       if (response.status === 404 || groqCode === 'model_not_found') {
         throw new ProviderError(
           `Groq model '${this.modelName}' not found. Update GROQ_TEXT_MODEL.`,
@@ -298,13 +314,23 @@ export class GroqTextAIProvider implements ITextAIProvider {
           404,
           this.modelName
         );
+      } else if (response.status === 429) {
+        throw new ProviderError(
+          'Groq rate limit reached. Wait about a minute or switch to Gemini in Settings.',
+          'groq',
+          'RATE_LIMITED',
+          429,
+          this.modelName,
+          retryAfterSeconds
+        );
       }
       throw new ProviderError(
         `Groq streaming error (${response.status}): ${groqMsg}`,
         'groq',
         'PROVIDER_STREAM_ERROR',
         response.status,
-        this.modelName
+        this.modelName,
+        retryAfterSeconds
       );
     }
 

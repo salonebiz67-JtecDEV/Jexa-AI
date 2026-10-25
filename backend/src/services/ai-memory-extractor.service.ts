@@ -251,6 +251,17 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
           }
         }
       } catch (err: any) {
+        const errStr = String(err?.message || err?.details || err || '').toLowerCase();
+        const isRateLimit =
+          err?.status === 429 ||
+          err?.statusCode === 429 ||
+          err?.code === 429 ||
+          err?.code === 'RESOURCE_EXHAUSTED' ||
+          /rate[-_\s]?limit|quota|resource_exhausted|too\s+many\s+requests|high\s+demand/i.test(errStr);
+        if (isRateLimit) {
+          console.warn('[AIMemoryExtractor] Provider rate limited during extraction. Skipping silently.');
+          return { action: 'none', candidates: [] };
+        }
         console.warn('[AIMemoryExtractor] AI extraction warning, falling back to heuristic engine:', err.message);
       }
     }
