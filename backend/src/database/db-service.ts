@@ -639,6 +639,91 @@ export class DatabaseService {
   }
 
   /**
+   * Retrieves the total count of user messages for a given user across all conversations.
+   */
+  public static async getUserMessageCount(userId?: string): Promise<number> {
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data: convs, error: convErr } = await client
+          .from('conversations')
+          .select('id')
+          .eq('user_id', validUserId);
+        if (!convErr && convs && convs.length > 0) {
+          const convIds = convs.map((c) => c.id);
+          const { count, error } = await client
+            .from('messages')
+            .select('*', { count: 'exact', head: true })
+            .in('conversation_id', convIds)
+            .eq('role', 'user');
+          if (!error && typeof count === 'number') {
+            return count;
+          }
+        }
+      } catch (e: any) {
+        console.warn('[DatabaseService] getUserMessageCount warning:', e.message);
+      }
+    }
+
+    // In-memory fallback
+    let count = 0;
+    for (const [convId, msgs] of memoryStore.messages.entries()) {
+      const conv = memoryStore.conversations.get(convId);
+      if (!conv || conv.userId === validUserId || (!userId && conv.userId === DEFAULT_USER_ID)) {
+        count += msgs.filter((m) => m.role === 'user').length;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Retrieves the most recent user messages for a given user across all conversations.
+   */
+  public static async getRecentUserMessages(userId?: string, limit: number = 20): Promise<string[]> {
+    const validUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data: convs, error: convErr } = await client
+          .from('conversations')
+          .select('id')
+          .eq('user_id', validUserId);
+        if (!convErr && convs && convs.length > 0) {
+          const convIds = convs.map((c) => c.id);
+          const { data: msgs, error: msgErr } = await client
+            .from('messages')
+            .select('content, created_at')
+            .in('conversation_id', convIds)
+            .eq('role', 'user')
+            .order('created_at', { ascending: false })
+            .limit(limit);
+          if (!msgErr && msgs) {
+            return msgs.map((m) => m.content).reverse();
+          }
+        }
+      } catch (e: any) {
+        console.warn('[DatabaseService] getRecentUserMessages warning:', e.message);
+      }
+    }
+
+    // In-memory fallback
+    const allUserMsgs: Array<{ content: string; createdAt: string }> = [];
+    for (const [convId, msgs] of memoryStore.messages.entries()) {
+      const conv = memoryStore.conversations.get(convId);
+      if (!conv || conv.userId === validUserId || (!userId && conv.userId === DEFAULT_USER_ID)) {
+        for (const m of msgs) {
+          if (m.role === 'user') {
+            allUserMsgs.push({ content: m.content, createdAt: m.createdAt });
+          }
+        }
+      }
+    }
+    allUserMsgs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    return allUserMsgs.slice(-limit).map((m) => m.content);
+  }
+
+  /**
    * Searches past conversation messages belonging to the authenticated user across ALL conversations.
    * Enables JEXA to recall earlier discussions from different chats (e.g. "What did we discuss about EDSA?", "Analyze my past conversations").
    */

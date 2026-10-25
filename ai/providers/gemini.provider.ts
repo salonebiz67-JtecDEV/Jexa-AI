@@ -104,6 +104,12 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         });
       }
     }
+
+    // Drop any leading model turns so conversation always starts with user turn
+    while (contents.length > 0 && contents[0].role === 'model') {
+      contents.shift();
+    }
+
     return contents;
   }
 

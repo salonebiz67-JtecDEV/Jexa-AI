@@ -8,6 +8,7 @@ export interface CleanResponseOptions {
   isFirstTurn?: boolean;
   userAskedIdentity?: boolean;
   isStreaming?: boolean;
+  stripEmojis?: boolean;
 }
 
 export function cleanAndNormalizeResponseContent(
@@ -34,7 +35,12 @@ export function cleanAndNormalizeResponseContent(
     text = cleanRepetitiveGreeting(text);
   }
 
-  // 5. Repair unclosed code blocks and inline formatting (e.g. streaming chunks or cutoff responses)
+  // 5. Strip emojis if user preference or option specifies no emojis (preserving code fences and inline code)
+  if (options.stripEmojis) {
+    text = stripEmojisPreservingCode(text);
+  }
+
+  // 6. Repair unclosed code blocks and inline formatting (e.g. streaming chunks or cutoff responses)
   text = repairUnclosedMarkdown(text);
 
   return text.trim();
@@ -207,4 +213,24 @@ export function repairUnclosedMarkdown(input: string): string {
   }
 
   return text;
+}
+
+/**
+ * Removes emojis from text while preserving code blocks (fenced and inline backticks).
+ */
+export function stripEmojisPreservingCode(input: string): string {
+  if (!input) return '';
+  // Split on code fences and inline code
+  const parts = input.split(/(```[\s\S]*?```|`[^`\n]+`)/g);
+  // Comprehensive Unicode emoji and pictograph regex
+  const emojiRegex = /[\u{1F300}-\u{1FAFF}\u{1F000}-\u{1F02F}\u{1F0A0}-\u{1F0FF}\u{1F100}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{2B55}\u{FE0F}\u{200D}]|\p{Extended_Pictographic}/gu;
+
+  return parts
+    .map((part) => {
+      if ((part.startsWith('```') && part.endsWith('```')) || (part.startsWith('`') && part.endsWith('`'))) {
+        return part;
+      }
+      return part.replace(emojiRegex, '').replace(/[ ]{2,}/g, ' ');
+    })
+    .join('');
 }
