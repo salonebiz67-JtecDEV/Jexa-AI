@@ -16,6 +16,8 @@ import {
   Server,
   Database,
   ClipboardList,
+  FileCode,
+  Search,
 } from 'lucide-react';
 import { AIActivityStatus } from '../../../shared/types';
 
@@ -115,6 +117,28 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           dotColor: 'bg-amber-400',
           glow: 'shadow-[0_0_12px_rgba(245,158,11,0.25)]',
           pulseIcon: true,
+        };
+      case 'Reading source code…':
+      case 'Reading source code...':
+        return {
+          icon: FileCode,
+          color: 'text-violet-400',
+          bg: 'bg-violet-500/10',
+          border: 'border-violet-500/30',
+          dotColor: 'bg-violet-400',
+          glow: 'shadow-[0_0_12px_rgba(139,92,246,0.25)]',
+          pulseIcon: true,
+        };
+      case 'Searching code…':
+      case 'Searching code...':
+        return {
+          icon: Search,
+          color: 'text-sky-400',
+          bg: 'bg-sky-500/10',
+          border: 'border-sky-500/30',
+          dotColor: 'bg-sky-400',
+          glow: 'shadow-[0_0_12px_rgba(14,165,233,0.25)]',
+          spinIcon: true,
         };
       case 'Selecting tool...':
         return {

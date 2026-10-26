@@ -6,6 +6,9 @@ import { researchHistoryTool } from './definitions/research-history.tool';
 import { systemTimeTool } from './definitions/system-time.tool';
 import { systemCheckTool } from './definitions/system-check.tool';
 import { recentErrorsTool } from './definitions/recent-errors.tool';
+import { listSourceFilesTool } from './definitions/list-source-files.tool';
+import { readSourceFileTool } from './definitions/read-source-file.tool';
+import { searchCodeTool } from './definitions/search-code.tool';
 
 export class ToolRegistry {
   private static instance: ToolRegistry;
@@ -30,6 +33,9 @@ export class ToolRegistry {
     this.registerTool(systemTimeTool);
     this.registerTool(systemCheckTool);
     this.registerTool(recentErrorsTool);
+    this.registerTool(listSourceFilesTool);
+    this.registerTool(readSourceFileTool);
+    this.registerTool(searchCodeTool);
   }
 
   /**

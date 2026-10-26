@@ -522,6 +522,10 @@ ${projectEnv}
               onStatusUpdate?.('Checking servers…');
             } else if (tc.name === 'recent_errors') {
               onStatusUpdate?.('Reading error logs…');
+            } else if (tc.name === 'list_source_files' || tc.name === 'read_source_file') {
+              onStatusUpdate?.('Reading source code…');
+            } else if (tc.name === 'search_code') {
+              onStatusUpdate?.('Searching code…');
             } else if (tc.name === 'memory_search') {
               onStatusUpdate?.('Recalling personal context...');
             } else if (tc.name === 'past_conversations_search') {

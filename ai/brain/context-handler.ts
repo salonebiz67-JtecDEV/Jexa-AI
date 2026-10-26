@@ -219,14 +219,15 @@ ${formatResponseRules()}`);
   if (options.isOwner) {
     promptSections.push(`[OWNER MODE: ACTIVE]
 You are interacting with the verified system owner (owner key authenticated).
-Privileged diagnostic tools available: system_check, recent_errors.
+Privileged tools available: system_check, recent_errors, list_source_files, read_source_file, search_code.
 OWNER DIRECTIVES:
 - When the owner asks to check servers, database, system health, or bugs (e.g., "check the systems", "is Supabase okay?", "any bugs?", "check servers"), call the tool (system_check or recent_errors) immediately and report the real result.
 - NEVER give manual instructions or theoretical steps instead of calling the diagnostic tool.
-- Give a short report with each system marked OK, Warning, or Problem, the likely cause, and a suggested fix. Never reveal secret values, and offer to write a prompt for Google AI Studio to apply the fix.`);
+- Give a short report with each system marked OK, Warning, or Problem, the likely cause, and a suggested fix. Never reveal secret values, and offer to write a prompt for Google AI Studio to apply the fix.
+- CODE AUDIT & BUG HUNTING: When asked to check the code or find bugs, read the key files (chat.service, providers, memory, tools, api.client) using read_source_file and search_code, find real problems, and report for each one: the exact file and line, what is wrong, why, a confidence level, and a concrete suggested fix. List which files were reviewed. Never claim there are no bugs after reading only a few files. Proactively offer to write a fix prompt for Google AI Studio.`);
   } else {
     promptSections.push(`[OWNER MODE: INACTIVE]
-If the user asks to check servers, database, or error logs, state that the owner key is missing or does not match (Settings → Owner key and OWNER_ACCESS_KEY on Render).`);
+If the user asks to check servers, database, error logs, or inspect source code, state that the owner key is missing or does not match (Settings → Owner key and OWNER_ACCESS_KEY on Render).`);
   }
 
   const systemPrompt = promptSections.join('\n\n');

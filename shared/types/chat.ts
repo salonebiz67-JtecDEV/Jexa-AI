@@ -40,6 +40,8 @@ export type AIActivityStatus =
   | 'Checking servers…'
   | 'Checking Supabase…'
   | 'Reading error logs…'
+  | 'Reading source code…'
+  | 'Searching code…'
   | (string & {});
 
 export interface WebSearchResultItem {
