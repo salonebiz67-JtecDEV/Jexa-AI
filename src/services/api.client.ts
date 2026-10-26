@@ -692,4 +692,9 @@ export const ApiClient = {
   async getHealth(): Promise<HealthCheckResponse> {
     return fetchJson<HealthCheckResponse>(`${API_BASE}/health`);
   },
+
+  // Owner Status Verification
+  async getOwnerStatus(): Promise<{ isOwner: boolean }> {
+    return fetchJson<{ isOwner: boolean }>(`${API_BASE}/owner/status`);
+  },
 };

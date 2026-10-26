@@ -10,12 +10,17 @@ import { ProviderController } from '../controllers/provider.controller';
 import { DatabaseController } from '../controllers/database.controller';
 import { AuthController } from '../controllers/auth.controller';
 
-import { authenticateRequest } from '../middleware/auth.middleware';
+import { authenticateRequest, isRequestOwner } from '../middleware/auth.middleware';
 
 const router = Router();
 
 // Apply cryptographic authentication & verified user resolution middleware
 router.use(authenticateRequest);
+
+// Owner Status Verification
+router.get('/owner/status', (req, res) => {
+  res.json({ isOwner: isRequestOwner(req) });
+});
 
 // Authentication & User Profile
 router.get('/auth/config', AuthController.getConfig);

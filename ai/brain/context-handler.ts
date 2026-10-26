@@ -108,17 +108,17 @@ MEMORY HONESTY RULES:
     const memRes = options.activeMemoryResult;
     let directive = '';
     if (memRes.action === 'saved') {
-      directive = `A new memory was confirmed and saved to the database: "${memRes.factSummary || memRes.feedbackMessage}". Acknowledge this naturally (e.g., "${memRes.feedbackMessage || "I'll remember that."}") while addressing their question.`;
+      directive = `A new fact was saved to memory: "${memRes.factSummary || memRes.feedbackMessage}". Acknowledge this in your own words, different each time, or skip acknowledging it directly if it doesn't fit naturally.`;
     } else if (memRes.action === 'updated') {
-      directive = `An existing memory was updated in the database: "${memRes.factSummary || memRes.feedbackMessage}". Acknowledge the update naturally (e.g., "${memRes.feedbackMessage || "I've updated that in your memory."}").`;
+      directive = `An existing fact in memory was updated: "${memRes.factSummary || memRes.feedbackMessage}". Acknowledge this update in your own words, different each time, or skip acknowledging it directly if it doesn't fit naturally.`;
     } else if (memRes.action === 'already_remembered') {
-      directive = `The user shared information that is already stored in memory. You may acknowledge that you already remember this if helpful.`;
+      directive = `This fact is already saved in memory. Acknowledge this in your own words only if relevant, or skip mentioning it if it doesn't fit.`;
     } else if (memRes.action === 'deleted') {
-      directive = `The memory was removed from the database: "${memRes.feedbackMessage}". Acknowledge that you have removed it.`;
+      directive = `The memory was removed: "${memRes.feedbackMessage}". Acknowledge the removal in your own words.`;
     } else if (memRes.action === 'privacy_skipped') {
-      directive = `User requested not to remember this. Respect this completely and confirm you will not save it.`;
+      directive = `User requested not to remember this. Respect this completely and confirm you will not save it in your own natural words.`;
     } else if (memRes.action === 'failed') {
-      directive = `Database persistence failed (${memRes.error || 'storage error'}). Truthfully state that memory storage is currently unavailable and offer a retry. Do NOT falsely claim it was saved.`;
+      directive = `Database persistence failed (${memRes.error || 'storage error'}). Truthfully state that memory storage is currently unavailable and offer a retry. Do NOT claim it was saved.`;
     }
 
     promptSections.push(`[ACTIVE MEMORY OPERATION RESULT]
@@ -127,7 +127,37 @@ Confirmed Backend Details: ${memRes.factSummary || memRes.feedbackMessage || ''}
 Directive: ${directive}`);
   }
 
-  // 4c. Cross-Conversation Research History
+  // 4c. How This User Talks (Learned Communication Style)
+  const userStyleMemory = options.memories?.find(
+    (m) =>
+      m.category === 'preferences_settings' &&
+      m.fact.toLowerCase().startsWith('communication style:')
+  );
+  if (userStyleMemory) {
+    const styleDescription = userStyleMemory.fact.replace(/^communication style:\s*/i, '').trim();
+    promptSections.push(`[HOW THIS USER TALKS]
+${styleDescription}
+
+DIRECTIVE:
+Adapt to how this user communicates naturally, authentically, and conversationally. Match their vibe, formality level, and conversational cadence, but do NOT copy or parrot their slang mechanically or unnaturally.`);
+  }
+
+  // 4d. User Emoji Preference
+  const hasNoEmojiPreference = Boolean(
+    options.memories?.some(
+      (m) =>
+        m.category === 'preferences_settings' &&
+        /(?:no[-_\s]?emojis?|don'?t\s+use\s+emojis?|avoid\s+emojis?|dislikes?\s+emojis?|stop\s+using\s+emojis?|without\s+emojis?)/i.test(
+          m.fact
+        )
+    )
+  );
+  if (hasNoEmojiPreference) {
+    promptSections.push(`[EMOJI PREFERENCE DIRECTIVE]
+The user has saved a preference for NO emojis. Do NOT include any emojis in your responses.`);
+  }
+
+  // 4e. Cross-Conversation Research History
   if (options.researchHistory && options.researchHistory.length > 0) {
     const researchLines = options.researchHistory.map(
       (r) => `• [${r.searchedAt.slice(0, 10)}] Query: "${r.query}" -> Summary: ${r.summary.slice(0, 220)}`
@@ -185,6 +215,20 @@ ${getStyleInstructions()}`);
   promptSections.push(`[CORE INVARIANTS]
 ${formatResponseRules()}`);
 
+  // 9. Owner Mode Directive
+  if (options.isOwner) {
+    promptSections.push(`[OWNER MODE: ACTIVE]
+You are interacting with the verified system owner (owner key authenticated).
+Privileged diagnostic tools available: system_check, recent_errors.
+OWNER DIRECTIVES:
+- When the owner asks to check servers, database, system health, or bugs (e.g., "check the systems", "is Supabase okay?", "any bugs?", "check servers"), call the tool (system_check or recent_errors) immediately and report the real result.
+- NEVER give manual instructions or theoretical steps instead of calling the diagnostic tool.
+- Give a short report with each system marked OK, Warning, or Problem, the likely cause, and a suggested fix. Never reveal secret values, and offer to write a prompt for Google AI Studio to apply the fix.`);
+  } else {
+    promptSections.push(`[OWNER MODE: INACTIVE]
+If the user asks to check servers, database, or error logs, state that the owner key is missing or does not match (Settings → Owner key and OWNER_ACCESS_KEY on Render).`);
+  }
+
   const systemPrompt = promptSections.join('\n\n');
 
   // Format message history: strictly chronological, alternating roles, and starting with a user turn
@@ -225,5 +269,6 @@ ${formatResponseRules()}`);
     systemPrompt,
     formattedMessages,
     referencedMemoryIds,
+    hasNoEmojiPreference,
   };
 }

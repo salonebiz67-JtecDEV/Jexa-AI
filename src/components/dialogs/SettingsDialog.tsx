@@ -80,6 +80,16 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   // Owner Authorization Key (Stored on this device only)
   const [ownerKey, setOwnerKey] = useState<string>(() => getOwnerAccessKey());
   const [showOwnerKey, setShowOwnerKey] = useState(false);
+  const [isOwnerMode, setIsOwnerMode] = useState(false);
+
+  const checkOwnerStatus = async () => {
+    try {
+      const res = await ApiClient.getOwnerStatus();
+      setIsOwnerMode(Boolean(res.isOwner));
+    } catch {
+      setIsOwnerMode(false);
+    }
+  };
 
   // Independent AI Provider Selections
   const [textProvider, setTextProvider] = useState<TextProviderType>(() => {
@@ -209,6 +219,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   useEffect(() => {
     if (isOpen) {
       fetchMemories();
+      checkOwnerStatus();
     }
     if (profile?.selectedTextProvider) {
       setTextProvider(profile.selectedTextProvider);
@@ -466,6 +477,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     safeStorage.setItem('jexa_voice_provider', voiceProvider);
     safeStorage.setItem('jexa_voice_name', voiceName);
     setOwnerAccessKey(ownerKey);
+    checkOwnerStatus();
     setSaveError(null);
 
     try {
@@ -1996,7 +2008,18 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
                 <span>Owner Authorization</span>
               </label>
-              <span className="text-[9px] text-slate-500 font-mono">This device only</span>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                    isOwnerMode
+                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                      : 'bg-white/[0.04] border-white/[0.08] text-slate-400'
+                  }`}
+                >
+                  Owner mode: {isOwnerMode ? 'ON' : 'OFF'}
+                </span>
+                <span className="text-[9px] text-slate-500 font-mono">This device only</span>
+              </div>
             </div>
 
             <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] space-y-2.5">
@@ -2017,6 +2040,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   type={showOwnerKey ? 'text' : 'password'}
                   value={ownerKey}
                   onChange={(e) => setOwnerKey(e.target.value)}
+                  onBlur={() => {
+                    setOwnerAccessKey(ownerKey);
+                    checkOwnerStatus();
+                  }}
                   placeholder="Enter OWNER_ACCESS_KEY..."
                   className="w-full px-3 py-2 text-xs font-mono bg-black/40 border border-white/[0.1] rounded-lg text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500/60 pr-12"
                 />

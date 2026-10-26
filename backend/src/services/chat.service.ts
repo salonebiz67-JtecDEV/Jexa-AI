@@ -8,6 +8,7 @@ import { SearchDecisionService } from './search-decision.service';
 import { ToolRegistry } from '../tools/tool-registry';
 import { ToolExecutor } from '../tools/tool-executor';
 import { ErrorLogService } from './error-log.service';
+import { UserStyleLearner } from './user-style-learner.service';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { assembleConversationContext } from '../../../ai/brain/context-handler';
 import { cleanAndNormalizeResponseContent } from '../../../ai/brain/response-cleaner';
@@ -84,6 +85,31 @@ function extractRetryAfterSeconds(err: any): number | undefined {
     if (!isNaN(val)) return val;
   }
   return undefined;
+}
+
+/**
+ * Trims only the old chat history (keeping at most 6 history messages, starting at a user message)
+ * while keeping the current user message and all assistant tool-call and tool-result messages
+ * of this turn together, in order.
+ * Ensures a request never starts with an assistant or tool message, and a tool result never loses its tool call.
+ */
+function buildRoundMessages(
+  activeMessages: TextGenerationMessage[],
+  currentTurnUserIndex: number
+): TextGenerationMessage[] {
+  const safeTurnIndex = currentTurnUserIndex >= 0 ? currentTurnUserIndex : activeMessages.length - 1;
+  const oldHistory = activeMessages.slice(0, safeTurnIndex);
+
+  let trimmedHistory = oldHistory.slice(-6);
+  const firstUserIdx = trimmedHistory.findIndex((m) => m.role === 'user');
+  if (firstUserIdx > 0) {
+    trimmedHistory = trimmedHistory.slice(firstUserIdx);
+  } else if (firstUserIdx === -1) {
+    trimmedHistory = [];
+  }
+
+  const currentTurnMessages = activeMessages.slice(safeTurnIndex);
+  return [...trimmedHistory, ...currentTurnMessages];
 }
 
 export type ChunkCallback = (chunk: string) => void;
@@ -177,17 +203,16 @@ export class ChatService {
     }
 
     // Step B: Determine if extraction should run
-    // Skip extraction for questions and system/tool commands to reduce AI calls per message.
+    // AI extractor decides for every message except plain greetings. Keep regex only for secrets, privacy, and forget commands.
     const memoryIntent = MemoryService.detectMemoryIntent(payload.message);
     const isExplicitDirective =
       memoryIntent.type === 'explicit' ||
       memoryIntent.type === 'forget' ||
       memoryIntent.type === 'privacy';
     const isTrivial = MemoryService.isTrivialGreetingOrChitChat(payload.message);
-    const isQuestionOrCmd = MemoryService.isQuestionOrCommand(payload.message);
     const shouldExtract =
       profile.memorySettings.enabled &&
-      (isExplicitDirective || (profile.memorySettings.autoExtract && !isTrivial && !isQuestionOrCmd));
+      (isExplicitDirective || (profile.memorySettings.autoExtract && !isTrivial));
 
     // Step C: Run extraction AT THE SAME TIME as the other context loading (research history and past conversations)
     // Extraction runs at most once per message, skips silently if provider is rate limited, and never blocks or breaks the reply.
@@ -265,6 +290,7 @@ export class ChatService {
       recentMessages,
       userContext: payload.userContext,
       isVoiceMode: Boolean(payload.isVoiceMode),
+      isOwner: payload.isOwner,
     });
 
     let augmentedSystemPrompt = assembled.systemPrompt;
@@ -357,14 +383,19 @@ ${projectEnv}
       const toolDeclarations = await toolRegistry.getToolDeclarations(toolContext);
 
       const activeMessages: TextGenerationMessage[] = [...assembled.formattedMessages];
+      const currentTurnUserIndex = assembled.formattedMessages.findLastIndex((m) => m.role === 'user');
       const MAX_ROUNDS = 4;
       let round = 0;
 
       while (round < MAX_ROUNDS) {
         round++;
 
-        // Shrink second-round+ requests: send only the last 6 messages of history in tool rounds
-        const roundMessages = round > 1 ? activeMessages.slice(-6) : activeMessages;
+        // Trim only the old chat history (keep last 6 history messages starting at a user message),
+        // always keeping the current turn's user message and all assistant tool-call and tool-result messages together in order.
+        const roundMessages =
+          round > 1
+            ? buildRoundMessages(activeMessages, currentTurnUserIndex)
+            : activeMessages;
 
         const genRequest: TextGenerationRequest = {
           systemPrompt: augmentedSystemPrompt,
@@ -699,7 +730,7 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
 
         const fallbackRequest: TextGenerationRequest = {
           systemPrompt: synthesisSystemPrompt,
-          messages: round > 1 ? activeMessages.slice(-6) : assembled.formattedMessages,
+          messages: buildRoundMessages(activeMessages, currentTurnUserIndex),
           temperature: 0.7,
           maxTokens: 1200,
           toolChoice: 'none',
@@ -720,7 +751,7 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
         // If loop finished rounds without final text and without search results, request final synthesis without tools
         const finalReq: TextGenerationRequest = {
           systemPrompt: augmentedSystemPrompt,
-          messages: round > 1 ? activeMessages.slice(-6) : activeMessages,
+          messages: buildRoundMessages(activeMessages, currentTurnUserIndex),
           temperature: 0.7,
           maxTokens: 1200,
           toolChoice: 'none',
@@ -1063,6 +1094,7 @@ INSTRUCTIONS:
     const cleanContent = cleanAndNormalizeResponseContent(providerResponse.content, {
       isFirstTurn,
       userAskedIdentity,
+      stripEmojis: assembled.hasNoEmojiPreference,
     });
 
     // 13. Persist assistant message with search & memory metadata
@@ -1092,6 +1124,9 @@ INSTRUCTIONS:
 
     // 14. Signal answer complete
     onStatusUpdate?.('Answer complete');
+
+    // Learn how the user talks: every 10 user messages, analyze in background
+    UserStyleLearner.maybeLearnUserStyle(payload.userId).catch(() => {});
 
     return {
       message: assistantMessage,

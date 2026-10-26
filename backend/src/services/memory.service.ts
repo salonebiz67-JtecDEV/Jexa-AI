@@ -179,14 +179,12 @@ export class MemoryService {
       return { action: 'none', memories: [] };
     }
 
-    // Skip AI extraction for questions and system/tool commands unless explicit directive
-    const memoryIntent = this.detectMemoryIntent(trimmed);
-    const isExplicitDirective =
-      memoryIntent.type === 'explicit' ||
-      memoryIntent.type === 'forget' ||
-      memoryIntent.type === 'privacy';
-    if (!isExplicitDirective && this.isQuestionOrCommand(trimmed)) {
-      return { action: 'none', memories: [] };
+    // Skip pure trivial greetings and pleasantries
+    if (this.isTrivialGreetingOrChitChat(trimmed)) {
+      const memoryIntent = this.detectMemoryIntent(trimmed);
+      if (memoryIntent.type === 'none') {
+        return { action: 'none', memories: [] };
+      }
     }
 
     const isProduction =
