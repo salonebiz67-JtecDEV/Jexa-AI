@@ -42,6 +42,10 @@ export type AIActivityStatus =
   | 'Reading error logs…'
   | 'Reading source code…'
   | 'Searching code…'
+  | 'Writing the answer…'
+  | 'Writing the answer...'
+  | 'Retrying…'
+  | 'Retrying...'
   | (string & {});
 
 export interface WebSearchResultItem {

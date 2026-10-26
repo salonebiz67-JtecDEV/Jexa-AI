@@ -156,11 +156,42 @@ export class ProviderError extends Error {
   }
 }
 
+type ErrorLogHandler = (source: string, message: any, details?: Record<string, any>) => void;
+let registeredErrorLogger: ErrorLogHandler | null = null;
+
+export function setErrorLogger(logger: ErrorLogHandler): void {
+  registeredErrorLogger = logger;
+}
+
+export function scrubSecretsAndUrls(text: string): string {
+  if (!text || typeof text !== 'string') return '';
+  let s = text;
+  // 1. Scrub URLs
+  s = s.replace(/https?:\/\/[^\s"'<>]+/gi, '');
+  // 2. Scrub standard API keys and tokens
+  s = s.replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]');
+  s = s.replace(/sk-[A-Za-z0-9_\-]{14,}/gi, 'sk-[REDACTED]');
+  s = s.replace(/AIza[0-9A-Za-z\-_]{30,}/g, 'AIza[REDACTED]');
+  s = s.replace(/ghp_[0-9a-zA-Z]{30,}/g, 'ghp_[REDACTED]');
+  s = s.replace(/eyJhbGciOi[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g, '[REDACTED_JWT]');
+  // 3. Scrub key=, secret=, token=, password=
+  s = s.replace(/(?:key|secret|token|password|apiKey|api_key|access_key|owner_key)\s*[:=]\s*["']?([^"',\s]+)["']?/gi, (m, val) => {
+    return m.replace(val, '[REDACTED]');
+  });
+  // 4. Scrub long random strings
+  s = s.replace(/[A-Za-z0-9_\-]{28,}/g, '[REDACTED]');
+  // 5. Clean up extra punctuation, braces, whitespace
+  s = s.replace(/\s+/g, ' ').trim();
+  s = s.replace(/^[:\-\s,]+|[:\-\s,]+$/g, '');
+  return s;
+}
+
 export function formatCleanProviderError(error: any): {
   cleanMessage: string;
   code: string;
   statusCode: number;
   provider?: string;
+  model?: string;
   retryAfterSeconds?: number;
 } {
   const rawMsg = typeof error === 'string' ? error : error?.message || '';
@@ -178,6 +209,7 @@ export function formatCleanProviderError(error: any): {
   const statusNum = error?.statusCode || error?.status || errObj.code || 500;
   const innerMsg = errObj.message || rawMsg;
   const rawProvider = (error?.provider || errObj.provider || '').toString().toLowerCase();
+  const rawModel = (error?.model || errObj?.model || (typeof error === 'object' && error?.modelName) || '').toString().trim();
   const fullText = `${rawMsg} ${innerMsg} ${error?.code || ''} ${rawProvider}`.toLowerCase();
 
   // Detect genuine provider and counterpart
@@ -213,6 +245,51 @@ export function formatCleanProviderError(error: any): {
     }
   }
 
+  // Extract concise real reason scrubbed of secrets and URLs
+  let realReason = '';
+  if (errObj.message && typeof errObj.message === 'string') {
+    realReason = scrubSecretsAndUrls(errObj.message);
+  } else if (error?.message && typeof error.message === 'string') {
+    const stripped = error.message.replace(/\{[\s\S]*\}/, '').trim();
+    realReason = scrubSecretsAndUrls(stripped || error.message);
+  } else if (rawMsg) {
+    const stripped = rawMsg.replace(/\{[\s\S]*\}/, '').trim();
+    realReason = scrubSecretsAndUrls(stripped || rawMsg);
+  }
+
+  if (!realReason || realReason.toLowerCase().includes('unexpected error') || realReason.length < 3) {
+    realReason = error?.code ? `Service returned code ${error.code}` : `Request failed`;
+  }
+  if (realReason.length > 180) {
+    realReason = realReason.slice(0, 177) + '...';
+  }
+
+  const modelDisplay = rawModel ? ` (${rawModel})` : '';
+  const statusDisplay = `[Status ${statusNum}]`;
+
+  // Always write full raw error to error log so recent_errors can show it to the owner
+  if (registeredErrorLogger) {
+    registeredErrorLogger('ai_provider', rawMsg || String(error), {
+      provider: resolvedProviderKey || providerName.toLowerCase(),
+      model: rawModel,
+      statusCode: statusNum,
+      realReason,
+      rawError: typeof error === 'object' ? (error.stack || error.message || error) : String(error),
+    });
+  } else if (typeof process !== 'undefined' && (process.versions?.node || (process as any).isBun)) {
+    import('../../backend/src/services/error-log.service')
+      .then((m) => {
+        m.ErrorLogService.log('ai_provider', rawMsg || String(error), {
+          provider: resolvedProviderKey || providerName.toLowerCase(),
+          model: rawModel,
+          statusCode: statusNum,
+          realReason,
+          rawError: typeof error === 'object' ? (error.stack || error.message || error) : String(error),
+        });
+      })
+      .catch(() => {});
+  }
+
   // 1. Quota / Rate limit / 429
   if (
     statusNum === 429 ||
@@ -233,19 +310,21 @@ export function formatCleanProviderError(error: any): {
       const voiceProvider = resolvedProviderKey === 'elevenlabs' ? 'ElevenLabs' : 'Gemini Voice';
       const altVoice = resolvedProviderKey === 'elevenlabs' ? 'Gemini' : 'ElevenLabs';
       return {
-        cleanMessage: `${voiceProvider} quota is temporarily exhausted. Try again later or switch to ${altVoice} in Settings.`,
+        cleanMessage: `${voiceProvider}${modelDisplay} quota reached: ${realReason}. Try ${altVoice} in Settings. ${statusDisplay}`,
         code: 'QUOTA_EXHAUSTED',
         statusCode: 429,
         provider: resolvedProviderKey || 'voice',
+        model: rawModel,
         retryAfterSeconds,
       };
     }
 
     return {
-      cleanMessage: `${providerName} rate limit reached. Wait about a minute or switch to ${alternateProviderName} in Settings.`,
+      cleanMessage: `${providerName}${modelDisplay} rate limit reached: ${realReason}. Wait a minute or switch to ${alternateProviderName} in Settings. ${statusDisplay}`,
       code: 'QUOTA_EXHAUSTED',
       statusCode: 429,
       provider: resolvedProviderKey || providerName.toLowerCase(),
+      model: rawModel,
       retryAfterSeconds,
     };
   }
@@ -261,9 +340,11 @@ export function formatCleanProviderError(error: any): {
     fullText.includes('free tier')
   ) {
     return {
-      cleanMessage: 'This ElevenLabs voice requires a paid plan.',
+      cleanMessage: `${providerName}${modelDisplay} requires a paid subscription: ${realReason}. ${statusDisplay}`,
       code: 'PAYMENT_REQUIRED',
       statusCode: 402,
+      provider: resolvedProviderKey || providerName.toLowerCase(),
+      model: rawModel,
     };
   }
 
@@ -276,9 +357,11 @@ export function formatCleanProviderError(error: any): {
     fullText.includes('unknown model')
   ) {
     return {
-      cleanMessage: 'The selected model or voice was not found.',
+      cleanMessage: `${providerName}${modelDisplay} model not found: ${realReason}. ${statusDisplay}`,
       code: 'MODEL_NOT_FOUND',
       statusCode: 404,
+      provider: resolvedProviderKey || providerName.toLowerCase(),
+      model: rawModel,
     };
   }
 
@@ -294,10 +377,11 @@ export function formatCleanProviderError(error: any): {
     fullText.includes('unauthorized')
   ) {
     return {
-      cleanMessage: `${providerName} authentication or permission failed. Check your API key in environment variables.`,
+      cleanMessage: `${providerName}${modelDisplay} authentication failed: ${realReason}. Check API key. ${statusDisplay}`,
       code: 'AUTHENTICATION_ERROR',
       statusCode: 401,
       provider: resolvedProviderKey || providerName.toLowerCase(),
+      model: rawModel,
     };
   }
 
@@ -311,10 +395,11 @@ export function formatCleanProviderError(error: any): {
     fullText.includes('overloaded')
   ) {
     return {
-      cleanMessage: `${providerName} is temporarily unavailable or experiencing high demand. Please try again shortly.`,
+      cleanMessage: `${providerName}${modelDisplay} temporarily unavailable: ${realReason}. ${statusDisplay}`,
       code: 'PROVIDER_UNAVAILABLE',
       statusCode: 503,
       provider: resolvedProviderKey || providerName.toLowerCase(),
+      model: rawModel,
     };
   }
 
@@ -326,26 +411,28 @@ export function formatCleanProviderError(error: any): {
   ) {
     if (fullText.includes('sample') || fullText.includes('reference')) {
       return {
-        cleanMessage: 'Personal Voice sample not recorded yet. Record or upload your voice sample in Settings.',
+        cleanMessage: `Personal Voice: sample not recorded yet. Record or upload your voice sample in Settings. ${statusDisplay}`,
         code: 'NOT_CONFIGURED',
         statusCode: 400,
         provider: 'personal',
+        model: rawModel,
       };
     }
     return {
-      cleanMessage: 'Personal voice engine not configured.',
+      cleanMessage: `Personal Voice engine not configured: ${realReason}. ${statusDisplay}`,
       code: 'NOT_CONFIGURED',
       statusCode: 400,
       provider: 'personal',
+      model: rawModel,
     };
   }
 
-  // Fallback: strip raw JSON blob if any
-  const stripped = rawMsg.replace(/\{[\s\S]*\}/, '').trim();
+  // General fallback: never replace with "encountered an unexpected error", always show real reason, provider, model, status
   return {
-    cleanMessage: stripped || `${providerName} encountered an unexpected error.`,
+    cleanMessage: `${providerName}${modelDisplay}: ${realReason} ${statusDisplay}`.trim(),
     code: error?.code || 'PROVIDER_ERROR',
     statusCode: typeof statusNum === 'number' && statusNum >= 400 && statusNum < 600 ? statusNum : 500,
     provider: resolvedProviderKey || providerName.toLowerCase(),
+    model: rawModel,
   };
 }

@@ -126,11 +126,19 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
     const contents = this.formatGeminiContents(request.messages);
 
+    const maxTokens = request.maxTokens ?? 4096;
     const config: any = {
       systemInstruction: request.systemPrompt,
       temperature: request.temperature ?? 0.7,
-      maxOutputTokens: request.maxTokens ?? 1200,
+      maxOutputTokens: maxTokens,
     };
+
+    // Small thinking budget so thinking can never use up the whole answer
+    if (maxTokens > 300) {
+      config.thinkingConfig = {
+        thinkingBudget: 256,
+      };
+    }
 
     if (request.tools && request.tools.length > 0) {
       config.tools = [
@@ -247,11 +255,19 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     try {
       const contents = this.formatGeminiContents(request.messages);
 
+      const maxTokens = request.maxTokens ?? 4096;
       const config: any = {
         systemInstruction: request.systemPrompt,
         temperature: request.temperature ?? 0.7,
-        maxOutputTokens: request.maxTokens ?? 1200,
+        maxOutputTokens: maxTokens,
       };
+
+      // Small thinking budget so thinking can never use up the whole answer
+      if (maxTokens > 300) {
+        config.thinkingConfig = {
+          thinkingBudget: 256,
+        };
+      }
 
       const responseStream = await this.ai.models.generateContentStream({
         model: this.modelName,

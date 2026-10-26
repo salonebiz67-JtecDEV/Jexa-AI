@@ -140,6 +140,28 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           glow: 'shadow-[0_0_12px_rgba(14,165,233,0.25)]',
           spinIcon: true,
         };
+      case 'Writing the answer…':
+      case 'Writing the answer...':
+        return {
+          icon: Zap,
+          color: 'text-emerald-400',
+          bg: 'bg-emerald-500/10',
+          border: 'border-emerald-500/30',
+          dotColor: 'bg-emerald-400',
+          glow: 'shadow-[0_0_14px_rgba(16,185,129,0.3)]',
+          pulseIcon: true,
+        };
+      case 'Retrying…':
+      case 'Retrying...':
+        return {
+          icon: RotateCcw,
+          color: 'text-amber-400',
+          bg: 'bg-amber-500/10',
+          border: 'border-amber-500/30',
+          dotColor: 'bg-amber-400',
+          glow: 'shadow-[0_0_12px_rgba(245,158,11,0.25)]',
+          spinIcon: true,
+        };
       case 'Selecting tool...':
         return {
           icon: Compass,

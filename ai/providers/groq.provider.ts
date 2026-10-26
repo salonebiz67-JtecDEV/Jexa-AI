@@ -1,5 +1,6 @@
 import { ITextAIProvider, TextGenerationRequest, TextGenerationResponse } from './text-provider.interface';
-import { TextProviderType, ProviderError } from '../../shared/types/provider';
+import { TextProviderType, ProviderError, formatCleanProviderError } from '../../shared/types/provider';
+import { ErrorLogService } from '../../backend/src/services/error-log.service';
 
 export class GroqTextAIProvider implements ITextAIProvider {
   public readonly providerType: TextProviderType = 'groq';
@@ -126,8 +127,12 @@ export class GroqTextAIProvider implements ITextAIProvider {
       model,
       messages,
       temperature: request.temperature ?? 0.7,
-      max_tokens: request.maxTokens ?? 1200,
+      max_tokens: request.maxTokens ?? 4096,
     };
+
+    if (model.toLowerCase().includes('gpt-oss')) {
+      payloadBody.reasoning_effort = 'low';
+    }
 
     if (request.tools && request.tools.length > 0) {
       payloadBody.tools = request.tools.map((t) => ({
@@ -173,41 +178,31 @@ export class GroqTextAIProvider implements ITextAIProvider {
         if (!isNaN(parsed)) retryAfterSeconds = parsed;
       }
 
-      if (response.status === 404 || groqCode === 'model_not_found') {
-        throw new ProviderError(
-          `Groq model '${model}' not found on Groq Cloud. Please configure GROQ_TEXT_MODEL.`,
-          'groq',
-          'MODEL_NOT_FOUND',
-          404,
-          model
-        );
-      } else if (response.status === 401) {
-        throw new ProviderError(
-          'Invalid Groq API key. Check GROQ_API_KEY in your Render environment variables.',
-          'groq',
-          'AUTHENTICATION_ERROR',
-          401,
-          model
-        );
-      } else if (response.status === 429) {
-        throw new ProviderError(
-          'Groq rate limit reached. Wait about a minute or switch to Gemini in Settings.',
-          'groq',
-          'RATE_LIMITED',
-          429,
-          model,
-          retryAfterSeconds
-        );
-      } else {
-        throw new ProviderError(
-          `Groq API error (${response.status}): ${groqMsg}`,
-          'groq',
-          'PROVIDER_ERROR',
-          response.status,
-          model,
-          retryAfterSeconds
-        );
-      }
+      ErrorLogService.log('ai_provider', `Groq error (${response.status}): ${groqMsg}`, {
+        provider: 'groq',
+        model,
+        statusCode: response.status,
+        code: groqCode,
+        raw: parsedError || errorText,
+      });
+
+      const formatted = formatCleanProviderError({
+        message: groqMsg,
+        statusCode: response.status,
+        code: groqCode || (response.status === 404 ? 'MODEL_NOT_FOUND' : response.status === 401 ? 'AUTHENTICATION_ERROR' : response.status === 429 ? 'RATE_LIMITED' : 'PROVIDER_ERROR'),
+        provider: 'groq',
+        model,
+        retryAfterSeconds,
+      });
+
+      throw new ProviderError(
+        formatted.cleanMessage,
+        'groq',
+        formatted.code,
+        formatted.statusCode,
+        model,
+        formatted.retryAfterSeconds
+      );
     }
 
     const data: any = await response.json();
@@ -273,19 +268,25 @@ export class GroqTextAIProvider implements ITextAIProvider {
       messages.push({ role: m.role, content: m.content });
     }
 
+    const isGptOss = this.modelName.toLowerCase().includes('gpt-oss');
+    const streamPayload: any = {
+      model: this.modelName,
+      messages,
+      temperature: request.temperature ?? 0.7,
+      max_tokens: request.maxTokens ?? 4096,
+      stream: true,
+    };
+    if (isGptOss) {
+      streamPayload.reasoning_effort = 'low';
+    }
+
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify({
-        model: this.modelName,
-        messages,
-        temperature: request.temperature ?? 0.7,
-        max_tokens: request.maxTokens ?? 1024,
-        stream: true,
-      }),
+      body: JSON.stringify(streamPayload),
     });
 
     if (!response.ok) {
@@ -306,31 +307,30 @@ export class GroqTextAIProvider implements ITextAIProvider {
         if (!isNaN(parsed)) retryAfterSeconds = parsed;
       }
 
-      if (response.status === 404 || groqCode === 'model_not_found') {
-        throw new ProviderError(
-          `Groq model '${this.modelName}' not found. Update GROQ_TEXT_MODEL.`,
-          'groq',
-          'MODEL_NOT_FOUND',
-          404,
-          this.modelName
-        );
-      } else if (response.status === 429) {
-        throw new ProviderError(
-          'Groq rate limit reached. Wait about a minute or switch to Gemini in Settings.',
-          'groq',
-          'RATE_LIMITED',
-          429,
-          this.modelName,
-          retryAfterSeconds
-        );
-      }
+      ErrorLogService.log('ai_provider', `Groq stream error (${response.status}): ${groqMsg}`, {
+        provider: 'groq',
+        model: this.modelName,
+        statusCode: response.status,
+        code: groqCode,
+        raw: parsedError || errorText,
+      });
+
+      const formatted = formatCleanProviderError({
+        message: groqMsg,
+        statusCode: response.status,
+        code: groqCode || (response.status === 404 ? 'MODEL_NOT_FOUND' : response.status === 401 ? 'AUTHENTICATION_ERROR' : response.status === 429 ? 'RATE_LIMITED' : 'PROVIDER_STREAM_ERROR'),
+        provider: 'groq',
+        model: this.modelName,
+        retryAfterSeconds,
+      });
+
       throw new ProviderError(
-        `Groq streaming error (${response.status}): ${groqMsg}`,
+        formatted.cleanMessage,
         'groq',
-        'PROVIDER_STREAM_ERROR',
-        response.status,
+        formatted.code,
+        formatted.statusCode,
         this.modelName,
-        retryAfterSeconds
+        formatted.retryAfterSeconds
       );
     }
 
