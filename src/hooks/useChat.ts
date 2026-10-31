@@ -222,6 +222,20 @@ export function useChat() {
       setActivityDetails(null);
       setError(null);
 
+      let silenceTimeout: any = null;
+      let hasTimedOut = false;
+
+      const resetSilenceTimer = () => {
+        if (silenceTimeout) clearTimeout(silenceTimeout);
+        silenceTimeout = setTimeout(() => {
+          hasTimedOut = true;
+          setIsSending(false);
+          setActivityStatus('This is taking too long');
+        }, 40000);
+      };
+
+      resetSilenceTimer();
+
       try {
         const savedTextProvider = safeStorage.getItem('jexa_text_provider') as any;
 
@@ -242,6 +256,8 @@ export function useChat() {
           },
           {
             onStatusUpdate(status, details) {
+              if (hasTimedOut) return;
+              resetSilenceTimer();
               setActivityStatus(status);
               if (details) {
                 setActivityDetails(details);
@@ -283,6 +299,8 @@ export function useChat() {
               }
             },
             onChunk(chunk) {
+              if (hasTimedOut) return;
+              resetSilenceTimer();
               accumulatedStreamContent += chunk;
               setMessages((prev) => {
                 const streamIdx = prev.findIndex((m) => m.id === streamingAssistantId);
@@ -311,6 +329,13 @@ export function useChat() {
             },
           }
         );
+
+        if (silenceTimeout) clearTimeout(silenceTimeout);
+        if (hasTimedOut) {
+          setIsSending(false);
+          setActivityStatus('This is taking too long');
+          return;
+        }
 
         // Set conversation ID if new conversation was formed
         if (response.isNewConversation) {
@@ -345,6 +370,12 @@ export function useChat() {
           setActivityDetails(null);
         }, 600);
       } catch (err: any) {
+        if (silenceTimeout) clearTimeout(silenceTimeout);
+        if (hasTimedOut) {
+          setIsSending(false);
+          setActivityStatus('This is taking too long');
+          return;
+        }
         console.error('[useChat] Send message failed:', err);
         setError("Couldn't save. Please try again.");
         setActivityStatus('Search failed — retry available');

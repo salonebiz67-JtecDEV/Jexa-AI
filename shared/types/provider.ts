@@ -267,7 +267,7 @@ export function formatCleanProviderError(error: any): {
   const modelDisplay = rawModel ? ` (${rawModel})` : '';
   const statusDisplay = `[Status ${statusNum}]`;
 
-  // Always write full raw error to error log so recent_errors can show it to the owner
+  // Always write full raw error to error log via registered logger so recent_errors can show it to the owner
   if (registeredErrorLogger) {
     registeredErrorLogger('ai_provider', rawMsg || String(error), {
       provider: resolvedProviderKey || providerName.toLowerCase(),
@@ -276,18 +276,6 @@ export function formatCleanProviderError(error: any): {
       realReason,
       rawError: typeof error === 'object' ? (error.stack || error.message || error) : String(error),
     });
-  } else if (typeof process !== 'undefined' && (process.versions?.node || (process as any).isBun)) {
-    import('../../backend/src/services/error-log.service')
-      .then((m) => {
-        m.ErrorLogService.log('ai_provider', rawMsg || String(error), {
-          provider: resolvedProviderKey || providerName.toLowerCase(),
-          model: rawModel,
-          statusCode: statusNum,
-          realReason,
-          rawError: typeof error === 'object' ? (error.stack || error.message || error) : String(error),
-        });
-      })
-      .catch(() => {});
   }
 
   // 1. Quota / Rate limit / 429

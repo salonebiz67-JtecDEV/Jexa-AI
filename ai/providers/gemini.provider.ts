@@ -7,6 +7,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
   public readonly providerType: TextProviderType = 'gemini';
   public readonly modelName: string;
   public readonly supportsTools: boolean = true;
+  private static supportsThinkingConfig: boolean = true;
   private ai: GoogleGenAI | null = null;
   public readonly isConfigured: boolean = false;
   public lastError?: string;
@@ -133,8 +134,8 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       maxOutputTokens: maxTokens,
     };
 
-    // Small thinking budget so thinking can never use up the whole answer
-    if (maxTokens > 300) {
+    // Small thinking budget if supported so thinking can never use up the whole answer
+    if (GeminiTextAIProvider.supportsThinkingConfig && maxTokens > 300) {
       config.thinkingConfig = {
         thinkingBudget: 256,
       };
@@ -156,86 +157,145 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       ];
     }
 
+    // 30 second timeout controller for this call
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 30000);
+    config.abortSignal = controller.signal;
+
     let lastError: any = null;
 
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const response = await this.ai.models.generateContent({
-          model: this.modelName,
-          contents,
-          config,
-        });
+    try {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const response = await this.ai.models.generateContent({
+            model: this.modelName,
+            contents,
+            config,
+          });
 
-        const responseText = response.text || '';
-        this.lastError = undefined;
+          const responseText = response.text || '';
+          this.lastError = undefined;
 
-        const candidateParts = response.candidates?.[0]?.content?.parts;
+          const candidateParts = response.candidates?.[0]?.content?.parts;
 
-        // Extract native function calls
-        let detectedCalls: any[] = [];
-        if (response.functionCalls && response.functionCalls.length > 0) {
-          detectedCalls = response.functionCalls.map((fc: any, idx: number) => ({
-            id: `call_${Date.now()}_${idx}`,
-            name: fc.name,
-            args: fc.args || {},
-          }));
-        } else {
-          const parts = candidateParts || [];
-          const functionCallParts = parts.filter((p: any) => Boolean(p.functionCall));
-          if (functionCallParts.length > 0) {
-            detectedCalls = functionCallParts.map((p: any, idx: number) => ({
+          // Extract native function calls
+          let detectedCalls: any[] = [];
+          if (response.functionCalls && response.functionCalls.length > 0) {
+            detectedCalls = response.functionCalls.map((fc: any, idx: number) => ({
               id: `call_${Date.now()}_${idx}`,
-              name: p.functionCall.name,
-              args: p.functionCall.args || {},
+              name: fc.name,
+              args: fc.args || {},
             }));
+          } else {
+            const parts = candidateParts || [];
+            const functionCallParts = parts.filter((p: any) => Boolean(p.functionCall));
+            if (functionCallParts.length > 0) {
+              detectedCalls = functionCallParts.map((p: any, idx: number) => ({
+                id: `call_${Date.now()}_${idx}`,
+                name: p.functionCall.name,
+                args: p.functionCall.args || {},
+              }));
+            }
           }
-        }
 
-        const hasToolCalls = detectedCalls.length > 0;
+          const hasToolCalls = detectedCalls.length > 0;
 
-        return {
-          content: responseText,
-          model: this.modelName,
-          provider: this.providerType,
-          tokensUsed: {
-            prompt: Math.ceil(request.systemPrompt.length / 4),
-            completion: Math.ceil((responseText.length || 20) / 4),
-            total: Math.ceil((request.systemPrompt.length + (responseText.length || 20)) / 4),
-          },
-          isMock: false,
-          finishReason: hasToolCalls ? 'tool_call' : 'stop',
-          toolCalls: hasToolCalls ? detectedCalls : undefined,
-          rawModelParts: candidateParts,
-        };
-      } catch (error: any) {
-        lastError = error;
-        const msg = error.message || '';
-        if (attempt < 2 && (msg.includes('503') || msg.includes('429') || msg.includes('high demand') || msg.includes('RESOURCE_EXHAUSTED'))) {
-          console.warn(`[GeminiTextAIProvider] Transient error on attempt ${attempt}, retrying in 600ms...`);
-          await new Promise((r) => setTimeout(r, 600));
-          continue;
+          return {
+            content: responseText,
+            model: this.modelName,
+            provider: this.providerType,
+            tokensUsed: {
+              prompt: Math.ceil(request.systemPrompt.length / 4),
+              completion: Math.ceil((responseText.length || 20) / 4),
+              total: Math.ceil((request.systemPrompt.length + (responseText.length || 20)) / 4),
+            },
+            isMock: false,
+            finishReason: hasToolCalls ? 'tool_call' : 'stop',
+            toolCalls: hasToolCalls ? detectedCalls : undefined,
+            rawModelParts: candidateParts,
+          };
+        } catch (error: any) {
+          lastError = error;
+
+          // If aborted by our 30 second timeout, stop immediately and report timeout
+          if (controller.signal.aborted) {
+            throw new ProviderError(
+              'Gemini request timed out after 30 seconds.',
+              'gemini',
+              'PROVIDER_TIMEOUT',
+              504,
+              this.modelName
+            );
+          }
+
+          const msg = String(error?.message || '');
+
+          // Requirement 6: If API rejects thinkingConfig, retry once without it and stop sending it after that
+          const isThinkingConfigRejection =
+            config.thinkingConfig &&
+            (/thinking[-_]?config|thinking[-_]?budget|thinking_process/i.test(msg) ||
+              (msg.includes('INVALID_ARGUMENT') && /thinking/i.test(msg)));
+
+          if (isThinkingConfigRejection) {
+            console.warn('[GeminiTextAIProvider] API rejected thinkingConfig. Disabling thinkingConfig and retrying once...');
+            GeminiTextAIProvider.supportsThinkingConfig = false;
+            delete config.thinkingConfig;
+            try {
+              const retryResponse = await this.ai.models.generateContent({
+                model: this.modelName,
+                contents,
+                config,
+              });
+              const retryText = retryResponse.text || '';
+              return {
+                content: retryText,
+                model: this.modelName,
+                provider: this.providerType,
+                tokensUsed: {
+                  prompt: Math.ceil(request.systemPrompt.length / 4),
+                  completion: Math.ceil((retryText.length || 20) / 4),
+                  total: Math.ceil((request.systemPrompt.length + (retryText.length || 20)) / 4),
+                },
+                isMock: false,
+                finishReason: 'stop',
+              };
+            } catch (retryErr: any) {
+              lastError = retryErr;
+            }
+            break;
+          }
+
+          if (attempt < 2 && (msg.includes('503') || msg.includes('429') || msg.includes('high demand') || msg.includes('RESOURCE_EXHAUSTED'))) {
+            console.warn(`[GeminiTextAIProvider] Transient error on attempt ${attempt}, retrying in 600ms...`);
+            await new Promise((r) => setTimeout(r, 600));
+            continue;
+          }
+          break;
         }
-        break;
       }
-    }
 
-    console.error('[GeminiTextAIProvider] API call failed:', lastError);
-    if (lastError && typeof lastError === 'object') {
-      (lastError as any).provider = 'gemini';
-      (lastError as any).model = this.modelName;
-    }
-    ErrorLogService.log('ai_provider', lastError, { provider: 'gemini', model: this.modelName });
-    const formatted = formatCleanProviderError(lastError);
-    this.lastError = formatted.cleanMessage;
+      console.error('[GeminiTextAIProvider] API call failed:', lastError);
+      if (lastError && typeof lastError === 'object') {
+        (lastError as any).provider = 'gemini';
+        (lastError as any).model = this.modelName;
+      }
+      ErrorLogService.log('ai_provider', lastError, { provider: 'gemini', model: this.modelName });
+      const formatted = formatCleanProviderError(lastError);
+      this.lastError = formatted.cleanMessage;
 
-    throw new ProviderError(
-      formatted.cleanMessage,
-      'gemini',
-      formatted.code,
-      formatted.statusCode,
-      this.modelName,
-      formatted.retryAfterSeconds
-    );
+      throw new ProviderError(
+        formatted.cleanMessage,
+        'gemini',
+        formatted.code,
+        formatted.statusCode,
+        this.modelName,
+        formatted.retryAfterSeconds
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   public async streamResponse(
@@ -252,6 +312,11 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       );
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 30000);
+
     try {
       const contents = this.formatGeminiContents(request.messages);
 
@@ -260,23 +325,63 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         systemInstruction: request.systemPrompt,
         temperature: request.temperature ?? 0.7,
         maxOutputTokens: maxTokens,
+        abortSignal: controller.signal,
       };
 
-      // Small thinking budget so thinking can never use up the whole answer
-      if (maxTokens > 300) {
+      // Small thinking budget if supported so thinking can never use up the whole answer
+      if (GeminiTextAIProvider.supportsThinkingConfig && maxTokens > 300) {
         config.thinkingConfig = {
           thinkingBudget: 256,
         };
       }
 
-      const responseStream = await this.ai.models.generateContentStream({
-        model: this.modelName,
-        contents,
-        config,
-      });
+      let responseStream: any;
+      try {
+        responseStream = await this.ai.models.generateContentStream({
+          model: this.modelName,
+          contents,
+          config,
+        });
+      } catch (streamInitErr: any) {
+        if (controller.signal.aborted) {
+          throw new ProviderError(
+            'Gemini stream request timed out after 30 seconds.',
+            'gemini',
+            'PROVIDER_TIMEOUT',
+            504,
+            this.modelName
+          );
+        }
+        const msg = String(streamInitErr?.message || '');
+        if (
+          config.thinkingConfig &&
+          (/thinking[-_]?config|thinking[-_]?budget|thinking_process/i.test(msg) ||
+            (msg.includes('INVALID_ARGUMENT') && /thinking/i.test(msg)))
+        ) {
+          console.warn('[GeminiTextAIProvider] Stream rejected thinkingConfig. Disabling thinkingConfig and retrying stream setup...');
+          GeminiTextAIProvider.supportsThinkingConfig = false;
+          delete config.thinkingConfig;
+          responseStream = await this.ai.models.generateContentStream({
+            model: this.modelName,
+            contents,
+            config,
+          });
+        } else {
+          throw streamInitErr;
+        }
+      }
 
       let fullText = '';
       for await (const chunk of responseStream) {
+        if (controller.signal.aborted) {
+          throw new ProviderError(
+            'Gemini stream request timed out after 30 seconds.',
+            'gemini',
+            'PROVIDER_TIMEOUT',
+            504,
+            this.modelName
+          );
+        }
         const piece = chunk.text || '';
         fullText += piece;
         onChunk(piece, false);
@@ -298,6 +403,18 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         finishReason: 'stop',
       };
     } catch (error: any) {
+      if (controller.signal.aborted || error?.code === 'PROVIDER_TIMEOUT') {
+        const timeoutErr = new ProviderError(
+          'Gemini stream request timed out after 30 seconds.',
+          'gemini',
+          'PROVIDER_TIMEOUT',
+          504,
+          this.modelName
+        );
+        ErrorLogService.log('ai_provider', timeoutErr, { provider: 'gemini', model: this.modelName, stream: true });
+        this.lastError = timeoutErr.message;
+        throw timeoutErr;
+      }
       console.error('[GeminiTextAIProvider] Streaming failed:', error);
       if (error && typeof error === 'object') {
         (error as any).provider = 'gemini';
@@ -314,6 +431,8 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         this.modelName,
         formatted.retryAfterSeconds
       );
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

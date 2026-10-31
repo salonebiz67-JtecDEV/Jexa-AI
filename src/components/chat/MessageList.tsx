@@ -92,7 +92,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           />
         ))}
 
-        {isSending && (
+        {(isSending || activityStatus === 'This is taking too long') && (
           <TypingIndicator
             status={activityStatus}
             details={activityDetails}

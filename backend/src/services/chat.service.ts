@@ -290,6 +290,23 @@ export class ChatService {
     onStatusUpdate?: StatusUpdateCallback,
     onChunk?: ChunkCallback
   ): Promise<ChatResponsePayload> {
+    // 60-second message deadline and 3 AI calls cap
+    const messageStartTime = Date.now();
+    const MESSAGE_DEADLINE_MS = 60000;
+    let aiCallCount = 0;
+    const MAX_AI_CALLS = 3;
+
+    const shouldStopAiCalls = () =>
+      aiCallCount >= MAX_AI_CALLS || Date.now() - messageStartTime >= MESSAGE_DEADLINE_MS;
+
+    const UNCACHABLE_TOOLS = new Set([
+      'system_check',
+      'recent_errors',
+      'list_source_files',
+      'read_source_file',
+      'search_code',
+    ]);
+
     // 1. Initial activity status
     onStatusUpdate?.('Thinking...');
 
@@ -573,6 +590,18 @@ ${projectEnv}
         }
       }
 
+      // Requirement 4: never cache or reuse results from system_check, recent_errors, list_source_files, read_source_file or search_code.
+      // Reuse web search results only when the earlier request succeeded and the query is the same within 10 minutes.
+      if (
+        cachedWork &&
+        (now - cachedWork.timestamp > TEN_MINUTES_MS ||
+          cachedWork.searchStatus !== 'success' ||
+          cachedWork.searchResults.length === 0 ||
+          cachedWork.executedTools.some((t) => UNCACHABLE_TOOLS.has(t.name)))
+      ) {
+        cachedWork = undefined;
+      }
+
       let reusedCachedTools = false;
       if (cachedWork && now - cachedWork.timestamp <= TEN_MINUTES_MS && cachedWork.executedTools.length > 0) {
         console.log(`[ChatService] Reusing ${cachedWork.executedTools.length} cached tool results for '${payload.message.slice(0, 40)}' (within 10m)...`);
@@ -605,10 +634,13 @@ ${projectEnv}
           toolChoice: 'none',
         };
 
-        try {
-          providerResponse = await activeProvider.generateResponse(cacheDirectRequest);
-        } catch (cacheDirectErr: any) {
-          console.warn('[ChatService] Error generating response from cached tool results:', cacheDirectErr.message);
+        if (!shouldStopAiCalls()) {
+          aiCallCount++;
+          try {
+            providerResponse = await activeProvider.generateResponse(cacheDirectRequest);
+          } catch (cacheDirectErr: any) {
+            console.warn('[ChatService] Error generating response from cached tool results:', cacheDirectErr.message);
+          }
         }
       }
 
@@ -617,6 +649,11 @@ ${projectEnv}
         let round = 0;
 
         while (round < MAX_ROUNDS) {
+          if (shouldStopAiCalls()) {
+            console.log(`[ChatService] Cascade cap or deadline reached (aiCalls=${aiCallCount}, elapsed=${Date.now() - messageStartTime}ms). Exiting tool loop.`);
+            break;
+          }
+
           round++;
 
           // Trim only the old chat history (keep last 6 history messages starting at a user message),
@@ -636,6 +673,7 @@ ${projectEnv}
           };
 
           let currentResponse: TextGenerationResponse | null = null;
+          aiCallCount++;
           try {
             currentResponse = await activeProvider.generateResponse(genRequest);
           } catch (callErr: any) {
@@ -652,11 +690,12 @@ ${projectEnv}
               let recovered = false;
 
               // If error includes a retry-after under 5 seconds, wait that long and retry once on same provider first
-              if (retryAfter !== undefined && retryAfter > 0 && retryAfter <= 5) {
+              if (!shouldStopAiCalls() && retryAfter !== undefined && retryAfter > 0 && retryAfter <= 5) {
                 const waitMs = Math.ceil(retryAfter * 1000) + 100;
                 console.log(`[ChatService] Rate limit with retry-after ${retryAfter}s <= 5s. Waiting ${waitMs}ms to retry on ${activeProviderType}...`);
                 await new Promise((resolve) => setTimeout(resolve, waitMs));
                 try {
+                  aiCallCount++;
                   currentResponse = await activeProvider.generateResponse(genRequest);
                   recovered = true;
                 } catch (retryErr: any) {
@@ -668,7 +707,7 @@ ${projectEnv}
               // When switching provider after a tool round, do not replay raw tool-call messages.
               // Convert everything to plain text (history, the user's message, and one message called "Tool results"),
               // then ask the new provider, without tools, to answer.
-              if (!recovered) {
+              if (!recovered && !shouldStopAiCalls()) {
                 const otherProviderType: TextProviderType = activeProviderType === 'gemini' ? 'groq' : 'gemini';
                 const otherProvider = registry.getTextProvider(otherProviderType);
 
@@ -691,6 +730,7 @@ ${projectEnv}
                       maxTokens: 4096,
                       toolChoice: 'none',
                     };
+                    aiCallCount++;
                     currentResponse = await activeProvider.generateResponse(failoverRequest);
                     recovered = true;
                     console.log(`[ChatService] Failover to '${otherProviderType}' succeeded without tools.`);
@@ -939,11 +979,36 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
           }
         }
 
-        // Cache tool round results for reuse within 10 minutes (Requirement 5)
-        if (executedToolsInTurn.length > 0) {
+        // Requirement 4: never cache or reuse results from system_check, recent_errors, list_source_files, read_source_file or search_code.
+        // Reuse web search results only when the earlier request succeeded and the query is the same within 10 minutes. Limit the cache to 100 entries and remove old ones.
+        const hasUncachableTool = executedToolsInTurn.some((t) => UNCACHABLE_TOOLS.has(t.name));
+        const canCacheTurn =
+          !hasUncachableTool &&
+          searchPerformed &&
+          searchStatus === 'success' &&
+          searchResults.length > 0 &&
+          executedToolsInTurn.length > 0 &&
+          executedToolsInTurn.every((t) => t.name === 'web_search');
+
+        if (canCacheTurn) {
+          const nowCache = Date.now();
+          for (const [k, v] of ChatService.toolCache.entries()) {
+            if (nowCache - v.timestamp > TEN_MINUTES_MS) {
+              ChatService.toolCache.delete(k);
+            }
+          }
+          while (ChatService.toolCache.size >= 100) {
+            const oldestKey = ChatService.toolCache.keys().next().value;
+            if (oldestKey) {
+              ChatService.toolCache.delete(oldestKey);
+            } else {
+              break;
+            }
+          }
+
           const toolMessagesInTurn = activeMessages.slice(currentTurnUserIndex + 1);
           const cacheEntry: CachedToolRound = {
-            timestamp: Date.now(),
+            timestamp: nowCache,
             messageKey: normalizedQuery,
             conversationId: convId,
             toolCalls: executedToolsInTurn.map((t, idx) => ({ id: `call_${idx}`, name: t.name, args: t.args })),
@@ -964,7 +1029,7 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
         // If loop finished or failed after web search already returned results, do not throw.
         // Make one final call without tools, giving the model the search results as plain text,
         // so the user still gets an answer with sources.
-        if (!providerResponse && searchResults.length > 0) {
+        if (!providerResponse && searchResults.length > 0 && !shouldStopAiCalls()) {
           onStatusUpdate?.('Writing the answer…', {
             provider: activeProviderType,
             model: activeProvider.modelName,
@@ -1017,6 +1082,7 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
           };
 
           try {
+            aiCallCount++;
             if (onChunk && typeof activeProvider.streamResponse === 'function') {
               providerResponse = await activeProvider.streamResponse(fallbackRequest, (chunk) => {
                 onChunk(chunk);
@@ -1027,7 +1093,7 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
           } catch (synthErr: any) {
             console.warn('[ChatService] Plain-text synthesis round with active provider failed:', synthErr.message);
           }
-        } else if (!providerResponse) {
+        } else if (!providerResponse && !shouldStopAiCalls()) {
           // If loop finished rounds without final text and without search results, request final synthesis without tools
           onStatusUpdate?.('Writing the answer…', {
             provider: activeProviderType,
@@ -1042,6 +1108,7 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
             toolChoice: 'none',
           };
           try {
+            aiCallCount++;
             providerResponse = await activeProvider.generateResponse(finalReq);
           } catch (finalErr: any) {
             console.warn('[ChatService] Error in final synthesis round:', finalErr.message);
@@ -1057,7 +1124,7 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
         providerResponse.content.trim().length === 0 ||
         providerResponse.finishReason === 'length';
 
-      if (isReplyEmptyOrLength && (executedToolsInTurn.length > 0 || searchResults.length > 0)) {
+      if (isReplyEmptyOrLength && (executedToolsInTurn.length > 0 || searchResults.length > 0) && !shouldStopAiCalls()) {
         console.log('[ChatService] Reply is empty or finished with length after tools. Retrying once without tools...');
         onStatusUpdate?.('Retrying…', {
           provider: activeProviderType,
@@ -1075,6 +1142,7 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
         };
 
         try {
+          aiCallCount++;
           const retryRes = await activeProvider.generateResponse(retryRequest);
           if (retryRes && retryRes.content && retryRes.content.trim().length > 0) {
             providerResponse = retryRes;
@@ -1109,7 +1177,8 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
     }
 
     // PATH 2: Fallback (SearchDecisionService heuristic evaluation for development_mock, manual toggle, or provider fallback)
-    if (!providerResponse) {
+    // If the tool loop already tried failover, do not run the old fallback path again
+    if (!providerResponse && !fallbackUsed && !shouldStopAiCalls()) {
       onStatusUpdate?.('Planning...');
 
       const searchDecision = await SearchDecisionService.evaluate(
@@ -1349,6 +1418,7 @@ INSTRUCTIONS:
           throw new Error(`AI Provider '${primaryProviderType}' is not available.`);
         }
 
+        aiCallCount++;
         if (onChunk && typeof primaryProvider.streamResponse === 'function') {
           providerResponse = await primaryProvider.streamResponse(genRequest, (chunk) => {
             onChunk(chunk);
@@ -1367,7 +1437,7 @@ INSTRUCTIONS:
           primaryProviderType === 'gemini' ? 'groq' : 'gemini';
         const fallbackProvider = registry.getTextProvider(fallbackProviderType);
 
-        if (fallbackProvider) {
+        if (fallbackProvider && !shouldStopAiCalls()) {
           try {
             console.log(`[ChatService] Attempting automatic failover to '${fallbackProviderType}'...`);
             onStatusUpdate?.('Preparing answer...', {
@@ -1375,6 +1445,7 @@ INSTRUCTIONS:
               model: fallbackProvider.modelName,
               fallbackUsed: true,
             });
+            aiCallCount++;
             if (onChunk && typeof fallbackProvider.streamResponse === 'function') {
               providerResponse = await fallbackProvider.streamResponse(genRequest, (chunk) => {
                 onChunk(chunk);
@@ -1397,7 +1468,9 @@ INSTRUCTIONS:
         // the AI is temporarily unavailable, and log the real error on the server.
         if (!providerResponse) {
           console.error('[ChatService] Primary AI provider and fallbacks failed. Real error:', primaryError);
-          const unavailableNotice = "I am temporarily unavailable because the AI service could not be reached. Please check your connection or try again shortly.";
+          const unavailableNotice = (executedToolsInTurn.length > 0 || searchResults.length > 0)
+            ? buildReadableAnswerFromToolResults(executedToolsInTurn, searchResults, finalSearchQuery)
+            : "I am temporarily unavailable because the AI service could not be reached. Please check your connection or try again shortly.";
 
           if (onChunk) {
             onChunk(unavailableNotice);
@@ -1416,8 +1489,24 @@ INSTRUCTIONS:
       }
     }
 
+    // When deadline or caps pass and no provider response was returned, synthesize best answer available
     if (!providerResponse) {
-      throw new Error('Failed to generate response from any AI provider.');
+      const bestAvailableAnswer = (executedToolsInTurn.length > 0 || searchResults.length > 0)
+        ? buildReadableAnswerFromToolResults(executedToolsInTurn, searchResults, finalSearchQuery)
+        : "I received your message, but the AI service could not complete the response in time. Please try asking again.";
+
+      if (onChunk) {
+        onChunk(bestAvailableAnswer);
+      }
+
+      providerResponse = {
+        content: bestAvailableAnswer,
+        model: 'system-fallback',
+        provider: primaryProviderType || 'system',
+        isMock: false,
+        finishReason: 'stop',
+        tokensUsed: { prompt: 0, completion: Math.ceil(bestAvailableAnswer.length / 4), total: Math.ceil(bestAvailableAnswer.length / 4) },
+      };
     }
 
     // 12. Clean, normalize and unwrap assistant message

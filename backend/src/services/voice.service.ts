@@ -30,20 +30,45 @@ export class VoiceService {
       }
     }
 
+    const runWithTimeout = async <T>(promise: Promise<T>, timeoutMs = 20000): Promise<T> => {
+      let timer: NodeJS.Timeout;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new ProviderError(
+              'Voice synthesis timed out after 20 seconds.',
+              targetProviderType || 'voice_ai',
+              'VOICE_TIMEOUT',
+              504
+            )
+          );
+        }, timeoutMs);
+      });
+      try {
+        return await Promise.race([promise, timeoutPromise]);
+      } finally {
+        clearTimeout(timer!);
+      }
+    };
+
     try {
       const primaryProvider = registry.getVoiceProvider(targetProviderType);
-      return await primaryProvider.synthesizeSpeech(request);
+      return await runWithTimeout(primaryProvider.synthesizeSpeech(request), 20000);
     } catch (primaryErr: any) {
       console.warn(`[VoiceService] Voice provider '${targetProviderType}' failed:`, primaryErr.message);
 
-      // If ElevenLabs was used in normal chat and failed, attempt safe fallback to Gemini
+      if (primaryErr?.code === 'VOICE_TIMEOUT') {
+        throw primaryErr;
+      }
+
+      // If ElevenLabs was used in normal chat and failed (and not a timeout), attempt safe fallback to Gemini
       // Note: Never fallback for 'personal' voice so we never generate fake audio or claim cloned speech
       if (targetProviderType === 'elevenlabs' && !request.provider) {
         const fallbackProvider = registry.getVoiceProvider('gemini');
         if (fallbackProvider && fallbackProvider.isConfigured) {
           console.log(`[VoiceService] Attempting voice failover from elevenlabs to Gemini Neural Voice...`);
           try {
-            const fallbackResponse = await fallbackProvider.synthesizeSpeech(request);
+            const fallbackResponse = await runWithTimeout(fallbackProvider.synthesizeSpeech(request), 10000);
             fallbackResponse.message = `${fallbackResponse.message} (Automatic failover from ${targetProviderType})`;
             return fallbackResponse;
           } catch (fallbackErr: any) {

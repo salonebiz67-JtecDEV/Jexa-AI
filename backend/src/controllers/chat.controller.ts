@@ -42,10 +42,23 @@ export class ChatController {
         }
       };
 
+      let currentStatus: any = 'Thinking...';
+      let currentDetails: any = undefined;
+
+      const heartbeatTimer = setInterval(() => {
+        sendEvent({
+          type: 'status',
+          status: currentStatus,
+          details: currentDetails,
+        });
+      }, 10000);
+
       try {
         const result = await ChatService.processMessage(
           payload,
           (status, details) => {
+            currentStatus = status;
+            currentDetails = details;
             sendEvent({
               type: 'status',
               status,
@@ -83,6 +96,8 @@ export class ChatController {
           fallbackUsed: Boolean(error.fallbackUsed),
         });
         res.end();
+      } finally {
+        clearInterval(heartbeatTimer);
       }
       return;
     }

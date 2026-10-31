@@ -150,14 +150,39 @@ export class GroqTextAIProvider implements ITextAIProvider {
       payloadBody.tool_choice = request.toolChoice || 'auto';
     }
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(payloadBody),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 30000);
+
+    let response: Response;
+    try {
+      response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(payloadBody),
+        signal: controller.signal,
+      });
+    } catch (fetchErr: any) {
+      if (controller.signal.aborted) {
+        const timeoutErr = new ProviderError(
+          'Groq request timed out after 30 seconds.',
+          'groq',
+          'PROVIDER_TIMEOUT',
+          504,
+          model
+        );
+        ErrorLogService.log('ai_provider', timeoutErr, { provider: 'groq', model, timeout: true });
+        this.lastError = timeoutErr.message;
+        throw timeoutErr;
+      }
+      throw fetchErr;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -280,16 +305,41 @@ export class GroqTextAIProvider implements ITextAIProvider {
       streamPayload.reasoning_effort = 'low';
     }
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(streamPayload),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 30000);
+
+    let response: Response;
+    try {
+      response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(streamPayload),
+        signal: controller.signal,
+      });
+    } catch (fetchErr: any) {
+      clearTimeout(timeoutId);
+      if (controller.signal.aborted) {
+        const timeoutErr = new ProviderError(
+          'Groq stream request timed out after 30 seconds.',
+          'groq',
+          'PROVIDER_TIMEOUT',
+          504,
+          this.modelName
+        );
+        ErrorLogService.log('ai_provider', timeoutErr, { provider: 'groq', model: this.modelName, stream: true, timeout: true });
+        this.lastError = timeoutErr.message;
+        throw timeoutErr;
+      }
+      throw fetchErr;
+    }
 
     if (!response.ok) {
+      clearTimeout(timeoutId);
       const errorText = await response.text();
       let parsedError: any;
       try {
@@ -336,6 +386,7 @@ export class GroqTextAIProvider implements ITextAIProvider {
 
     const reader = response.body?.getReader();
     if (!reader) {
+      clearTimeout(timeoutId);
       throw new ProviderError('No response body returned from Groq stream.', 'groq', 'EMPTY_STREAM', 500);
     }
 
@@ -343,31 +394,58 @@ export class GroqTextAIProvider implements ITextAIProvider {
     let fullText = '';
     let buffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        if (controller.signal.aborted) {
+          throw new ProviderError(
+            'Groq stream request timed out after 30 seconds.',
+            'groq',
+            'PROVIDER_TIMEOUT',
+            504,
+            this.modelName
+          );
+        }
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data: ')) continue;
-        const dataStr = trimmed.slice(6);
-        if (dataStr === '[DONE]') continue;
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+          const dataStr = trimmed.slice(6);
+          if (dataStr === '[DONE]') continue;
 
-        try {
-          const parsed = JSON.parse(dataStr);
-          const delta = parsed.choices?.[0]?.delta?.content;
-          if (delta) {
-            fullText += delta;
-            onChunk(delta, false);
+          try {
+            const parsed = JSON.parse(dataStr);
+            const delta = parsed.choices?.[0]?.delta?.content;
+            if (delta) {
+              fullText += delta;
+              onChunk(delta, false);
+            }
+          } catch {
+            // ignore non-json keep-alives
           }
-        } catch {
-          // ignore non-json keep-alives
         }
       }
+    } catch (readErr: any) {
+      if (controller.signal.aborted || readErr?.code === 'PROVIDER_TIMEOUT') {
+        const timeoutErr = new ProviderError(
+          'Groq stream request timed out after 30 seconds.',
+          'groq',
+          'PROVIDER_TIMEOUT',
+          504,
+          this.modelName
+        );
+        ErrorLogService.log('ai_provider', timeoutErr, { provider: 'groq', model: this.modelName, stream: true });
+        this.lastError = timeoutErr.message;
+        throw timeoutErr;
+      }
+      throw readErr;
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     onChunk('', true);

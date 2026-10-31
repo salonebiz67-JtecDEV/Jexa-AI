@@ -67,6 +67,19 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
       };
     }
 
+    if (currentStatus === 'This is taking too long') {
+      return {
+        icon: AlertTriangle,
+        color: 'text-amber-400',
+        bg: 'bg-amber-500/10',
+        border: 'border-amber-500/30',
+        dotColor: 'bg-amber-400',
+        glow: 'shadow-[0_0_12px_rgba(245,158,11,0.25)]',
+        spinIcon: false,
+        pulseIcon: false,
+      };
+    }
+
     if (
       currentStatus === 'Tool failed' ||
       currentStatus === 'Memory unavailable' ||
@@ -347,7 +360,7 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 flex-wrap">
             {/* Animated Micro Dots */}
-            {currentStatus !== 'Answer complete' && (
+            {currentStatus !== 'Answer complete' && currentStatus !== 'This is taking too long' && (
               <div className="flex items-center gap-1">
                 <div
                   className={`w-1.5 h-1.5 rounded-full ${config.dotColor} animate-bounce`}
@@ -397,12 +410,12 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
             )}
           </div>
 
-          {/* Retry Action if Search Failed */}
-          {currentStatus === 'Search failed — retry available' && onRetry && (
+          {/* Retry Action if Search Failed or Request Stalled */}
+          {(currentStatus === 'Search failed — retry available' || currentStatus === 'This is taking too long') && onRetry && (
             <button
               onClick={onRetry}
               className="px-2 py-0.5 text-[11px] font-medium rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 flex items-center gap-1 cursor-pointer transition-colors shrink-0"
-              title="Retry web search"
+              title="Retry"
             >
               <RotateCcw className="w-3 h-3" />
               <span>Retry</span>

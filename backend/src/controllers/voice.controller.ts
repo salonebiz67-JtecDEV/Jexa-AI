@@ -69,6 +69,8 @@ export class VoiceController {
         message = 'Provider authentication or permission failed.';
       } else if (statusCode === 503 || error.code === 'UNAVAILABLE') {
         message = 'The provider is temporarily unavailable.';
+      } else if (error.code === 'VOICE_TIMEOUT' || statusCode === 504) {
+        message = 'Voice synthesis timed out after 20 seconds.';
       } else if (error.code === 'NOT_CONFIGURED' || error.code === 'MISSING_CREDENTIALS') {
         message = provider === 'elevenlabs'
           ? 'ElevenLabs is not configured. Check ELEVENLABS_API_KEY in Render environment.'

@@ -105,6 +105,7 @@ export default defineConfig(({ mode }) => {
           ],
         },
         workbox: {
+          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,jpg,woff,woff2}'],
           cleanupOutdatedCaches: true,
           clientsClaim: true,

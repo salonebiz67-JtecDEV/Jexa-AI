@@ -312,11 +312,15 @@ export const ApiClient = {
     }
 
     try {
-      const response = await fetchWithTimeout(`${API_BASE}/chat`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(cleanPayload),
-      });
+      const response = await fetchWithTimeout(
+        `${API_BASE}/chat`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(cleanPayload),
+        },
+        75000
+      );
 
       if (!response.ok) {
         let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
@@ -416,14 +420,26 @@ export const ApiClient = {
       pitch: payload?.pitch,
     };
 
-    const res = await fetchWithTimeout(`${API_BASE}/voice`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'audio/*, application/json',
-      },
-      body: JSON.stringify(cleanPayload),
-    });
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(
+        `${API_BASE}/voice`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'audio/*, application/json',
+          },
+          body: JSON.stringify(cleanPayload),
+        },
+        20000
+      );
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        throw new ApiError('Voice synthesis timed out after 20 seconds.', 504, 'VOICE_TIMEOUT');
+      }
+      throw err;
+    }
 
     const contentType = res.headers.get('content-type') || '';
 

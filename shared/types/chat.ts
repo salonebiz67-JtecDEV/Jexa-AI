@@ -46,6 +46,7 @@ export type AIActivityStatus =
   | 'Writing the answer...'
   | 'Retrying…'
   | 'Retrying...'
+  | 'This is taking too long'
   | (string & {});
 
 export interface WebSearchResultItem {
