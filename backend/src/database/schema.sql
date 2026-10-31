@@ -304,4 +304,36 @@ DROP POLICY IF EXISTS "Service role can manage system_error_logs" ON public.syst
 CREATE POLICY "Service role can manage system_error_logs" ON public.system_error_logs
     FOR ALL USING (true) WITH CHECK (true);
 
+-- =========================================================================
+-- 13. AI USAGE LOG TABLE (Token Tracking & Operational Metrics)
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.ai_usage_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    timestamp_ms BIGINT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    prompt_tokens INT DEFAULT 0,
+    completion_tokens INT DEFAULT 0,
+    total_tokens INT DEFAULT 0,
+    is_estimated BOOLEAN DEFAULT false,
+    duration_ms INT DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('ok', 'rate_limited', 'error')),
+    message_id TEXT,
+    tool_name TEXT,
+    tavily_credits INT DEFAULT 0,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.ai_usage_log ENABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS idx_ai_usage_log_timestamp ON public.ai_usage_log(timestamp_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_log_purpose ON public.ai_usage_log(purpose);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_log_provider ON public.ai_usage_log(provider);
+
+DROP POLICY IF EXISTS "Service role can manage ai_usage_log" ON public.ai_usage_log;
+CREATE POLICY "Service role can manage ai_usage_log" ON public.ai_usage_log
+    FOR ALL USING (true) WITH CHECK (true);
+
+
 

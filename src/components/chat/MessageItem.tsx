@@ -808,11 +808,16 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 </div>
               )}
 
-              {/* Provider & Model metadata tag */}
+              {/* Provider & Model metadata tag with token count */}
               {message.metadata?.provider && (
                 <div className="ml-auto flex items-center gap-1.5 text-[10px] font-mono text-slate-500 select-none">
                   <span className="capitalize">{message.metadata.provider}</span>
                   {message.metadata.model && <span>({message.metadata.model})</span>}
+                  {typeof message.metadata.tokens === 'number' && message.metadata.tokens > 0 ? (
+                    <span className="text-slate-400">· {message.metadata.tokens.toLocaleString()} tokens</span>
+                  ) : message.content ? (
+                    <span className="text-slate-400">· ~{Math.ceil(message.content.length / 4).toLocaleString()} tokens</span>
+                  ) : null}
                   {message.metadata.fallbackUsed && (
                     <span className="text-amber-400 font-sans text-[9px] font-semibold bg-amber-500/15 px-1 rounded border border-amber-500/30">
                       Fallback

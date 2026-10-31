@@ -9,6 +9,7 @@ import { HealthController } from '../controllers/health.controller';
 import { ProviderController } from '../controllers/provider.controller';
 import { DatabaseController } from '../controllers/database.controller';
 import { AuthController } from '../controllers/auth.controller';
+import { UsageController } from '../controllers/usage.controller';
 
 import { authenticateRequest, isRequestOwner } from '../middleware/auth.middleware';
 
@@ -51,6 +52,11 @@ router.get('/providers/status', ProviderController.getStatus);
 router.post('/providers/select', ProviderController.selectProviders);
 router.post('/providers/test-text', ProviderController.testText);
 router.post('/providers/test-voice', ProviderController.testVoice);
+
+// Usage Tracking & Tool Administration (Owner Only)
+router.get('/usage/summary', UsageController.getSummary);
+router.get('/tools/status', UsageController.getToolsStatus);
+router.post('/tools/toggle', UsageController.toggleTool);
 
 // Conversations
 router.get('/conversations', ConversationController.list);

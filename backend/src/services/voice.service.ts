@@ -7,6 +7,7 @@ import {
   ProviderError,
 } from '../../../shared/types/provider';
 import { DatabaseService } from '../database/db-service';
+import { UsageTracker } from './usage-tracker.service';
 
 export class VoiceService {
   /**
@@ -51,11 +52,40 @@ export class VoiceService {
       }
     };
 
+    const voiceStartTime = Date.now();
     try {
       const primaryProvider = registry.getVoiceProvider(targetProviderType);
-      return await runWithTimeout(primaryProvider.synthesizeSpeech(request), 20000);
+      const res = await runWithTimeout(primaryProvider.synthesizeSpeech(request), 20000);
+
+      const textTokens = Math.ceil((request.text?.length || 0) / 4);
+      UsageTracker.recordAICall({
+        provider: targetProviderType || 'gemini',
+        model: request.voiceId || 'gemini-3.8-flash-lite-tts',
+        purpose: 'voice_tts',
+        promptTokens: textTokens,
+        completionTokens: 0,
+        totalTokens: textTokens,
+        isEstimated: true,
+        durationMs: Date.now() - voiceStartTime,
+        status: 'ok',
+      });
+
+      return res;
     } catch (primaryErr: any) {
       console.warn(`[VoiceService] Voice provider '${targetProviderType}' failed:`, primaryErr.message);
+
+      const textTokens = Math.ceil((request.text?.length || 0) / 4);
+      UsageTracker.recordAICall({
+        provider: targetProviderType || 'gemini',
+        model: request.voiceId || 'gemini-3.8-flash-lite-tts',
+        purpose: 'voice_tts',
+        promptTokens: textTokens,
+        completionTokens: 0,
+        totalTokens: textTokens,
+        isEstimated: true,
+        durationMs: Date.now() - voiceStartTime,
+        status: 'error',
+      });
 
       if (primaryErr?.code === 'VOICE_TIMEOUT') {
         throw primaryErr;

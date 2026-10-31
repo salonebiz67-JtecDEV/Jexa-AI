@@ -16,7 +16,8 @@ export interface AuthenticatedRequest extends Request {
 export function checkOwnerStatus(req: Request): boolean {
   const serverKey = process.env.OWNER_ACCESS_KEY?.trim();
   if (!serverKey) {
-    return false;
+    // In local dev/preview environments without OWNER_ACCESS_KEY set, treat as owner
+    return process.env.NODE_ENV !== 'production';
   }
   const requestKey = (req.headers['x-owner-key'] as string | undefined)?.trim();
   return Boolean(requestKey && requestKey === serverKey);

@@ -1,5 +1,6 @@
 import { WebSearchResultItem } from '../../../shared/types/chat';
 import { ErrorLogService } from './error-log.service';
+import { UsageTracker } from './usage-tracker.service';
 
 export interface TavilySearchOptions {
   maxResults?: number;
@@ -85,6 +86,7 @@ export class TavilyService {
       };
     }
 
+    const searchStartTime = Date.now();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
@@ -122,6 +124,7 @@ export class TavilyService {
         }
 
         console.error('[TavilyService] Search API error:', errMessage);
+        UsageTracker.recordTavilyCall(trimmedQuery, 0, Date.now() - searchStartTime, false, errMessage);
         return {
           success: false,
           query: trimmedQuery,
@@ -226,6 +229,9 @@ export class TavilyService {
         return 0;
       });
 
+      const credits = options.searchDepth === 'advanced' ? 2 : 1;
+      UsageTracker.recordTavilyCall(trimmedQuery, credits, Date.now() - searchStartTime, true);
+
       return {
         success: true,
         query: trimmedQuery,
@@ -243,6 +249,7 @@ export class TavilyService {
         query: trimmedQuery,
         code: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
       });
+      UsageTracker.recordTavilyCall(trimmedQuery, 0, Date.now() - searchStartTime, false, errorMessage);
       return {
         success: false,
         query: trimmedQuery,

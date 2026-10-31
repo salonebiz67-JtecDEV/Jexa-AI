@@ -713,4 +713,20 @@ export const ApiClient = {
   async getOwnerStatus(): Promise<{ isOwner: boolean }> {
     return fetchJson<{ isOwner: boolean }>(`${API_BASE}/owner/status`);
   },
+
+  // Usage Tracker & Tools (Owner)
+  async getUsageSummary(): Promise<any> {
+    return fetchJson<any>(`${API_BASE}/usage/summary`);
+  },
+
+  async getToolsStatus(): Promise<{ tools: any[]; isOwner: boolean }> {
+    return fetchJson<{ tools: any[]; isOwner: boolean }>(`${API_BASE}/tools/status`);
+  },
+
+  async toggleTool(toolName: string, enabled?: boolean): Promise<{ success: boolean; toolName: string; enabled: boolean }> {
+    return fetchJson<{ success: boolean; toolName: string; enabled: boolean }>(`${API_BASE}/tools/toggle`, {
+      method: 'POST',
+      body: JSON.stringify({ toolName, enabled }),
+    });
+  },
 };

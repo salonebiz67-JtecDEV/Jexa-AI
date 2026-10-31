@@ -5,6 +5,8 @@ import {
   ToolInputSchema,
 } from '../../../shared/types/tools';
 import { AIActivityStatus } from '../../../shared/types/chat';
+import { UsageTracker } from '../services/usage-tracker.service';
+import { ToolRegistry } from './tool-registry';
 
 export interface ExecuteToolOptions {
   onStatusUpdate?: (status: AIActivityStatus, details?: any) => void;
@@ -190,12 +192,16 @@ export class ToolExecutor {
         const result = await Promise.race([executionPromise, timeoutPromise]);
         clearTimeout(timeoutId);
 
+        const durationMs = Date.now() - startTime;
+        ToolRegistry.getInstance().recordToolRun(tool.name, durationMs, result.success, result.error);
+        UsageTracker.recordToolExecution(tool.name, durationMs, result.success, result.error, context?.messageId);
+
         if (result.success) {
           options.onStatusUpdate?.('Verifying results...', { tool: tool.name });
           return {
             ...result,
             data: this.sanitizeResult(result.data),
-            executionTimeMs: Date.now() - startTime,
+            executionTimeMs: durationMs,
           };
         } else {
           lastError = new Error(result.error || `Tool "${tool.name}" failed to execute.`);
@@ -212,13 +218,17 @@ export class ToolExecutor {
 
     // If loop finishes without returning, report failure
     const errorMsg = lastError?.message || `Execution of tool "${tool.name}" failed.`;
+    const failDurationMs = Date.now() - startTime;
+    ToolRegistry.getInstance().recordToolRun(tool.name, failDurationMs, false, errorMsg);
+    UsageTracker.recordToolExecution(tool.name, failDurationMs, false, errorMsg, context?.messageId);
+
     options.onStatusUpdate?.('Tool failed', { error: errorMsg, tool: tool.name });
 
     return {
       success: false,
       toolName: tool.name,
       error: errorMsg,
-      executionTimeMs: Date.now() - startTime,
+      executionTimeMs: failDurationMs,
     };
   }
 }

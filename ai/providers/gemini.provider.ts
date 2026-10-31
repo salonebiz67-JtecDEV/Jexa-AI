@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { ITextAIProvider, TextGenerationRequest, TextGenerationResponse } from './text-provider.interface';
 import { TextProviderType, ProviderError, formatCleanProviderError } from '../../shared/types/provider';
 import { ErrorLogService } from '../../backend/src/services/error-log.service';
+import { UsageTracker } from '../../backend/src/services/usage-tracker.service';
 
 export class GeminiTextAIProvider implements ITextAIProvider {
   public readonly providerType: TextProviderType = 'gemini';
@@ -169,6 +170,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     }, 30000);
     config.abortSignal = controller.signal;
 
+    const callStartTime = Date.now();
     let lastError: any = null;
 
     try {
@@ -206,15 +208,33 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           }
 
           const hasToolCalls = detectedCalls.length > 0;
+          const usageMeta = (response as any).usageMetadata;
+          const promptTokens = usageMeta?.promptTokenCount ?? Math.ceil(request.systemPrompt.length / 4);
+          const completionTokens = usageMeta?.candidatesTokenCount ?? Math.ceil((responseText.length || 20) / 4);
+          const totalTokens = usageMeta?.totalTokenCount ?? (promptTokens + completionTokens);
+          const isEstimated = !usageMeta?.promptTokenCount;
+
+          UsageTracker.recordAICall({
+            provider: 'gemini',
+            model: this.modelName,
+            purpose: request.purpose || (hasToolCalls ? 'tool_round' : 'chat'),
+            promptTokens,
+            completionTokens,
+            totalTokens,
+            isEstimated,
+            durationMs: Date.now() - callStartTime,
+            status: 'ok',
+            messageId: request.messageId,
+          });
 
           return {
             content: responseText,
             model: this.modelName,
             provider: this.providerType,
             tokensUsed: {
-              prompt: Math.ceil(request.systemPrompt.length / 4),
-              completion: Math.ceil((responseText.length || 20) / 4),
-              total: Math.ceil((request.systemPrompt.length + (responseText.length || 20)) / 4),
+              prompt: promptTokens,
+              completion: completionTokens,
+              total: totalTokens,
             },
             isMock: false,
             finishReason: hasToolCalls ? 'tool_call' : 'stop',
@@ -254,14 +274,31 @@ export class GeminiTextAIProvider implements ITextAIProvider {
                 config,
               });
               const retryText = retryResponse.text || '';
+              const retryUsage = (retryResponse as any).usageMetadata;
+              const promptTok = retryUsage?.promptTokenCount ?? Math.ceil(request.systemPrompt.length / 4);
+              const compTok = retryUsage?.candidatesTokenCount ?? Math.ceil((retryText.length || 20) / 4);
+
+              UsageTracker.recordAICall({
+                provider: 'gemini',
+                model: this.modelName,
+                purpose: request.purpose || 'chat',
+                promptTokens: promptTok,
+                completionTokens: compTok,
+                totalTokens: retryUsage?.totalTokenCount ?? (promptTok + compTok),
+                isEstimated: !retryUsage?.promptTokenCount,
+                durationMs: Date.now() - callStartTime,
+                status: 'ok',
+                messageId: request.messageId,
+              });
+
               return {
                 content: retryText,
                 model: this.modelName,
                 provider: this.providerType,
                 tokensUsed: {
-                  prompt: Math.ceil(request.systemPrompt.length / 4),
-                  completion: Math.ceil((retryText.length || 20) / 4),
-                  total: Math.ceil((request.systemPrompt.length + (retryText.length || 20)) / 4),
+                  prompt: promptTok,
+                  completion: compTok,
+                  total: retryUsage?.totalTokenCount ?? (promptTok + compTok),
                 },
                 isMock: false,
                 finishReason: 'stop',
@@ -289,6 +326,21 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       ErrorLogService.log('ai_provider', lastError, { provider: 'gemini', model: this.modelName });
       const formatted = formatCleanProviderError(lastError);
       this.lastError = formatted.cleanMessage;
+
+      const isRateLimited = formatted.code === 'RATE_LIMIT' || formatted.statusCode === 429;
+      UsageTracker.recordAICall({
+        provider: 'gemini',
+        model: this.modelName,
+        purpose: request.purpose || 'chat',
+        promptTokens: Math.ceil(request.systemPrompt.length / 4),
+        completionTokens: 0,
+        totalTokens: Math.ceil(request.systemPrompt.length / 4),
+        isEstimated: true,
+        durationMs: Date.now() - callStartTime,
+        status: isRateLimited ? 'rate_limited' : 'error',
+        messageId: request.messageId,
+        metadata: { error: formatted.cleanMessage, code: formatted.code },
+      });
 
       throw new ProviderError(
         formatted.cleanMessage,
@@ -321,6 +373,8 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     const timeoutId = setTimeout(() => {
       controller.abort();
     }, 30000);
+
+    const streamStartTime = Date.now();
 
     try {
       const contents = this.formatGeminiContents(request.messages);
@@ -395,14 +449,31 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       onChunk('', true);
       this.lastError = undefined;
 
+      const promptTokens = Math.ceil(request.systemPrompt.length / 4);
+      const completionTokens = Math.ceil(fullText.length / 4);
+      const totalTokens = promptTokens + completionTokens;
+
+      UsageTracker.recordAICall({
+        provider: 'gemini',
+        model: this.modelName,
+        purpose: request.purpose || 'chat',
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        isEstimated: true,
+        durationMs: Date.now() - streamStartTime,
+        status: 'ok',
+        messageId: request.messageId,
+      });
+
       return {
         content: fullText,
         model: this.modelName,
         provider: this.providerType,
         tokensUsed: {
-          prompt: Math.ceil(request.systemPrompt.length / 4),
-          completion: Math.ceil(fullText.length / 4),
-          total: Math.ceil((request.systemPrompt.length + fullText.length) / 4),
+          prompt: promptTokens,
+          completion: completionTokens,
+          total: totalTokens,
         },
         isMock: false,
         finishReason: 'stop',
@@ -418,6 +489,19 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         );
         ErrorLogService.log('ai_provider', timeoutErr, { provider: 'gemini', model: this.modelName, stream: true });
         this.lastError = timeoutErr.message;
+        UsageTracker.recordAICall({
+          provider: 'gemini',
+          model: this.modelName,
+          purpose: request.purpose || 'chat',
+          promptTokens: Math.ceil(request.systemPrompt.length / 4),
+          completionTokens: 0,
+          totalTokens: Math.ceil(request.systemPrompt.length / 4),
+          isEstimated: true,
+          durationMs: Date.now() - streamStartTime,
+          status: 'error',
+          messageId: request.messageId,
+          metadata: { timeout: true },
+        });
         throw timeoutErr;
       }
       console.error('[GeminiTextAIProvider] Streaming failed:', error);
@@ -428,6 +512,22 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       ErrorLogService.log('ai_provider', error, { provider: 'gemini', model: this.modelName, stream: true });
       const formatted = formatCleanProviderError(error);
       this.lastError = formatted.cleanMessage;
+
+      const isRateLimited = formatted.code === 'RATE_LIMIT' || formatted.statusCode === 429;
+      UsageTracker.recordAICall({
+        provider: 'gemini',
+        model: this.modelName,
+        purpose: request.purpose || 'chat',
+        promptTokens: Math.ceil(request.systemPrompt.length / 4),
+        completionTokens: 0,
+        totalTokens: Math.ceil(request.systemPrompt.length / 4),
+        isEstimated: true,
+        durationMs: Date.now() - streamStartTime,
+        status: isRateLimited ? 'rate_limited' : 'error',
+        messageId: request.messageId,
+        metadata: { error: formatted.cleanMessage, code: formatted.code },
+      });
+
       throw new ProviderError(
         formatted.cleanMessage,
         'gemini',

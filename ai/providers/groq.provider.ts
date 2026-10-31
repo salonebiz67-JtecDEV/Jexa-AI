@@ -1,6 +1,7 @@
 import { ITextAIProvider, TextGenerationRequest, TextGenerationResponse } from './text-provider.interface';
 import { TextProviderType, ProviderError, formatCleanProviderError } from '../../shared/types/provider';
 import { ErrorLogService } from '../../backend/src/services/error-log.service';
+import { UsageTracker } from '../../backend/src/services/usage-tracker.service';
 
 export class GroqTextAIProvider implements ITextAIProvider {
   public readonly providerType: TextProviderType = 'groq';
@@ -150,6 +151,7 @@ export class GroqTextAIProvider implements ITextAIProvider {
       payloadBody.tool_choice = request.toolChoice || 'auto';
     }
 
+    const callStartTime = Date.now();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       controller.abort();
@@ -177,6 +179,19 @@ export class GroqTextAIProvider implements ITextAIProvider {
         );
         ErrorLogService.log('ai_provider', timeoutErr, { provider: 'groq', model, timeout: true });
         this.lastError = timeoutErr.message;
+        UsageTracker.recordAICall({
+          provider: 'groq',
+          model,
+          purpose: request.purpose || 'chat',
+          promptTokens: Math.ceil(request.systemPrompt.length / 4),
+          completionTokens: 0,
+          totalTokens: Math.ceil(request.systemPrompt.length / 4),
+          isEstimated: true,
+          durationMs: Date.now() - callStartTime,
+          status: 'error',
+          messageId: request.messageId,
+          metadata: { timeout: true },
+        });
         throw timeoutErr;
       }
       throw fetchErr;
@@ -220,6 +235,20 @@ export class GroqTextAIProvider implements ITextAIProvider {
         retryAfterSeconds,
       });
 
+      UsageTracker.recordAICall({
+        provider: 'groq',
+        model,
+        purpose: request.purpose || 'chat',
+        promptTokens: Math.ceil(request.systemPrompt.length / 4),
+        completionTokens: 0,
+        totalTokens: Math.ceil(request.systemPrompt.length / 4),
+        isEstimated: true,
+        durationMs: Date.now() - callStartTime,
+        status: response.status === 429 ? 'rate_limited' : 'error',
+        messageId: request.messageId,
+        metadata: { error: formatted.cleanMessage, code: formatted.code },
+      });
+
       throw new ProviderError(
         formatted.cleanMessage,
         'groq',
@@ -255,15 +284,32 @@ export class GroqTextAIProvider implements ITextAIProvider {
     }
 
     const hasToolCalls = detectedCalls.length > 0;
+    const promptTokens = data.usage?.prompt_tokens ?? Math.ceil(request.systemPrompt.length / 4);
+    const completionTokens = data.usage?.completion_tokens ?? Math.ceil((content.length || 20) / 4);
+    const totalTokens = data.usage?.total_tokens ?? (promptTokens + completionTokens);
+    const isEstimated = !data.usage?.prompt_tokens;
+
+    UsageTracker.recordAICall({
+      provider: 'groq',
+      model,
+      purpose: request.purpose || (hasToolCalls ? 'tool_round' : 'chat'),
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      isEstimated,
+      durationMs: Date.now() - callStartTime,
+      status: 'ok',
+      messageId: request.messageId,
+    });
 
     return {
       content,
       model,
       provider: this.providerType,
       tokensUsed: {
-        prompt: data.usage?.prompt_tokens ?? Math.ceil(request.systemPrompt.length / 4),
-        completion: data.usage?.completion_tokens ?? Math.ceil((content.length || 20) / 4),
-        total: data.usage?.total_tokens ?? Math.ceil((request.systemPrompt.length + (content.length || 20)) / 4),
+        prompt: promptTokens,
+        completion: completionTokens,
+        total: totalTokens,
       },
       isMock: false,
       finishReason: hasToolCalls ? 'tool_call' : (choice?.finish_reason === 'length' ? 'length' : 'stop'),
@@ -305,6 +351,7 @@ export class GroqTextAIProvider implements ITextAIProvider {
       streamPayload.reasoning_effort = 'low';
     }
 
+    const streamStartTime = Date.now();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       controller.abort();
@@ -333,6 +380,19 @@ export class GroqTextAIProvider implements ITextAIProvider {
         );
         ErrorLogService.log('ai_provider', timeoutErr, { provider: 'groq', model: this.modelName, stream: true, timeout: true });
         this.lastError = timeoutErr.message;
+        UsageTracker.recordAICall({
+          provider: 'groq',
+          model: this.modelName,
+          purpose: request.purpose || 'chat',
+          promptTokens: Math.ceil(request.systemPrompt.length / 4),
+          completionTokens: 0,
+          totalTokens: Math.ceil(request.systemPrompt.length / 4),
+          isEstimated: true,
+          durationMs: Date.now() - streamStartTime,
+          status: 'error',
+          messageId: request.messageId,
+          metadata: { timeout: true },
+        });
         throw timeoutErr;
       }
       throw fetchErr;
@@ -372,6 +432,20 @@ export class GroqTextAIProvider implements ITextAIProvider {
         provider: 'groq',
         model: this.modelName,
         retryAfterSeconds,
+      });
+
+      UsageTracker.recordAICall({
+        provider: 'groq',
+        model: this.modelName,
+        purpose: request.purpose || 'chat',
+        promptTokens: Math.ceil(request.systemPrompt.length / 4),
+        completionTokens: 0,
+        totalTokens: Math.ceil(request.systemPrompt.length / 4),
+        isEstimated: true,
+        durationMs: Date.now() - streamStartTime,
+        status: response.status === 429 ? 'rate_limited' : 'error',
+        messageId: request.messageId,
+        metadata: { error: formatted.cleanMessage, code: formatted.code },
       });
 
       throw new ProviderError(
@@ -441,6 +515,19 @@ export class GroqTextAIProvider implements ITextAIProvider {
         );
         ErrorLogService.log('ai_provider', timeoutErr, { provider: 'groq', model: this.modelName, stream: true });
         this.lastError = timeoutErr.message;
+        UsageTracker.recordAICall({
+          provider: 'groq',
+          model: this.modelName,
+          purpose: request.purpose || 'chat',
+          promptTokens: Math.ceil(request.systemPrompt.length / 4),
+          completionTokens: 0,
+          totalTokens: Math.ceil(request.systemPrompt.length / 4),
+          isEstimated: true,
+          durationMs: Date.now() - streamStartTime,
+          status: 'error',
+          messageId: request.messageId,
+          metadata: { timeout: true },
+        });
         throw timeoutErr;
       }
       throw readErr;
@@ -450,14 +537,31 @@ export class GroqTextAIProvider implements ITextAIProvider {
 
     onChunk('', true);
 
+    const promptTokens = Math.ceil(request.systemPrompt.length / 4);
+    const completionTokens = Math.ceil(fullText.length / 4);
+    const totalTokens = promptTokens + completionTokens;
+
+    UsageTracker.recordAICall({
+      provider: 'groq',
+      model: this.modelName,
+      purpose: request.purpose || 'chat',
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      isEstimated: true,
+      durationMs: Date.now() - streamStartTime,
+      status: 'ok',
+      messageId: request.messageId,
+    });
+
     return {
       content: fullText,
       model: this.modelName,
       provider: this.providerType,
       tokensUsed: {
-        prompt: Math.ceil(request.systemPrompt.length / 4),
-        completion: Math.ceil(fullText.length / 4),
-        total: Math.ceil((request.systemPrompt.length + fullText.length) / 4),
+        prompt: promptTokens,
+        completion: completionTokens,
+        total: totalTokens,
       },
       isMock: false,
       finishReason: 'stop',

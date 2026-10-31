@@ -31,6 +31,8 @@ export interface TextGenerationRequest {
   metadata?: Record<string, any>;
   tools?: ToolDeclaration[];
   toolChoice?: 'auto' | 'none' | 'required';
+  purpose?: 'chat' | 'tool_round' | 'memory_extraction' | 'style_learner' | 'search_decision' | 'voice_tts';
+  messageId?: string;
 }
 
 export interface TextGenerationResponse {

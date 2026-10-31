@@ -10,9 +10,23 @@ import { listSourceFilesTool } from './definitions/list-source-files.tool';
 import { readSourceFileTool } from './definitions/read-source-file.tool';
 import { searchCodeTool } from './definitions/search-code.tool';
 
+export interface ToolStatusItem {
+  name: string;
+  displayName: string;
+  description: string;
+  enabled: boolean;
+  isAvailable: boolean;
+  isOwnerOnly: boolean;
+  callsToday: number;
+  averageDurationMs: number;
+  lastError?: string;
+}
+
 export class ToolRegistry {
   private static instance: ToolRegistry;
   private tools: Map<string, InternalToolDefinition> = new Map();
+  private disabledTools: Set<string> = new Set();
+  private toolStats: Map<string, { callsToday: number; totalDurationMs: number; lastError?: string; lastDate: string }> = new Map();
 
   private constructor() {
     this.registerBuiltInTools();
@@ -23,6 +37,103 @@ export class ToolRegistry {
       ToolRegistry.instance = new ToolRegistry();
     }
     return ToolRegistry.instance;
+  }
+
+  private getTodayDateStr(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  public recordToolRun(name: string, durationMs: number, success: boolean, error?: string): void {
+    const today = this.getTodayDateStr();
+    let stat = this.toolStats.get(name);
+    if (!stat || stat.lastDate !== today) {
+      stat = { callsToday: 0, totalDurationMs: 0, lastError: undefined, lastDate: today };
+      this.toolStats.set(name, stat);
+    }
+    stat.callsToday += 1;
+    stat.totalDurationMs += Math.max(0, durationMs);
+    if (!success && error) {
+      stat.lastError = String(error).slice(0, 200);
+    }
+  }
+
+  public toggleTool(name: string, enabled?: boolean): boolean {
+    const isCurrentlyEnabled = !this.disabledTools.has(name);
+    const targetState = enabled !== undefined ? enabled : !isCurrentlyEnabled;
+
+    if (targetState) {
+      this.disabledTools.delete(name);
+    } else {
+      this.disabledTools.add(name);
+    }
+    return !this.disabledTools.has(name);
+  }
+
+  public isToolEnabled(name: string): boolean {
+    return !this.disabledTools.has(name);
+  }
+
+  public async getToolStatusList(isOwner = true): Promise<ToolStatusItem[]> {
+    const today = this.getTodayDateStr();
+    const result: ToolStatusItem[] = [];
+
+    // Ensure our 10 standard tools appear in the specified canonical order
+    const canonicalOrder = [
+      'web_search',
+      'memory_search',
+      'past_conversations_search',
+      'research_history_search',
+      'system_time',
+      'system_check',
+      'recent_errors',
+      'list_source_files',
+      'read_source_file',
+      'search_code',
+    ];
+
+    const allToolsMap = new Map<string, InternalToolDefinition>();
+    for (const t of this.tools.values()) {
+      allToolsMap.set(t.name, t);
+    }
+
+    const ownerOnlyTools = new Set([
+      'system_check',
+      'recent_errors',
+      'list_source_files',
+      'read_source_file',
+      'search_code',
+    ]);
+
+    for (const toolName of canonicalOrder) {
+      const tool = allToolsMap.get(toolName);
+      if (!tool) continue;
+
+      let isAvailable = false;
+      try {
+        isAvailable = await tool.isAvailable({ isOwner });
+      } catch {
+        isAvailable = false;
+      }
+
+      const stat = this.toolStats.get(tool.name);
+      const callsToday = stat && stat.lastDate === today ? stat.callsToday : 0;
+      const totalDuration = stat && stat.lastDate === today ? stat.totalDurationMs : 0;
+      const avgDuration = callsToday > 0 ? Math.round(totalDuration / callsToday) : 0;
+
+      result.push({
+        name: tool.name,
+        displayName: tool.displayName || tool.name,
+        description: tool.description,
+        enabled: !this.disabledTools.has(tool.name),
+        isAvailable,
+        isOwnerOnly: ownerOnlyTools.has(tool.name),
+        callsToday,
+        averageDurationMs: avgDuration,
+        lastError: stat?.lastError,
+      });
+    }
+
+    return result;
   }
 
   private registerBuiltInTools(): void {
@@ -85,6 +196,10 @@ export class ToolRegistry {
   public async getAvailableTools(context?: InternalToolContext): Promise<InternalToolDefinition[]> {
     const available: InternalToolDefinition[] = [];
     for (const tool of this.tools.values()) {
+      // Disabled tools must NOT be sent to the model
+      if (this.disabledTools.has(tool.name)) {
+        continue;
+      }
       try {
         const isAvail = await tool.isAvailable(context);
         if (isAvail) {
