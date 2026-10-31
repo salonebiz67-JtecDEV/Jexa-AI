@@ -17,17 +17,25 @@ export class AIProviderRegistry {
   private defaultVoiceType: VoiceProviderType = 'gemini';
   private config: AIProvidersConfig;
 
+  private backupTextProvider: ITextAIProvider;
+  private backgroundTextProvider: ITextAIProvider;
+
   private constructor() {
     this.config = loadAIProvidersConfig();
 
     // Initialize Text Providers
-    const geminiText = new GeminiTextAIProvider();
+    const geminiText = new GeminiTextAIProvider(this.config.text.model);
+    const geminiBackup = new GeminiTextAIProvider(this.config.text.backupModel);
+    const geminiBackground = new GeminiTextAIProvider(this.config.text.backgroundModel);
     const groqText = new GroqTextAIProvider();
     const devText = new DevelopmentTextAIProvider();
 
     this.textProviders.set('gemini', geminiText);
     this.textProviders.set('groq', groqText);
     this.textProviders.set('development_mock', devText);
+
+    this.backupTextProvider = geminiBackup.isConfigured ? geminiBackup : geminiText;
+    this.backgroundTextProvider = geminiBackground.isConfigured ? geminiBackground : geminiText;
 
     // Default text provider based on config or availability
     if (this.config.text.provider === 'groq' && groqText.isConfigured) {
@@ -55,7 +63,7 @@ export class AIProviderRegistry {
     }
 
     console.log(
-      `[AIProviderRegistry] Loaded providers - Text: [gemini (${geminiText.isConfigured ? 'ready' : 'missing key'}), groq (${groqText.isConfigured ? 'ready' : 'missing key'})] | Voice: [gemini (${geminiVoice.isConfigured ? 'ready' : 'missing key'}), elevenlabs (${elevenLabsVoice.isConfigured ? 'ready' : 'missing key'})]`
+      `[AIProviderRegistry] Loaded providers - Text: [gemini: ${geminiText.modelName} (${geminiText.isConfigured ? 'ready' : 'missing key'}), backup: ${this.backupTextProvider.modelName}, background: ${this.backgroundTextProvider.modelName}, groq (${groqText.isConfigured ? 'ready' : 'missing key'})] | Voice: [gemini (${geminiVoice.isConfigured ? 'ready' : 'missing key'}), elevenlabs (${elevenLabsVoice.isConfigured ? 'ready' : 'missing key'})]`
     );
   }
 
@@ -80,6 +88,14 @@ export class AIProviderRegistry {
       return fallback;
     }
     throw new Error('[AIProviderRegistry] No text provider available.');
+  }
+
+  public getBackupTextProvider(): ITextAIProvider {
+    return this.backupTextProvider || this.getTextProvider('gemini');
+  }
+
+  public getBackgroundTextProvider(): ITextAIProvider {
+    return this.backgroundTextProvider || this.getTextProvider('gemini');
   }
 
   public getVoiceProvider(type?: VoiceProviderType): IVoiceAIProvider {

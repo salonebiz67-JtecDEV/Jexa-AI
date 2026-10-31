@@ -20,8 +20,7 @@ export interface ResearchHistoryToolData {
 export const researchHistoryTool: InternalToolDefinition<ResearchHistoryToolArgs, ResearchHistoryToolData> = {
   name: 'research_history_search',
   displayName: 'Research History Recall',
-  description:
-    'Retrieve previous web research queries and verified source digests that were previously investigated for this user. Use to check if a topic was already researched recently or to review prior sources.',
+  description: 'Retrieve previous web research queries and source summaries investigated for this user.',
   category: 'search',
   permissionLevel: 'read_only',
   timeoutMs: 4000,

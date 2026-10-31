@@ -1,10 +1,25 @@
 import { TextProviderType, VoiceProviderType } from '../../shared/types/provider';
 
+function sanitizeTextModel(modelName: string, fallback: string, envVarName: string): string {
+  const trimmed = (modelName || '').trim();
+  if (!trimmed) return fallback;
+  if (trimmed.toLowerCase().includes('-tts') || trimmed.toLowerCase().endsWith('tts')) {
+    console.warn(`[AIConfig] TTS model '${trimmed}' in ${envVarName} cannot be used as a text model. Reverting to '${fallback}'.`);
+    return fallback;
+  }
+  if (trimmed === 'gemini-2.5-flash' || trimmed === 'gemini-1.5-flash' || trimmed === 'gemini-pro') {
+    return 'gemini-3.8-flash';
+  }
+  return trimmed;
+}
+
 export interface AIProvidersConfig {
   text: {
     provider: TextProviderType;
     apiKey?: string;
     model: string;
+    backupModel: string;
+    backgroundModel: string;
     temperature: number;
     maxTokens: number;
     endpoint?: string;
@@ -51,20 +66,26 @@ export function loadAIProvidersConfig(): AIProvidersConfig {
   const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM'; // Rachel
   const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
 
+  const textModel = sanitizeTextModel(process.env.TEXT_AI_MODEL || 'gemini-3.8-flash', 'gemini-3.8-flash', 'TEXT_AI_MODEL');
+  const textBackupModel = sanitizeTextModel(process.env.TEXT_AI_BACKUP_MODEL || 'gemini-3.7-flash', 'gemini-3.7-flash', 'TEXT_AI_BACKUP_MODEL');
+  const backgroundModel = sanitizeTextModel(process.env.BACKGROUND_AI_MODEL || 'gemini-3.5-flash-lite', 'gemini-3.5-flash-lite', 'BACKGROUND_AI_MODEL');
+
   return {
     text: {
       provider: textProvider,
       apiKey: textApiKey,
-      model: process.env.TEXT_AI_MODEL || 'gemini-3.8-flash',
+      model: textModel,
+      backupModel: textBackupModel,
+      backgroundModel: backgroundModel,
       temperature: parseFloat(process.env.TEXT_AI_TEMPERATURE || '0.7'),
-      maxTokens: parseInt(process.env.TEXT_AI_MAX_TOKENS || '2048', 10),
+      maxTokens: parseInt(process.env.TEXT_AI_MAX_TOKENS || '4096', 10),
       endpoint: process.env.TEXT_AI_ENDPOINT,
     },
     groq: {
       apiKey: groqApiKey,
       model: groqModel,
       temperature: parseFloat(process.env.GROQ_TEMPERATURE || '0.7'),
-      maxTokens: parseInt(process.env.GROQ_MAX_TOKENS || '2048', 10),
+      maxTokens: parseInt(process.env.GROQ_MAX_TOKENS || '4096', 10),
     },
     voice: {
       provider: voiceProvider,

@@ -20,6 +20,11 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       'gemini-3.8-flash'
     ).trim();
 
+    if (rawModel.toLowerCase().includes('-tts') || rawModel.toLowerCase().endsWith('tts')) {
+      console.warn(`[GeminiTextAIProvider] TTS model '${rawModel}' cannot be used as a text model. Reverting to 'gemini-3.8-flash'.`);
+      rawModel = 'gemini-3.8-flash';
+    }
+
     // Automatically alias deprecated models to modern gemini-3.8-flash
     if (rawModel === 'gemini-2.5-flash' || rawModel === 'gemini-1.5-flash' || rawModel === 'gemini-pro') {
       rawModel = 'gemini-3.8-flash';

@@ -1,4 +1,5 @@
 import { ITextAIProvider } from '../../../ai/providers/text-provider.interface';
+import { AIProviderRegistry } from '../../../ai/providers/registry';
 
 export interface SearchDecision {
   shouldSearch: boolean;
@@ -240,16 +241,17 @@ export class SearchDecisionService {
       };
     }
 
-    // 11. AI Provider Decision: For ambiguous or factual inquiries, ask active AI model
-    if (aiProvider && aiProvider.isConfigured && aiProvider.providerType !== 'development_mock') {
-      try {
-        const aiDecision = await this.classifyWithAIProvider(raw, aiProvider, recentDialogue);
+    // 11. AI Provider Decision: For ambiguous or factual inquiries, ask background AI model (never chat model)
+    try {
+      const backgroundProvider = AIProviderRegistry.getInstance().getBackgroundTextProvider();
+      if (backgroundProvider && backgroundProvider.isConfigured && backgroundProvider.providerType !== 'development_mock') {
+        const aiDecision = await this.classifyWithAIProvider(raw, backgroundProvider, recentDialogue);
         if (aiDecision) {
           return aiDecision;
         }
-      } catch (err: any) {
-        console.warn('[SearchDecisionService] AI provider classification bypassed:', err.message);
       }
+    } catch {
+      // Silently skip if limited or unavailable
     }
 
     // 12. Secondary heuristic check for general factual questions about current world status

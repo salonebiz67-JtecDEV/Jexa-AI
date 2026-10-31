@@ -669,8 +669,34 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               </div>
             )}
 
+            {/* Clear empty response notice with Retry button */}
+            {!isUser &&
+              (message.content?.includes("I couldn't generate a complete response") ||
+                message.content?.includes("I completed gathering the necessary information")) && (
+                <div className="my-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-xs text-amber-300">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                    <span>I couldn't generate a complete response. Please try again.</span>
+                  </div>
+                  {onRegenerate && (
+                    <button
+                      onClick={() => onRegenerate()}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-medium transition-colors cursor-pointer shrink-0 border border-amber-500/30"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Retry</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
             {/* Rendered Markdown Body */}
-            {renderFormattedContent(message.content)}
+            {renderFormattedContent(
+              message.content?.replace(
+                'I completed gathering the necessary information for your request. Please try asking again.',
+                "I couldn't generate a complete response. Please try again."
+              )
+            )}
 
             {/* Action Buttons Bar */}
             <div className="flex items-center gap-1 pt-1.5 opacity-80 group-hover:opacity-100 transition-opacity text-slate-400 text-xs">

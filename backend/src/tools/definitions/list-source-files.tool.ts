@@ -25,8 +25,7 @@ export interface ListSourceFilesData {
 export const listSourceFilesTool: InternalToolDefinition<ListSourceFilesArgs, ListSourceFilesData> = {
   name: 'list_source_files',
   displayName: 'List Source Files (Owner Only)',
-  description:
-    'Lists source files on the server disk within allowed repository folders (src, backend, ai, shared, scripts, database SQL, package.json, render.yaml, vite config, .github/workflows). Blocked: .env files, .git, node_modules, dist, and paths outside the repo. Strictly read-only and restricted to the verified owner.',
+  description: 'List source files on the server disk within allowed repository folders.',
   category: 'system',
   permissionLevel: 'sensitive',
   timeoutMs: 15000,

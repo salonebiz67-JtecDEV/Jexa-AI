@@ -23,8 +23,7 @@ export interface MemorySearchToolData {
 export const memorySearchTool: InternalToolDefinition<MemorySearchToolArgs, MemorySearchToolData> = {
   name: 'memory_search',
   displayName: 'Personal Memory Recall',
-  description:
-    'Search and recall durable personal facts, user preferences, relationships, and goals saved in long-term memory for the authenticated user. Use when the user asks what you know or remember about them, references personal details, or when personal context is needed to personalize the answer.',
+  description: 'Search and recall durable personal facts, preferences, and goals saved in long-term memory.',
   category: 'memory',
   permissionLevel: 'read_only',
   timeoutMs: 4000,

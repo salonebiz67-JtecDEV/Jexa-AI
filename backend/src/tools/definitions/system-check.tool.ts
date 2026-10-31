@@ -49,8 +49,7 @@ export interface SystemCheckData {
 export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemCheckData> = {
   name: 'system_check',
   displayName: 'System Health & Infrastructure Self-Check',
-  description:
-    'Tests Supabase connection and query speed, checks every table and schema column (including memories.memory_type), performs safe read/write tests, inspects AI provider status (Gemini, Groq), Tavily web search, voice synthesis, server uptime, and verifies which Render environment variables are set or missing (names only, never secret values). Use this tool when the owner asks to "check the systems", "run diagnostics", "is Supabase okay?", "health check", "how are the servers?", or requests an architecture check.',
+  description: 'Run comprehensive diagnostics on database connectivity, schemas, server health, and environment status.',
   category: 'system',
   permissionLevel: 'sensitive',
   timeoutMs: 15000,

@@ -207,12 +207,12 @@ export class MemoryService {
       // 1. Re-use existing memories if provided, or load once
       const existingMemories = providedMemories || (await DatabaseService.getMemories(userId));
 
-      // 2. Resolve active text provider for intelligent AI extraction if not provided
+      // 2. Resolve background text provider for AI extraction (never chat model)
       let activeProvider = provider;
       if (!activeProvider) {
         try {
           const registry = AIProviderRegistry.getInstance();
-          activeProvider = registry.getTextProvider();
+          activeProvider = registry.getBackgroundTextProvider();
         } catch {
           // Provider registry fallback
         }

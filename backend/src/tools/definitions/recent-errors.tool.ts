@@ -14,8 +14,7 @@ export interface RecentErrorsData {
 export const recentErrorsTool: InternalToolDefinition<RecentErrorsArgs, RecentErrorsData> = {
   name: 'recent_errors',
   displayName: 'Recent Operational Error Logs',
-  description:
-    'Returns the latest operational server errors and warnings captured from chat, AI providers, memory storage, web search, and Supabase. Use this tool when the owner asks "any bugs?", "show errors", "check error logs", "what went wrong recently?", or inquires about backend failures.',
+  description: 'Retrieve the latest operational server errors and warnings logged by backend services.',
   category: 'system',
   permissionLevel: 'sensitive',
   timeoutMs: 4000,

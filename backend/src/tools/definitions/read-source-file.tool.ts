@@ -24,8 +24,7 @@ const MAX_BYTES_PER_CALL = 20 * 1024; // 20 KB
 export const readSourceFileTool: InternalToolDefinition<ReadSourceFileArgs, ReadSourceFileData> = {
   name: 'read_source_file',
   displayName: 'Read Source File (Owner Only)',
-  description:
-    'Reads the contents of a source file on the server disk within allowed repository folders (src, backend, ai, shared, scripts, database SQL, package.json, render.yaml, vite config, .github/workflows). Max 300 lines and 20 KB per call. Automatically redacts all secrets, API keys, and sensitive tokens. Restricted strictly to the verified owner.',
+  description: 'Read the contents of a permitted source file on the server disk with automatic secret redaction.',
   category: 'system',
   permissionLevel: 'sensitive',
   timeoutMs: 15000,

@@ -21,9 +21,9 @@ export class UserStyleLearner {
         return;
       }
 
-      // 3. Resolve active text AI provider
+      // 3. Resolve background AI provider (never chat model)
       const registry = AIProviderRegistry.getInstance();
-      const provider = registry.getTextProvider();
+      const provider = registry.getBackgroundTextProvider();
       if (!provider || typeof provider.generateResponse !== 'function') {
         return;
       }

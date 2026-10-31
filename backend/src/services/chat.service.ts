@@ -252,7 +252,7 @@ export function buildReadableAnswerFromToolResults(
     return sections.join('\n\n');
   }
 
-  return 'I completed gathering the necessary information for your request. Please try asking again.';
+  return "I couldn't generate a complete response. Please try again.";
 }
 
 /**
@@ -380,7 +380,7 @@ export class ChatService {
         relevantMemories = MemoryService.rankMemories(
           payload.message,
           userMemories,
-          profile.memorySettings.maxContextMemories || 8,
+          5,
           recentDialogueSnippet
         );
       } catch (err: any) {
@@ -390,7 +390,6 @@ export class ChatService {
     }
 
     // Step B: Determine if extraction should run
-    // AI extractor decides for every message except plain greetings. Keep regex only for secrets, privacy, and forget commands.
     const memoryIntent = MemoryService.detectMemoryIntent(payload.message);
     const isExplicitDirective =
       memoryIntent.type === 'explicit' ||
@@ -401,59 +400,29 @@ export class ChatService {
       profile.memorySettings.enabled &&
       (isExplicitDirective || (profile.memorySettings.autoExtract && !isTrivial));
 
-    // Step C: Run extraction AT THE SAME TIME as the other context loading (research history and past conversations)
-    // Extraction runs at most once per message, skips silently if provider is rate limited, and never blocks or breaks the reply.
-    const extractionPromise = shouldExtract
-      ? MemoryService.extractAndStoreFromMessage(
+    // Step C: Run extraction with BACKGROUND_AI_MODEL (never chat model)
+    // Extraction skips silently if provider is rate limited or unavailable
+    if (shouldExtract) {
+      try {
+        const backgroundProvider = registry.getBackgroundTextProvider();
+        activeMemoryResult = await MemoryService.extractAndStoreFromMessage(
           payload.message,
           convId,
           payload.userId,
           onStatusUpdate,
-          primaryProvider,
+          backgroundProvider,
           recentDialogueSnippet,
           userMemories
-        ).catch(() => {
-          // Silently skip extraction on any error or rate limit to guarantee chat reply is never broken
-          return {
-            action: 'none' as const,
-            memories: [],
-          };
-        })
-      : Promise.resolve(undefined);
-
-    const researchPromise = DatabaseService.getResearchHistory(payload.userId, undefined, 4)
-      .catch((err: any) => {
-        console.warn('[ChatService] Research history retrieval notice:', err.message);
-        return [] as ResearchHistoryItem[];
-      });
-
-    const isPastChatInquiry =
-      /(?:past\s+conversation|earlier\s+chat|other\s+chat|previous\s+chat|what\s+have\s+i\s+told\s+you|analyze\s+my\s+past|what\s+patterns\s+do\s+you\s+notice|last\s+time\s+we\s+talked|remember\s+when|we\s+discussed|did\s+i\s+mention)/i.test(
-        payload.message
-      );
-
-    const pastConversationsPromise = DatabaseService.searchPastMessages(
-      payload.userId,
-      isPastChatInquiry ? payload.message : undefined,
-      convId,
-      4
-    ).catch((err: any) => {
-      console.warn('[ChatService] Past messages retrieval notice:', err.message);
-      return [];
-    });
-
-    // Await extraction and other context loading in parallel
-    const [extractionRes, researchRes, pastConvsRes] = await Promise.all([
-      extractionPromise,
-      researchPromise,
-      pastConversationsPromise,
-    ]);
-
-    activeMemoryResult = extractionRes;
-    relevantResearch = researchRes;
-    if (pastConvsRes && pastConvsRes.length > 0) {
-      relevantPastConversations = pastConvsRes;
+        ).catch(() => undefined);
+      } catch {
+        // Silently skip extraction
+      }
     }
+
+    // Requirement 4: Do not load research history or past conversations automatically.
+    // They are only queried when relevant tools are invoked.
+    relevantResearch = [];
+    relevantPastConversations = [];
 
     // If new memory/memories were saved or updated, include all of them in relevantMemories for immediate context
     if (activeMemoryResult && (activeMemoryResult.action === 'saved' || activeMemoryResult.action === 'updated')) {
@@ -467,13 +436,11 @@ export class ChatService {
       }
     }
 
-    // 7. Assemble modular brain context
+    // 7. Assemble modular brain context (~1,200 tokens instruction message, top 5 memories, last 8 messages)
     const assembled = assembleConversationContext({
       personality: (payload.personaId as any) || profile.activePersonality,
-      memories: relevantMemories,
+      memories: relevantMemories.slice(0, 5),
       activeMemoryResult,
-      researchHistory: relevantResearch,
-      pastConversationMessages: relevantPastConversations,
       recentMessages,
       userContext: payload.userContext,
       isVoiceMode: Boolean(payload.isVoiceMode),
@@ -482,52 +449,18 @@ export class ChatService {
 
     let augmentedSystemPrompt = assembled.systemPrompt;
 
-    // Specialized Sierra Leone & EDSA verification instructions
-    const isSierraLeoneOrEDSA =
-      /\bedsa\b/i.test(payload.message) ||
-      /(sierra\s+leone|freetown|salone)/i.test(payload.message);
-
-    if (isSierraLeoneOrEDSA) {
-      augmentedSystemPrompt += `\n\n=== SIERRA LEONE & EDSA VERIFICATION DIRECTIVES ===
-1. GEOGRAPHIC & UTILITY DISAMBIGUATION:
-   "EDSA" refers strictly to the Electricity Distribution and Supply Authority of Sierra Leone (West Africa), NOT the Epifanio de los Santos Avenue / highway in Manila, Philippines. Do not confuse Sierra Leone with the Philippines or another country.
-2. OFFICIAL SOURCES FIRST:
-   Prioritize official announcements from EDSA Sierra Leone, the Ministry of Energy Sierra Leone, and verified Sierra Leone news organizations (e.g. Awoko, Sierra Leone Telegraph, Calabash, Politico SL, Concord Times).
-3. FACT VERIFICATION & ACCURACY:
-   - Check publication dates and clearly distinguish whether an announcement is recent/current or historical.
-   - Distinguish confirmed official EDSA announcements from rumors or unverified social media posts.
-   - NEVER invent or speculate on outage schedules, restoration times, emergency hotline numbers, or fake official quotes.
-   - If reliable current information cannot be confirmed from the retrieved sources, tell the user honestly: "I could not find a confirmed recent announcement from EDSA or official authorities regarding this outage."
-=== END DIRECTIVES ===`;
+    // Sierra Leone & EDSA disambiguation (concise 3-line note if mentioned)
+    if (/\bedsa\b/i.test(payload.message) || /(sierra\s+leone|freetown|salone)/i.test(payload.message)) {
+      augmentedSystemPrompt += `\n\n[SIERRA LEONE NOTE]\nEDSA refers strictly to Electricity Distribution and Supply Authority of Sierra Leone. Prioritize official announcements. Never invent outage times.`;
     }
 
-    // Specialized Evidence-Based Coding & Version Matching Directives
-    const isCodingOrTech =
-      /(?:capacitor|react|vite|tailwind|typescript|javascript|python|node|next(?:\.js)?|drizzle|prisma|supabase|bun|npm|pnpm|version|migration|upgrade|deprecated|package|api|config|plugin|install|syntax|error|troubleshoot)\b/i.test(
-        payload.message
-      );
-
-    if (isCodingOrTech) {
-      const projectEnv = getProjectEnvironmentSummary();
-      augmentedSystemPrompt += `\n\n=== EVIDENCE-BASED CODING DIRECTIVES ===
-1. VERSION-AWARE RECOMMENDATIONS:
-   - Check the project dependencies and installed versions below before recommending code, packages, or commands.
-   - Match recommendations directly to the user's installed or specified version. Do NOT automatically use newer or incompatible APIs if the project uses an older version (e.g. React 18 vs 19, Capacitor 5 vs 6, Next.js 14 vs 15).
-   - When suggesting an upgrade, migration, or modern alternative, clearly explain compatibility, breaking changes, and migration steps.
-2. ZERO API HALLUCINATION:
-   - Verify every import path, function name, option, hook, and CLI flag against verified documentation.
-   - NEVER invent non-existent APIs, options, or deprecated signatures. Never pretend untested code has been verified.
-3. UNFAMILIAR LIBRARIES & NEW FEATURES:
-   - When the user asks about an unfamiliar package, new library feature, or error, do not refuse to research or assist; investigate the retrieved documentation and explain what the evidence supports.
-4. CITATION & SOURCES:
-   - Whenever web research contributes to a technical answer, cite relevant sources next to technical claims and ensure source evidence is represented truthfully.
-5. CONTRADICTIONS & UNVERIFIED INFORMATION:
-   - If official documentation is unavailable, incomplete, or contradicts secondary sources (forums, community posts), explicitly disclose that limitation to the user rather than guessing.
-
-[PROJECT ENVIRONMENT & INSTALLED DEPENDENCIES]
-${projectEnv}
-=== END CODING DIRECTIVES ===`;
-    }
+    // Log approximate token count per request (Requirement 4)
+    const systemTokens = Math.ceil(augmentedSystemPrompt.length / 4);
+    const messagesTokens = Math.ceil(JSON.stringify(assembled.formattedMessages).length / 4);
+    const totalApproxTokens = systemTokens + messagesTokens;
+    console.log(
+      `[ChatService] Approximate prompt token count: ${totalApproxTokens} tokens (system: ${systemTokens}, messages: ${messagesTokens})`
+    );
 
     const isManualSearchToggle = payload.message.startsWith('[web search requested]');
     const providerSupportsTools = Boolean(
@@ -549,10 +482,65 @@ ${projectEnv}
     let fallbackUsed = false;
     let executedToolsInTurn: Array<{ name: string; args: any; result: any }> = [];
 
-    // PATH 1: Native Function Calling Tool Loop (AI decides dynamically when to use tools)
-    if (providerSupportsTools && !isManualSearchToggle && primaryProvider) {
-      let activeProvider = primaryProvider;
-      let activeProviderType = primaryProviderType;
+    const userSelectedGroq = payload.textProvider === 'groq' || profile.selectedTextProvider === 'groq';
+
+    // PATH 1A: User explicitly selected Groq in Settings -> answer with small prompt and no tools
+    if (userSelectedGroq) {
+      onStatusUpdate?.('Processing information...', {
+        provider: 'groq',
+        model: 'llama-3.3-70b-versatile',
+      });
+      const groqProvider = registry.getTextProvider('groq');
+      const groqRequest: TextGenerationRequest = {
+        systemPrompt: augmentedSystemPrompt,
+        messages: assembled.formattedMessages,
+        temperature: 0.7,
+        maxTokens: 4096,
+        toolChoice: 'none',
+      };
+      aiCallCount++;
+      try {
+        if (onChunk && typeof groqProvider.streamResponse === 'function') {
+          providerResponse = await groqProvider.streamResponse(groqRequest, (chunk) => onChunk(chunk));
+        } else {
+          providerResponse = await groqProvider.generateResponse(groqRequest);
+        }
+      } catch (groqErr: any) {
+        console.warn('[ChatService] Groq failed for user-selected provider:', groqErr.message);
+        ErrorLogService.log('ai_provider', groqErr, { provider: 'groq', conversationId: convId });
+      }
+
+      // If reply is empty, retry once on next provider in the chain (Requirement 5)
+      if (!providerResponse || !providerResponse.content || providerResponse.content.trim().length === 0) {
+        if (!shouldStopAiCalls()) {
+          console.log('[ChatService] Groq reply is empty or failed; retrying on Gemini backup...');
+          onStatusUpdate?.('Retrying…', { provider: 'gemini', fallbackUsed: true });
+          const backupProvider = registry.getBackupTextProvider();
+          aiCallCount++;
+          try {
+            providerResponse = await backupProvider.generateResponse(groqRequest);
+          } catch (bkErr: any) {
+            console.warn('[ChatService] Backup after Groq failed:', bkErr.message);
+          }
+        }
+      }
+
+      if (!providerResponse || !providerResponse.content || providerResponse.content.trim().length === 0) {
+        const mockNotice = "⚠️ Note: Groq is currently unavailable. Operating in development fallback mode.\n\nI couldn't generate a complete response. Please try again.";
+        providerResponse = {
+          content: mockNotice,
+          model: 'development_mock',
+          provider: 'development_mock',
+          isMock: true,
+          finishReason: 'stop',
+        };
+      }
+    }
+
+    // PATH 1B: Default routing (Gemini main model with tools handles every message by default)
+    if (!userSelectedGroq && providerSupportsTools && !isManualSearchToggle && primaryProvider) {
+      let activeProvider = registry.getTextProvider('gemini');
+      let activeProviderType: TextProviderType = 'gemini';
 
       onStatusUpdate?.('Processing information...', {
         provider: activeProviderType,
@@ -573,7 +561,7 @@ ${projectEnv}
       const activeMessages: TextGenerationMessage[] = [...assembled.formattedMessages];
       const currentTurnUserIndex = assembled.formattedMessages.findLastIndex((m) => m.role === 'user');
 
-      // Requirement 5: Reuse work if user asks the same thing again within 10 minutes or taps regenerate
+      // Reuse work if user asks the same thing again within 10 minutes or taps regenerate
       const normalizedQuery = normalizeUserQuery(payload.message);
       const cacheKey = `${convId}:${normalizedQuery}`;
       const lastTurnKey = `${convId}:__last__`;
@@ -590,8 +578,6 @@ ${projectEnv}
         }
       }
 
-      // Requirement 4: never cache or reuse results from system_check, recent_errors, list_source_files, read_source_file or search_code.
-      // Reuse web search results only when the earlier request succeeded and the query is the same within 10 minutes.
       if (
         cachedWork &&
         (now - cachedWork.timestamp > TEN_MINUTES_MS ||
@@ -656,8 +642,6 @@ ${projectEnv}
 
           round++;
 
-          // Trim only the old chat history (keep last 6 history messages starting at a user message),
-          // always keeping the current turn's user message and all assistant tool-call and tool-result messages together in order.
           const roundMessages =
             round > 1
               ? buildRoundMessages(activeMessages, currentTurnUserIndex)
@@ -684,42 +668,55 @@ ${projectEnv}
               conversationId: convId,
             });
 
-            // In tool loop rounds after the first one, retry on rate limit / quota error
-            if (round > 1 && isRateLimitOrQuotaError(callErr)) {
-              const retryAfter = extractRetryAfterSeconds(callErr);
-              let recovered = false;
+            // Requirement 2: Routing failover on rate limit, error or timeout:
+            // 1. Try Gemini backup model
+            // 2. Try Groq (plain text, small prompt, no tools)
+            let recovered = false;
 
-              // If error includes a retry-after under 5 seconds, wait that long and retry once on same provider first
-              if (!shouldStopAiCalls() && retryAfter !== undefined && retryAfter > 0 && retryAfter <= 5) {
-                const waitMs = Math.ceil(retryAfter * 1000) + 100;
-                console.log(`[ChatService] Rate limit with retry-after ${retryAfter}s <= 5s. Waiting ${waitMs}ms to retry on ${activeProviderType}...`);
-                await new Promise((resolve) => setTimeout(resolve, waitMs));
+            if (!shouldStopAiCalls()) {
+              const backupProvider = registry.getBackupTextProvider();
+              if (backupProvider && backupProvider.modelName !== activeProvider.modelName) {
+                console.log(`[ChatService] Failing over tool round ${round} to Gemini backup model '${backupProvider.modelName}'...`);
                 try {
+                  activeProvider = backupProvider;
+                  activeProviderType = 'gemini';
+                  fallbackUsed = true;
+                  onStatusUpdate?.('Writing the answer…', {
+                    provider: 'gemini',
+                    model: activeProvider.modelName,
+                    fallbackUsed: true,
+                  });
+                  const plainTextMessages = convertToPlainTextFailoverMessages(activeMessages, currentTurnUserIndex);
+                  const failoverRequest: TextGenerationRequest = {
+                    systemPrompt: augmentedSystemPrompt,
+                    messages: plainTextMessages,
+                    temperature: 0.7,
+                    maxTokens: 4096,
+                    toolChoice: 'none',
+                  };
                   aiCallCount++;
-                  currentResponse = await activeProvider.generateResponse(genRequest);
-                  recovered = true;
-                } catch (retryErr: any) {
-                  console.warn(`[ChatService] Retry on same provider ${activeProviderType} failed:`, retryErr.message);
+                  currentResponse = await activeProvider.generateResponse(failoverRequest);
+                  recovered = Boolean(currentResponse?.content?.trim());
+                  if (recovered) {
+                    console.log(`[ChatService] Failover to Gemini backup model succeeded.`);
+                  }
+                } catch (bkErr: any) {
+                  console.warn('[ChatService] Failover to Gemini backup failed:', bkErr.message);
                 }
               }
 
-              // Requirement 3: Provider switch during tools.
-              // When switching provider after a tool round, do not replay raw tool-call messages.
-              // Convert everything to plain text (history, the user's message, and one message called "Tool results"),
-              // then ask the new provider, without tools, to answer.
+              // If Gemini backup also failed, try Groq (plain text, small prompt, no tools)
               if (!recovered && !shouldStopAiCalls()) {
-                const otherProviderType: TextProviderType = activeProviderType === 'gemini' ? 'groq' : 'gemini';
-                const otherProvider = registry.getTextProvider(otherProviderType);
-
-                if (otherProvider && otherProvider.providerType !== 'development_mock') {
-                  console.log(`[ChatService] Failing over tool round ${round} to alternate provider '${otherProviderType}' using plain-text format...`);
+                const groqProvider = registry.getTextProvider('groq');
+                if (groqProvider && groqProvider.isConfigured) {
+                  console.log(`[ChatService] Failing over tool round ${round} to Groq (plain text, small prompt, no tools)...`);
                   try {
-                    activeProvider = otherProvider;
-                    activeProviderType = otherProviderType;
+                    activeProvider = groqProvider;
+                    activeProviderType = 'groq';
                     fallbackUsed = true;
                     onStatusUpdate?.('Writing the answer…', {
-                      provider: activeProviderType,
-                      model: activeProvider.modelName,
+                      provider: 'groq',
+                      model: groqProvider.modelName,
                       fallbackUsed: true,
                     });
                     const plainTextMessages = convertToPlainTextFailoverMessages(activeMessages, currentTurnUserIndex);
@@ -732,33 +729,23 @@ ${projectEnv}
                     };
                     aiCallCount++;
                     currentResponse = await activeProvider.generateResponse(failoverRequest);
-                    recovered = true;
-                    console.log(`[ChatService] Failover to '${otherProviderType}' succeeded without tools.`);
-                  } catch (otherErr: any) {
-                    console.error(`[ChatService] Failover to '${otherProviderType}' also failed:`, otherErr.message);
-                    ErrorLogService.log('ai_provider', otherErr, {
-                      provider: otherProviderType,
-                      round,
-                      conversationId: convId,
-                    });
-                    callErr = otherErr;
+                    recovered = Boolean(currentResponse?.content?.trim());
+                    if (recovered) {
+                      console.log(`[ChatService] Failover to Groq succeeded.`);
+                    }
+                  } catch (groqErr: any) {
+                    console.error('[ChatService] Failover to Groq also failed:', groqErr.message);
                   }
                 }
               }
+            }
 
-              if (!recovered) {
-                if (searchResults.length > 0 || executedToolsInTurn.length > 0) {
-                  console.log('[ChatService] Tool round failed after tools returned results. Recovering with plain-text synthesis...');
-                  break;
-                }
-                throw callErr;
-              }
-            } else {
+            if (!recovered) {
               if (searchResults.length > 0 || executedToolsInTurn.length > 0) {
                 console.log('[ChatService] Tool round failed after tools returned results. Recovering with plain-text synthesis...');
                 break;
               }
-              if (round === 1) break; // Allow fallback to take over
+              if (round === 1) break;
               throw callErr;
             }
           }
@@ -1116,26 +1103,36 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
         }
       }
 
-      // Requirement 2: Never an empty reply!
-      // After the tool loop, if the final text is empty or finishReason is "length", retry once without tools and with tool results pasted in as plain text.
+      // Requirement 5: Whenever a reply is empty or finishReason is "length", retry once on the next provider in the chain (not only after tool use)
       const isReplyEmptyOrLength =
         !providerResponse ||
         !providerResponse.content ||
         providerResponse.content.trim().length === 0 ||
         providerResponse.finishReason === 'length';
 
-      if (isReplyEmptyOrLength && (executedToolsInTurn.length > 0 || searchResults.length > 0) && !shouldStopAiCalls()) {
-        console.log('[ChatService] Reply is empty or finished with length after tools. Retrying once without tools...');
+      if (isReplyEmptyOrLength && !shouldStopAiCalls()) {
+        console.log(`[ChatService] Reply is empty or finished with length (provider: ${activeProviderType}). Retrying once on next provider in chain...`);
         onStatusUpdate?.('Retrying…', {
           provider: activeProviderType,
           model: activeProvider.modelName,
           fallbackUsed,
         });
 
-        const plainTextRetryMessages = convertToPlainTextFailoverMessages(activeMessages, currentTurnUserIndex);
+        // Determine next provider in chain: gemini main -> gemini backup -> groq
+        let nextProvider = registry.getBackupTextProvider();
+        let nextProviderType: TextProviderType = 'gemini';
+        if (activeProvider.modelName === nextProvider.modelName) {
+          nextProvider = registry.getTextProvider('groq');
+          nextProviderType = 'groq';
+        }
+
+        const retryMessages = (executedToolsInTurn.length > 0 || searchResults.length > 0)
+          ? convertToPlainTextFailoverMessages(activeMessages, currentTurnUserIndex)
+          : buildRoundMessages(activeMessages, currentTurnUserIndex);
+
         const retryRequest: TextGenerationRequest = {
           systemPrompt: augmentedSystemPrompt,
-          messages: plainTextRetryMessages,
+          messages: retryMessages,
           temperature: 0.7,
           maxTokens: 4096,
           toolChoice: 'none',
@@ -1143,27 +1140,42 @@ CRITICAL MULTI-SOURCE SYNTHESIS & CITATION INSTRUCTIONS:
 
         try {
           aiCallCount++;
-          const retryRes = await activeProvider.generateResponse(retryRequest);
+          const retryRes = await nextProvider.generateResponse(retryRequest);
           if (retryRes && retryRes.content && retryRes.content.trim().length > 0) {
             providerResponse = retryRes;
+            activeProvider = nextProvider;
+            activeProviderType = nextProviderType;
           }
         } catch (retryErr: any) {
-          console.warn('[ChatService] Single retry without tools failed:', retryErr.message);
+          console.warn('[ChatService] Retry on next provider failed:', retryErr.message);
         }
       }
 
-      // If it is STILL empty, build a readable answer straight from the tool results
+      // If it is STILL empty after retry, build a readable answer straight from tool results, or use clear message
       if (!providerResponse || !providerResponse.content || providerResponse.content.trim().length === 0) {
-        console.log('[ChatService] Response still empty after retry. Building readable answer directly from tool results...');
-        const fallbackAnswer = buildReadableAnswerFromToolResults(executedToolsInTurn, searchResults, finalSearchQuery);
-        providerResponse = {
-          content: fallbackAnswer,
-          model: activeProvider?.modelName || 'system-fallback',
-          provider: activeProviderType,
-          tokensUsed: { prompt: 0, completion: Math.ceil(fallbackAnswer.length / 4), total: Math.ceil(fallbackAnswer.length / 4) },
-          isMock: false,
-          finishReason: 'stop',
-        };
+        if (executedToolsInTurn.length > 0 || searchResults.length > 0) {
+          console.log('[ChatService] Response still empty after retry. Building readable answer directly from tool results...');
+          const fallbackAnswer = buildReadableAnswerFromToolResults(executedToolsInTurn, searchResults, finalSearchQuery);
+          providerResponse = {
+            content: fallbackAnswer,
+            model: activeProvider?.modelName || 'system-fallback',
+            provider: activeProviderType,
+            tokensUsed: { prompt: 0, completion: Math.ceil(fallbackAnswer.length / 4), total: Math.ceil(fallbackAnswer.length / 4) },
+            isMock: false,
+            finishReason: 'stop',
+          };
+        } else {
+          console.log('[ChatService] Response empty and no tool results exist. Using clear message and retry notice...');
+          const clearNotice = "I couldn't generate a complete response. Please try again.";
+          providerResponse = {
+            content: clearNotice,
+            model: activeProvider?.modelName || 'system-fallback',
+            provider: activeProviderType,
+            tokensUsed: { prompt: 0, completion: 15, total: 15 },
+            isMock: false,
+            finishReason: 'stop',
+          };
+        }
       }
 
       // Stream words to onChunk for client streaming if callback provided and not already streamed

@@ -22,8 +22,7 @@ export interface WebSearchToolData {
 export const webSearchTool: InternalToolDefinition<WebSearchToolArgs, WebSearchToolData> = {
   name: 'web_search',
   displayName: 'Web Research',
-  description:
-    'Search the live web for anything that may have changed recently, real-time facts, local news (e.g. Sierra Leone news, EDSA electricity and power outage announcements), changing prices, sports scores, people in current roles, modern software documentation, version compatibility, changelogs, and recent releases. Do NOT use this tool for casual greetings, ordinary conversation, creative writing, basic coding algorithms, math, or established static facts you already know.',
+  description: 'Search the live web for current facts, recent events, breaking news, real-time data, and documentation.',
   category: 'search',
   permissionLevel: 'read_only',
   timeoutMs: 12000,

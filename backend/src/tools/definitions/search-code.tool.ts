@@ -39,8 +39,7 @@ const IGNORED_EXTENSIONS = new Set([
 export const searchCodeTool: InternalToolDefinition<SearchCodeArgs, SearchCodeData> = {
   name: 'search_code',
   displayName: 'Search Code (Owner Only)',
-  description:
-    'Searches for text or regex patterns in source files across allowed repository folders (src, backend, ai, shared, scripts, database SQL, package.json, render.yaml, vite config, .github/workflows). Max 30 results. Automatically redacts all secrets from matching lines. Strictly read-only and restricted to the verified owner.',
+  description: 'Search for text or patterns in permitted repository source files with automatic secret redaction.',
   category: 'system',
   permissionLevel: 'sensitive',
   timeoutMs: 20000,
