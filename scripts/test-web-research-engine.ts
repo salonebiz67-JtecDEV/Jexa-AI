@@ -7,7 +7,6 @@ import { cleanAndNormalizeResponseContent } from '../ai/brain/response-cleaner';
 import { DatabaseService } from '../backend/src/database/db-service';
 import { getProjectEnvironmentSummary } from '../backend/src/services/chat.service';
 import { GeminiTextAIProvider } from '../ai/providers/gemini.provider';
-import { GroqTextAIProvider } from '../ai/providers/groq.provider';
 
 async function runWebResearchTestSuite() {
   console.log('====================================================');
@@ -507,7 +506,6 @@ async function runWebResearchTestSuite() {
   const timeToolDecl = declarations.find((d) => d.name === 'system_time');
 
   const geminiProvider = new GeminiTextAIProvider();
-  const groqProvider = new GroqTextAIProvider();
 
   const hasAllTools =
     toolNames.includes('web_search') &&
@@ -523,9 +521,7 @@ async function runWebResearchTestSuite() {
     Boolean(webToolDecl?.description.includes('people in current roles')) &&
     Boolean(webToolDecl?.description.includes('NOT use this tool for casual greetings'));
 
-  const providersSupportTools =
-    geminiProvider.supportsTools === true &&
-    groqProvider.supportsTools === true;
+  const providersSupportTools = geminiProvider.supportsTools === true;
 
   console.log('  Tool declarations & provider checks:', {
     registeredToolsCount: declarations.length,

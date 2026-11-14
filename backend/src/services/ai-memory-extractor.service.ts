@@ -185,6 +185,7 @@ OUTPUT FORMAT: Return STRICT JSON only (no markdown, no backticks, no extra pros
             messages: [{ role: 'user', content: promptContent }],
             temperature: 0.1,
             maxTokens: 400,
+            purpose: 'memory_extraction',
           }),
           timeoutPromise,
         ]);

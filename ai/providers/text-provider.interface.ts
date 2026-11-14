@@ -25,6 +25,7 @@ export interface TextGenerationMessage {
 export interface TextGenerationRequest {
   systemPrompt: string;
   messages: TextGenerationMessage[];
+  model?: string;
   temperature?: number;
   maxTokens?: number;
   stream?: boolean;

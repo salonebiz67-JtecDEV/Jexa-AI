@@ -58,6 +58,7 @@ Output ONLY the concise description of how this user communicates. Do NOT includ
           ],
           temperature: 0.3,
           maxTokens: 300,
+          purpose: 'style_learner',
         });
         analysis = (response.content || '').trim();
       } catch (callErr: any) {

@@ -1,21 +1,34 @@
 import { Request, Response } from 'express';
 import { VoiceService } from '../services/voice.service';
-import { VoiceSynthesisRequest, VoiceProviderType } from '../../../shared/types/provider';
+import { VoiceSynthesisRequest, isTtsModel } from '../../../shared/types/provider';
+import { getResolvedUserId } from '../middleware/auth.middleware';
 
 export class VoiceController {
   /**
-   * Generates speech audio and returns either binary audio or JSON metadata
+   * Generates speech audio via Gemini TTS and returns either binary audio or JSON metadata
    */
   public static async handleVoice(req: Request, res: Response): Promise<void> {
     try {
-      const payload: VoiceSynthesisRequest = req.body;
+      const payload: VoiceSynthesisRequest = { ...(req.body || {}) };
+      const userId = getResolvedUserId(req);
 
       if (!payload.text || typeof payload.text !== 'string' || !payload.text.trim()) {
         res.status(400).json({ success: false, error: 'Text is required for voice processing.' });
         return;
       }
 
-      const result = await VoiceService.speak(payload);
+      if (payload.model && !isTtsModel(payload.model)) {
+        res.status(400).json({
+          success: false,
+          provider: 'gemini',
+          code: 'INVALID_MODEL_TYPE',
+          message: `Chat model '${payload.model}' cannot be used for voice. Select a TTS voice model.`,
+          error: `Chat model '${payload.model}' cannot be used for voice. Select a TTS voice model.`,
+        });
+        return;
+      }
+
+      const result = await VoiceService.speak(payload, userId);
 
       // Support direct binary audio streaming if requested via Accept header or format query
       const acceptsBinary =
@@ -23,7 +36,7 @@ export class VoiceController {
         req.query.format === 'binary';
 
       if (acceptsBinary) {
-        const mimeType = result.format || (result.provider === 'elevenlabs' ? 'audio/mpeg' : 'audio/wav');
+        const mimeType = result.format || 'audio/wav';
         let audioBuf: Buffer | null = null;
 
         if (result.audioBuffer && Buffer.isBuffer(result.audioBuffer)) {
@@ -41,7 +54,6 @@ export class VoiceController {
         }
       }
 
-      // Default JSON response containing data URL
       res.status(200).json({
         success: true,
         data: result,
@@ -54,34 +66,27 @@ export class VoiceController {
           ? error.statusCode
           : 500;
 
-      const provider = error.provider || 'voice_ai';
       let message = error.message || 'Voice synthesis failed.';
 
       if (statusCode === 429 || error.code === 'QUOTA_EXHAUSTED') {
-        message = provider === 'gemini'
-          ? 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.'
-          : 'ElevenLabs quota or rate limit reached.';
-      } else if (statusCode === 402 || error.code === 'PAYMENT_REQUIRED') {
-        message = 'This ElevenLabs voice requires a paid plan.';
+        message = 'Gemini Voice quota exhausted. Try again later or switch the voice model in Settings.';
       } else if (statusCode === 404 || error.code === 'MODEL_NOT_FOUND' || error.code === 'VOICE_NOT_FOUND') {
-        message = 'The selected model or voice was not found.';
+        message = 'The selected Gemini voice model or voice persona was not found.';
       } else if (statusCode === 401 || statusCode === 403 || error.code === 'AUTHENTICATION_ERROR') {
-        message = 'Provider authentication or permission failed.';
+        message = 'Gemini authentication or permission failed. Check GEMINI_API_KEY.';
       } else if (statusCode === 503 || error.code === 'UNAVAILABLE') {
-        message = 'The provider is temporarily unavailable.';
+        message = 'Gemini Voice is temporarily unavailable.';
       } else if (error.code === 'VOICE_TIMEOUT' || statusCode === 504) {
         message = 'Voice synthesis timed out after 20 seconds.';
       } else if (error.code === 'NOT_CONFIGURED' || error.code === 'MISSING_CREDENTIALS') {
-        message = provider === 'elevenlabs'
-          ? 'ElevenLabs is not configured. Check ELEVENLABS_API_KEY in Render environment.'
-          : 'Gemini Voice is not configured. Check GEMINI_API_KEY on the server.';
+        message = 'Gemini Voice is not configured. Check GEMINI_API_KEY on the server.';
       }
 
       res.status(statusCode).json({
         success: false,
-        provider,
-        code: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : statusCode === 402 ? 'PAYMENT_REQUIRED' : 'VOICE_SYNTHESIS_FAILED'),
-        status: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : statusCode === 402 ? 'PAYMENT_REQUIRED' : 'UNAVAILABLE'),
+        provider: 'gemini',
+        code: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : 'VOICE_SYNTHESIS_FAILED'),
+        status: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : 'UNAVAILABLE'),
         message,
         error: message,
         timestamp: new Date().toISOString(),
@@ -91,7 +96,6 @@ export class VoiceController {
 
   /**
    * Health check endpoint: GET /api/voice/health
-   * Never exposes API keys or secrets
    */
   public static async getHealth(_req: Request, res: Response): Promise<void> {
     try {
@@ -114,10 +118,25 @@ export class VoiceController {
    */
   public static async testVoice(req: Request, res: Response): Promise<void> {
     try {
-      const provider: VoiceProviderType = req.body?.provider || 'gemini';
       const text: string | undefined = req.body?.text;
+      const model: string | undefined =
+        typeof req.body?.model === 'string' && req.body.model.trim()
+          ? req.body.model.trim()
+          : undefined;
 
-      const result = await VoiceService.testProvider(provider, text);
+      if (model && !isTtsModel(model)) {
+        res.status(400).json({
+          success: false,
+          provider: 'gemini',
+          code: 'INVALID_MODEL_TYPE',
+          message: `Chat model '${model}' cannot be used for voice. Select a TTS voice model.`,
+          error: `Chat model '${model}' cannot be used for voice. Select a TTS voice model.`,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const result = await VoiceService.testProvider('gemini', text, model);
 
       res.status(200).json({
         success: true,
@@ -131,32 +150,25 @@ export class VoiceController {
           ? error.statusCode
           : 500;
 
-      const provider = error.provider || req.body?.provider || 'voice_ai';
       let message = error.message || 'Voice test failed.';
 
       if (statusCode === 429 || error.code === 'QUOTA_EXHAUSTED') {
-        message = provider === 'gemini'
-          ? 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.'
-          : 'ElevenLabs quota or rate limit reached.';
-      } else if (statusCode === 402 || error.code === 'PAYMENT_REQUIRED') {
-        message = 'This ElevenLabs voice requires a paid plan.';
+        message = 'Gemini Voice quota exhausted. Try again later or switch the voice model in Settings.';
       } else if (statusCode === 404 || error.code === 'MODEL_NOT_FOUND' || error.code === 'VOICE_NOT_FOUND') {
-        message = 'The selected model or voice was not found.';
+        message = 'The selected Gemini voice model or voice persona was not found.';
       } else if (statusCode === 401 || statusCode === 403 || error.code === 'AUTHENTICATION_ERROR') {
-        message = 'Provider authentication or permission failed.';
+        message = 'Gemini authentication or permission failed. Check GEMINI_API_KEY.';
       } else if (statusCode === 503 || error.code === 'UNAVAILABLE') {
-        message = 'The provider is temporarily unavailable.';
+        message = 'Gemini Voice is temporarily unavailable.';
       } else if (error.code === 'NOT_CONFIGURED' || error.code === 'MISSING_CREDENTIALS') {
-        message = provider === 'elevenlabs'
-          ? 'ElevenLabs is not configured. Check ELEVENLABS_API_KEY in Render environment.'
-          : 'Gemini Voice is not configured. Check GEMINI_API_KEY on the server.';
+        message = 'Gemini Voice is not configured. Check GEMINI_API_KEY on the server.';
       }
 
       res.status(statusCode).json({
         success: false,
-        provider,
-        code: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : statusCode === 402 ? 'PAYMENT_REQUIRED' : 'TEST_FAILED'),
-        status: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : statusCode === 402 ? 'PAYMENT_REQUIRED' : 'UNAVAILABLE'),
+        provider: 'gemini',
+        code: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : 'TEST_FAILED'),
+        status: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : 'UNAVAILABLE'),
         message,
         error: message,
         timestamp: new Date().toISOString(),

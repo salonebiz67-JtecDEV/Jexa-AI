@@ -1,14 +1,29 @@
-import { TextProviderType, VoiceProviderType } from '../../shared/types/provider';
+import {
+  TextProviderType,
+  VoiceProviderType,
+  DEFAULT_CHAT_MODEL,
+  DEFAULT_BACKUP_MODEL,
+  DEFAULT_BACKGROUND_MODEL,
+  DEFAULT_VOICE_MODEL,
+  isTtsModel,
+} from '../../shared/types/provider';
 
-function sanitizeTextModel(modelName: string, fallback: string, envVarName: string): string {
+export function sanitizeTextModel(modelName: string | undefined, fallback: string, label: string): string {
   const trimmed = (modelName || '').trim();
   if (!trimmed) return fallback;
-  if (trimmed.toLowerCase().includes('-tts') || trimmed.toLowerCase().endsWith('tts')) {
-    console.warn(`[AIConfig] TTS model '${trimmed}' in ${envVarName} cannot be used as a text model. Reverting to '${fallback}'.`);
+  if (isTtsModel(trimmed)) {
+    console.warn(`[AIConfig] TTS model '${trimmed}' in ${label} cannot be used as a chat/text model. Reverting to '${fallback}'.`);
     return fallback;
   }
-  if (trimmed === 'gemini-2.5-flash' || trimmed === 'gemini-1.5-flash' || trimmed === 'gemini-pro') {
-    return 'gemini-3.8-flash';
+  return trimmed;
+}
+
+export function sanitizeVoiceModel(modelName: string | undefined, fallback: string, label: string): string {
+  const trimmed = (modelName || '').trim();
+  if (!trimmed) return fallback;
+  if (!isTtsModel(trimmed)) {
+    console.warn(`[AIConfig] Non-TTS chat model '${trimmed}' in ${label} cannot be used as a voice model. Reverting to '${fallback}'.`);
+    return fallback;
   }
   return trimmed;
 }
@@ -24,12 +39,6 @@ export interface AIProvidersConfig {
     maxTokens: number;
     endpoint?: string;
   };
-  groq: {
-    apiKey?: string;
-    model: string;
-    temperature: number;
-    maxTokens: number;
-  };
   voice: {
     provider: VoiceProviderType;
     apiKey?: string;
@@ -37,42 +46,36 @@ export interface AIProvidersConfig {
     voiceId: string;
     endpoint?: string;
   };
-  elevenlabs: {
-    apiKey?: string;
-    voiceId: string;
-    modelId: string;
-  };
-  personalVoice: {
-    engine: string;
-    model: string;
-    referenceId: string;
-    apiUrl?: string;
-    apiKey?: string;
-  };
 }
 
 export function loadAIProvidersConfig(): AIProvidersConfig {
-  // Check process.env in Node.js backend
-  const textApiKey = process.env.TEXT_AI_API_KEY || process.env.GEMINI_API_KEY || '';
-  const textProvider = (process.env.TEXT_AI_PROVIDER as TextProviderType) || (textApiKey ? 'gemini' : 'development_mock');
+  const textApiKey = process.env.TEXT_AI_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '';
+  const voiceApiKey = process.env.VOICE_AI_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '';
 
-  const voiceApiKey = process.env.VOICE_AI_API_KEY || process.env.GEMINI_API_KEY || '';
-  const voiceProvider = (process.env.VOICE_AI_PROVIDER as VoiceProviderType) || 'gemini';
-
-  const groqApiKey = process.env.GROQ_API_KEY || '';
-  const groqModel = process.env.GROQ_TEXT_MODEL || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
-
-  const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY || '';
-  const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM'; // Rachel
-  const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
-
-  const textModel = sanitizeTextModel(process.env.TEXT_AI_MODEL || 'gemini-3.8-flash', 'gemini-3.8-flash', 'TEXT_AI_MODEL');
-  const textBackupModel = sanitizeTextModel(process.env.TEXT_AI_BACKUP_MODEL || 'gemini-3.7-flash', 'gemini-3.7-flash', 'TEXT_AI_BACKUP_MODEL');
-  const backgroundModel = sanitizeTextModel(process.env.BACKGROUND_AI_MODEL || 'gemini-3.5-flash-lite', 'gemini-3.5-flash-lite', 'BACKGROUND_AI_MODEL');
+  const textModel = sanitizeTextModel(
+    process.env.TEXT_AI_MODEL || DEFAULT_CHAT_MODEL,
+    DEFAULT_CHAT_MODEL,
+    'TEXT_AI_MODEL'
+  );
+  const textBackupModel = sanitizeTextModel(
+    process.env.TEXT_AI_BACKUP_MODEL || DEFAULT_BACKUP_MODEL,
+    DEFAULT_BACKUP_MODEL,
+    'TEXT_AI_BACKUP_MODEL'
+  );
+  const backgroundModel = sanitizeTextModel(
+    process.env.BACKGROUND_AI_MODEL || DEFAULT_BACKGROUND_MODEL,
+    DEFAULT_BACKGROUND_MODEL,
+    'BACKGROUND_AI_MODEL'
+  );
+  const voiceModel = sanitizeVoiceModel(
+    process.env.VOICE_AI_MODEL || DEFAULT_VOICE_MODEL,
+    DEFAULT_VOICE_MODEL,
+    'VOICE_AI_MODEL'
+  );
 
   return {
     text: {
-      provider: textProvider,
+      provider: 'gemini',
       apiKey: textApiKey,
       model: textModel,
       backupModel: textBackupModel,
@@ -81,30 +84,12 @@ export function loadAIProvidersConfig(): AIProvidersConfig {
       maxTokens: parseInt(process.env.TEXT_AI_MAX_TOKENS || '4096', 10),
       endpoint: process.env.TEXT_AI_ENDPOINT,
     },
-    groq: {
-      apiKey: groqApiKey,
-      model: groqModel,
-      temperature: parseFloat(process.env.GROQ_TEMPERATURE || '0.7'),
-      maxTokens: parseInt(process.env.GROQ_MAX_TOKENS || '4096', 10),
-    },
     voice: {
-      provider: voiceProvider,
+      provider: 'gemini',
       apiKey: voiceApiKey,
-      model: process.env.VOICE_AI_MODEL || 'gemini-3.8-flash-lite-tts',
+      model: voiceModel,
       voiceId: process.env.VOICE_AI_VOICE_ID || 'aura',
       endpoint: process.env.VOICE_AI_ENDPOINT,
-    },
-    elevenlabs: {
-      apiKey: elevenLabsApiKey,
-      voiceId: elevenLabsVoiceId,
-      modelId: elevenLabsModelId,
-    },
-    personalVoice: {
-      engine: (process.env.PERSONAL_VOICE_ENGINE || 'none').trim().toLowerCase(),
-      model: (process.env.PERSONAL_VOICE_MODEL || '').trim(),
-      referenceId: (process.env.PERSONAL_VOICE_REFERENCE_ID || '').trim(),
-      apiUrl: process.env.PERSONAL_VOICE_API_URL,
-      apiKey: process.env.PERSONAL_VOICE_API_KEY,
     },
   };
 }

@@ -23,7 +23,7 @@ const MAX_BYTES_PER_CALL = 20 * 1024; // 20 KB
 
 export const readSourceFileTool: InternalToolDefinition<ReadSourceFileArgs, ReadSourceFileData> = {
   name: 'read_source_file',
-  displayName: 'Read Source File (Owner Only)',
+  displayName: 'Read Source File',
   description: 'Read the contents of a permitted source file on the server disk with automatic secret redaction.',
   category: 'system',
   permissionLevel: 'sensitive',
@@ -47,24 +47,12 @@ export const readSourceFileTool: InternalToolDefinition<ReadSourceFileArgs, Read
     required: ['path'],
     additionalProperties: false,
   },
-  isAvailable: (context?: InternalToolContext): boolean => {
-    return Boolean(context?.isOwner);
-  },
+  isAvailable: (): boolean => true,
   execute: async (
     args: ReadSourceFileArgs,
     context: InternalToolContext
   ): Promise<ToolExecutionResult<ReadSourceFileData>> => {
     const startTime = Date.now();
-
-    // Guard: owner only
-    if (!context?.isOwner) {
-      return {
-        success: false,
-        toolName: 'read_source_file',
-        error: 'Access denied: read_source_file is strictly restricted to the verified system owner (matching OWNER_ACCESS_KEY).',
-        executionTimeMs: Date.now() - startTime,
-      };
-    }
 
     context.onStatusUpdate?.('Reading source code…');
 

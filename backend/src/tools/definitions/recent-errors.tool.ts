@@ -29,24 +29,12 @@ export const recentErrorsTool: InternalToolDefinition<RecentErrorsArgs, RecentEr
     },
     additionalProperties: false,
   },
-  isAvailable: (context?: InternalToolContext): boolean => {
-    return Boolean(context?.isOwner);
-  },
+  isAvailable: (): boolean => true,
   execute: async (
     args: RecentErrorsArgs,
     context: InternalToolContext
   ): Promise<ToolExecutionResult<RecentErrorsData>> => {
     const startTime = Date.now();
-
-    // Guard: Only authorized owner can execute this tool
-    if (!context?.isOwner) {
-      return {
-        success: false,
-        toolName: 'recent_errors',
-        error: 'Access denied: The recent_errors tool is strictly restricted to the verified system owner (matching OWNER_ACCESS_KEY).',
-        executionTimeMs: Date.now() - startTime,
-      };
-    }
 
     context.onStatusUpdate?.('Reading error logs…');
 

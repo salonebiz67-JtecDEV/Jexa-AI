@@ -9,16 +9,22 @@ services:
       - key: NODE_ENV
         value: production
       - key: TEXT_AI_PROVIDER
-        value: development_mock
+        value: gemini
+      - key: TEXT_AI_MODEL
+        value: gemini-3.8-flash
+      - key: TEXT_AI_BACKUP_MODEL
+        value: gemini-3.7-flash
+      - key: BACKGROUND_AI_MODEL
+        value: gemini-3.5-flash-lite
       - key: VOICE_AI_PROVIDER
-        value: development_mock
-      - key: TEXT_AI_API_KEY
+        value: gemini
+      - key: VOICE_AI_MODEL
+        value: gemini-3.8-flash-lite-tts
+      - key: GEMINI_API_KEY
         sync: false
-      - key: VOICE_AI_API_KEY
+      - key: TAVILY_API_KEY
         sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: OWNER_ACCESS_KEY
         sync: false

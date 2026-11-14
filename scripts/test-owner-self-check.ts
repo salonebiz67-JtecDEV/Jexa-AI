@@ -1,50 +1,17 @@
-import { checkOwnerStatus } from '../backend/src/middleware/auth.middleware';
 import { ErrorLogService } from '../backend/src/services/error-log.service';
 import { ToolRegistry } from '../backend/src/tools/tool-registry';
 
-async function runOwnerVerificationSuite() {
+async function runDiagnosticsVerificationSuite() {
   console.log('====================================================');
-  console.log('JEXA OWNER-ONLY SELF-CHECK & DIAGNOSTICS TEST SUITE');
+  console.log('JEXA SYSTEM CHECK & DIAGNOSTIC TOOLS TEST SUITE');
   console.log('====================================================\n');
 
   const report: Record<string, 'PASS' | 'FAIL'> = {};
 
   // --------------------------------------------------------------------------
-  // TEST 1: Owner Lock Verification
+  // TEST 1: Error Log & Secret Sanitization
   // --------------------------------------------------------------------------
-  console.log('[Test 1] Testing Owner Lock & Header Authorization...');
-  const prevKey = process.env.OWNER_ACCESS_KEY;
-
-  delete process.env.OWNER_ACCESS_KEY;
-  const mockReq1 = { headers: { 'x-owner-key': 'some-key' } } as any;
-  const isOwnerUnset = checkOwnerStatus(mockReq1);
-
-  process.env.OWNER_ACCESS_KEY = 'test-owner-secret-9988';
-  const mockReqWrong = { headers: { 'x-owner-key': 'wrong-key' } } as any;
-  const isOwnerWrong = checkOwnerStatus(mockReqWrong);
-
-  const mockReqCorrect = { headers: { 'x-owner-key': 'test-owner-secret-9988' } } as any;
-  const isOwnerCorrect = checkOwnerStatus(mockReqCorrect);
-
-  if (!isOwnerUnset && !isOwnerWrong && isOwnerCorrect) {
-    console.log('  -> Owner lock correctly restricts authorization strictly to matching key, and denies when unset.');
-    report['Owner Lock Authorization'] = 'PASS';
-  } else {
-    console.error('  -> Owner lock failed:', { isOwnerUnset, isOwnerWrong, isOwnerCorrect });
-    report['Owner Lock Authorization'] = 'FAIL';
-  }
-
-  // Restore env
-  if (prevKey) {
-    process.env.OWNER_ACCESS_KEY = prevKey;
-  } else {
-    process.env.OWNER_ACCESS_KEY = 'test-owner-secret-9988';
-  }
-
-  // --------------------------------------------------------------------------
-  // TEST 2: Error Log & Secret Sanitization
-  // --------------------------------------------------------------------------
-  console.log('\n[Test 2] Testing Error Log Buffer & Secret Sanitization...');
+  console.log('[Test 1] Testing Error Log Buffer & Secret Sanitization...');
   ErrorLogService.clearBuffer();
 
   const loggedEntry = ErrorLogService.log('chat', 'Error: sk-proj-1234567890abcdef123456 failed with Bearer secret-auth-token-123', {
@@ -74,83 +41,67 @@ async function runOwnerVerificationSuite() {
   }
 
   // --------------------------------------------------------------------------
-  // TEST 3: ToolRegistry Owner-Only Availability
+  // TEST 2: Diagnostic & Code Tool Availability (No Owner Key Required)
   // --------------------------------------------------------------------------
-  console.log('\n[Test 3] Testing Tool Registry Owner Guard...');
+  console.log('\n[Test 2] Testing Open Tool Registry Availability...');
   const registry = ToolRegistry.getInstance();
 
-  const publicDeclarations = await registry.getToolDeclarations({ isOwner: false });
-  const ownerDeclarations = await registry.getToolDeclarations({ isOwner: true });
+  const declarations = await registry.getToolDeclarations({});
+  const hasSystemCheck = declarations.some((t) => t.name === 'system_check');
+  const hasRecentErrors = declarations.some((t) => t.name === 'recent_errors');
+  const hasListSource = declarations.some((t) => t.name === 'list_source_files');
+  const hasReadSource = declarations.some((t) => t.name === 'read_source_file');
+  const hasSearchCode = declarations.some((t) => t.name === 'search_code');
 
-  const publicHasSystemCheck = publicDeclarations.some((t) => t.name === 'system_check');
-  const publicHasRecentErrors = publicDeclarations.some((t) => t.name === 'recent_errors');
-
-  const ownerHasSystemCheck = ownerDeclarations.some((t) => t.name === 'system_check');
-  const ownerHasRecentErrors = ownerDeclarations.some((t) => t.name === 'recent_errors');
-
-  if (!publicHasSystemCheck && !publicHasRecentErrors && ownerHasSystemCheck && ownerHasRecentErrors) {
-    console.log('  -> Tools hidden from public/regular sessions, exposed only to verified owner.');
-    report['Owner-Only Tool Exposure'] = 'PASS';
+  if (hasSystemCheck && hasRecentErrors && hasListSource && hasReadSource && hasSearchCode) {
+    console.log('  -> All diagnostic and code-reading tools exposed directly without owner keys.');
+    report['Open Tool Exposure'] = 'PASS';
   } else {
     console.error('  -> Tool exposure failed:', {
-      publicHasSystemCheck,
-      publicHasRecentErrors,
-      ownerHasSystemCheck,
-      ownerHasRecentErrors,
+      hasSystemCheck,
+      hasRecentErrors,
+      hasListSource,
+      hasReadSource,
+      hasSearchCode,
     });
-    report['Owner-Only Tool Exposure'] = 'FAIL';
+    report['Open Tool Exposure'] = 'FAIL';
   }
 
   // --------------------------------------------------------------------------
-  // TEST 4: system_check Tool Execution
+  // TEST 3: system_check Tool Execution
   // --------------------------------------------------------------------------
-  console.log('\n[Test 4] Testing system_check Tool Execution...');
+  console.log('\n[Test 3] Testing system_check Tool Execution...');
   const systemCheckTool = registry.getTool('system_check')!;
 
-  // Execution as non-owner
-  const nonOwnerExec = await systemCheckTool.execute({}, { isOwner: false });
+  const execRes = await systemCheckTool.execute({}, {});
 
-  // Execution as owner
-  let statusEmitted = '';
-  const ownerExec = await systemCheckTool.execute(
-    {},
-    {
-      isOwner: true,
-      onStatusUpdate: (s) => {
-        statusEmitted = s;
-      },
-    }
-  );
-
-  const envVars = ownerExec.data?.environmentVariables;
-  // Ensure names only, no values
+  const envVars = execRes.data?.environmentVariables;
   const hasEnvNamesOnly =
     Array.isArray(envVars?.set) &&
     Array.isArray(envVars?.missing) &&
-    !JSON.stringify(envVars).includes('test-owner-secret-9988');
+    !JSON.stringify(envVars).includes('AIzaSy');
 
   const checksValid =
-    !nonOwnerExec.success &&
-    ownerExec.success &&
-    Boolean(ownerExec.data?.server?.uptimeFormatted) &&
-    Boolean(ownerExec.data?.database?.tablesChecked) &&
+    execRes.success &&
+    Boolean(execRes.data?.server?.uptimeFormatted) &&
+    Boolean(execRes.data?.database?.tablesChecked) &&
     hasEnvNamesOnly;
 
   if (checksValid) {
     console.log('  -> system_check executed safely; verified server uptime, DB tables, and env vars without exposing secrets.');
     report['system_check Execution'] = 'PASS';
   } else {
-    console.error('  -> system_check failed:', { nonOwnerExec, ownerExec });
+    console.error('  -> system_check failed:', execRes);
     report['system_check Execution'] = 'FAIL';
   }
 
   // --------------------------------------------------------------------------
-  // TEST 5: recent_errors Tool Execution
+  // TEST 4: recent_errors Tool Execution
   // --------------------------------------------------------------------------
-  console.log('\n[Test 5] Testing recent_errors Tool Execution...');
+  console.log('\n[Test 4] Testing recent_errors Tool Execution...');
   const recentErrorsTool = registry.getTool('recent_errors')!;
 
-  const errorsExec = await recentErrorsTool.execute({ limit: 5 }, { isOwner: true });
+  const errorsExec = await recentErrorsTool.execute({ limit: 5 }, {});
 
   if (errorsExec.success && errorsExec.data && Array.isArray(errorsExec.data.errors)) {
     console.log(`  -> recent_errors returned ${errorsExec.data.errors.length} sanitized log entries.`);
@@ -178,7 +129,7 @@ async function runOwnerVerificationSuite() {
   process.exit(allPass ? 0 : 1);
 }
 
-runOwnerVerificationSuite().catch((err) => {
+runDiagnosticsVerificationSuite().catch((err) => {
   console.error('Unexpected test failure:', err);
   process.exit(1);
 });

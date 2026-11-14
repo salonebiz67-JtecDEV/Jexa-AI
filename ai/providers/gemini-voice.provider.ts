@@ -6,6 +6,8 @@ import {
   VoiceSynthesisResponse,
   ProviderError,
   ProviderHealthStatus,
+  DEFAULT_VOICE_MODEL,
+  isTtsModel,
 } from '../../shared/types/provider';
 
 function addWavHeader(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16): Buffer {
@@ -19,7 +21,7 @@ function addWavHeader(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bi
   header.write('WAVE', 8);
   header.write('fmt ', 12);
   header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20); // Linear PCM
+  header.writeUInt16LE(1, 20);
   header.writeUInt16LE(numChannels, 22);
   header.writeUInt32LE(sampleRate, 24);
   header.writeUInt32LE(byteRate, 28);
@@ -38,17 +40,24 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
   public readonly isConfigured: boolean = false;
   public lastError?: string;
   public lastErrorCode?: string;
-  public quotaExhaustedUntil: number = 0;
-  public quotaRetryDelaySeconds: number = 0;
+  private quotaExhaustedByModel: Map<string, number> = new Map();
   public hasSuccessfulTest: boolean = false;
   public lastSuccessfulTest?: { timestamp: string; latencyMs: number };
 
-  constructor() {
-    this.modelName = (
+  constructor(customModel?: string) {
+    let rawModel = (
+      customModel ||
       process.env.VOICE_AI_MODEL ||
       process.env.GEMINI_VOICE_MODEL ||
-      'gemini-3.8-flash-lite-tts'
+      DEFAULT_VOICE_MODEL
     ).trim();
+
+    if (!isTtsModel(rawModel)) {
+      console.warn(`[GeminiVoiceAIProvider] Non-TTS model '${rawModel}' cannot be used for voice. Reverting to '${DEFAULT_VOICE_MODEL}'.`);
+      rawModel = DEFAULT_VOICE_MODEL;
+    }
+
+    this.modelName = rawModel;
 
     const apiKey =
       process.env.GEMINI_API_KEY ||
@@ -69,8 +78,25 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
     }
   }
 
-  public isQuotaExhausted(): boolean {
-    return Date.now() < this.quotaExhaustedUntil;
+  private resolveVoiceModel(requestedModel?: string): string {
+    const trimmed = (requestedModel || '').trim();
+    if (!trimmed) return this.modelName;
+    if (!isTtsModel(trimmed)) {
+      throw new ProviderError(
+        `Chat model '${trimmed}' cannot be used for voice synthesis. Please select a Gemini TTS voice model in Settings.`,
+        'gemini',
+        'INVALID_MODEL_TYPE',
+        400,
+        trimmed
+      );
+    }
+    return trimmed;
+  }
+
+  public isQuotaExhausted(model?: string): boolean {
+    const target = model || this.modelName;
+    const until = this.quotaExhaustedByModel.get(target) || 0;
+    return Date.now() < until;
   }
 
   public getStatus(): ProviderHealthStatus {
@@ -81,31 +107,34 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
     if (this.lastErrorCode === 'PAYMENT_REQUIRED') return 'PAYMENT_REQUIRED';
     if (this.hasSuccessfulTest) return 'CONNECTED';
     if (this.lastError) return 'UNAVAILABLE';
-    return 'UNAVAILABLE';
+    return 'READY';
   }
 
   public async synthesizeSpeech(request: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
+    const targetModel = this.resolveVoiceModel(request.model);
+
     if (!this.ai || !this.isConfigured) {
       this.lastErrorCode = 'NOT_CONFIGURED';
       throw new ProviderError(
-        'Voice AI service is not configured. Please configure GEMINI_API_KEY in your Render environment variables.',
+        'Voice AI service is not configured. Please configure GEMINI_API_KEY in your environment variables.',
         'gemini',
         'NOT_CONFIGURED',
         400,
-        this.modelName
+        targetModel
       );
     }
 
-    if (this.isQuotaExhausted()) {
-      const remainingMs = Math.max(0, this.quotaExhaustedUntil - Date.now());
+    if (this.isQuotaExhausted(targetModel)) {
+      const until = this.quotaExhaustedByModel.get(targetModel) || Date.now();
+      const remainingMs = Math.max(0, until - Date.now());
       const remainingHours = Math.ceil(remainingMs / (1000 * 60 * 60));
-      const retryHint = remainingHours > 1 ? `in ~${remainingHours}h` : 'later';
+      const retryHint = remainingHours > 1 ? `in ~${remainingHours}h` : 'shortly';
       throw new ProviderError(
-        `Gemini Voice quota exhausted. Try again ${retryHint} or switch to ElevenLabs.`,
+        `Gemini Voice (${targetModel}) quota exhausted. Try again ${retryHint} or pick another voice model in Settings.`,
         'gemini',
         'QUOTA_EXHAUSTED',
         429,
-        this.modelName
+        targetModel
       );
     }
 
@@ -113,13 +142,14 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
     try {
       const voiceMap: Record<string, string> = {
         aura: 'Aoede',
+        'aura-jexa-serene': 'Aoede',
         atlas: 'Fenrir',
         lyra: 'Kore',
         puck: 'Puck',
         charon: 'Charon',
       };
-      const requestedVoice = (request.voiceId || 'lyra').toLowerCase();
-      const voiceName = voiceMap[requestedVoice] || 'Kore';
+      const requestedVoice = (request.voiceId || 'aura').toLowerCase();
+      const voiceName = voiceMap[requestedVoice] || 'Aoede';
 
       const cleanText = request.text.replace(/[*#`_\[\]]/g, '').trim();
       if (!cleanText) {
@@ -127,7 +157,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       }
 
       const responseStream = await this.ai.models.generateContentStream({
-        model: this.modelName,
+        model: targetModel,
         contents: [
           {
             role: 'user',
@@ -159,7 +189,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
           'gemini',
           'EMPTY_AUDIO',
           500,
-          this.modelName
+          targetModel
         );
       }
 
@@ -171,7 +201,6 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       const durationSeconds = Math.round(pcmCombined.length / (24000 * 2));
       const latencyMs = Date.now() - startTime;
 
-      // Real test success confirmed
       this.hasSuccessfulTest = true;
       this.lastSuccessfulTest = {
         timestamp: new Date().toISOString(),
@@ -189,7 +218,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         isSimulated: false,
         message: 'Speech synthesized successfully via Gemini Neural TTS.',
         provider: this.providerType,
-        model: this.modelName,
+        model: targetModel,
       };
     } catch (error: any) {
       console.error('[GeminiVoiceAIProvider] Speech synthesis failed:', error);
@@ -209,68 +238,67 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         errStr.includes('Quota exceeded');
 
       if (is429) {
-        // Parse retry delay from Google GenAI error message or default to 12 hours for the 10-request limit
         let cooldownMs = 12 * 60 * 60 * 1000;
         const matchSec = error.message?.match(/retry(?:\s+in|\s+after)?\s+(\d+(?:\.\d+)?)\s*s/i);
         if (matchSec && parseFloat(matchSec[1])) {
           cooldownMs = parseFloat(matchSec[1]) * 1000;
         }
-        this.quotaExhaustedUntil = Date.now() + cooldownMs;
+        this.quotaExhaustedByModel.set(targetModel, Date.now() + cooldownMs);
         this.lastErrorCode = 'QUOTA_EXHAUSTED';
-        this.lastError = 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.';
+        this.lastError = `Gemini Voice (${targetModel}) quota exhausted. Try again later or pick another voice model in Settings.`;
         throw new ProviderError(
-          'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.',
+          this.lastError,
           'gemini',
           'QUOTA_EXHAUSTED',
           429,
-          this.modelName
+          targetModel
         );
       }
 
       if (error.status === 401 || error.status === 403 || errStr.includes('401') || errStr.includes('API_KEY_INVALID')) {
         this.lastErrorCode = 'AUTHENTICATION_ERROR';
-        this.lastError = 'Provider authentication or permission failed.';
+        this.lastError = 'Gemini authentication failed. Verify GEMINI_API_KEY.';
         throw new ProviderError(
-          'Gemini authentication failed. Verify GEMINI_API_KEY in Render environment.',
+          this.lastError,
           'gemini',
           'AUTHENTICATION_ERROR',
           401,
-          this.modelName
+          targetModel
         );
       }
 
       if (error.status === 404 || errStr.includes('404') || errStr.includes('not found')) {
         this.lastErrorCode = 'MODEL_NOT_FOUND';
-        this.lastError = 'The selected model or voice was not found.';
+        this.lastError = `The selected voice model '${targetModel}' was not found.`;
         throw new ProviderError(
-          `The selected voice model '${this.modelName}' was not found.`,
+          this.lastError,
           'gemini',
           'MODEL_NOT_FOUND',
           404,
-          this.modelName
+          targetModel
         );
       }
 
       if (error.status === 503 || errStr.includes('503') || errStr.includes('UNAVAILABLE')) {
         this.lastErrorCode = 'UNAVAILABLE';
-        this.lastError = 'The provider is temporarily unavailable.';
+        this.lastError = 'Gemini Voice is temporarily unavailable.';
         throw new ProviderError(
-          'Gemini Voice is temporarily unavailable.',
+          this.lastError,
           'gemini',
           'UNAVAILABLE',
           503,
-          this.modelName
+          targetModel
         );
       }
 
       this.lastErrorCode = 'UNAVAILABLE';
-      this.lastError = 'Gemini Voice is temporarily unavailable.';
+      this.lastError = error.message || 'Gemini Voice is temporarily unavailable.';
       throw new ProviderError(
-        'Gemini Voice is temporarily unavailable.',
+        this.lastError || 'Gemini Voice is temporarily unavailable.',
         'gemini',
         'UNAVAILABLE',
         500,
-        this.modelName
+        targetModel
       );
     }
   }
@@ -326,7 +354,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
     }
   }
 
-  public async testConnection(): Promise<{
+  public async testConnection(customModel?: string): Promise<{
     success: boolean;
     latencyMs: number;
     model: string;
@@ -337,11 +365,26 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
     error?: string;
     message?: string;
   }> {
+    let targetModel: string;
+    try {
+      targetModel = this.resolveVoiceModel(customModel);
+    } catch (modelErr: any) {
+      return {
+        success: false,
+        latencyMs: 0,
+        model: customModel || this.modelName,
+        voiceId: 'Aoede (Aura)',
+        code: modelErr.code || 'INVALID_MODEL_TYPE',
+        status: 'ERROR',
+        error: modelErr.message,
+      };
+    }
+
     if (!this.ai || !this.isConfigured) {
       return {
         success: false,
         latencyMs: 0,
-        model: this.modelName,
+        model: targetModel,
         voiceId: 'Aoede (Aura)',
         code: 'NOT_CONFIGURED',
         status: 'NOT_CONFIGURED',
@@ -349,15 +392,15 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       };
     }
 
-    if (this.isQuotaExhausted()) {
+    if (this.isQuotaExhausted(targetModel)) {
       return {
         success: false,
         latencyMs: 0,
-        model: this.modelName,
+        model: targetModel,
         voiceId: 'Aoede (Aura)',
         code: 'QUOTA_EXHAUSTED',
         status: 'QUOTA_EXHAUSTED',
-        error: 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.',
+        error: `Gemini Voice (${targetModel}) quota exhausted. Try again later or pick another voice model in Settings.`,
       };
     }
 
@@ -366,13 +409,14 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       const res = await this.synthesizeSpeech({
         text: 'JEXA voice system online. Gemini neural speech test successful.',
         voiceId: 'aura',
+        model: targetModel,
       });
 
       const latencyMs = Date.now() - startTime;
       return {
         success: Boolean(res.audioUrl),
         latencyMs,
-        model: this.modelName,
+        model: targetModel,
         voiceId: 'Aoede (Aura)',
         audioUrl: res.audioUrl,
         code: 'CONNECTED',
@@ -385,7 +429,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       return {
         success: false,
         latencyMs,
-        model: this.modelName,
+        model: targetModel,
         voiceId: 'Aoede (Aura)',
         code: err.code || 'UNAVAILABLE',
         status,

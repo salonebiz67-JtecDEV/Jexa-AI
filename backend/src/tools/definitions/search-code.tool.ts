@@ -38,7 +38,7 @@ const IGNORED_EXTENSIONS = new Set([
 
 export const searchCodeTool: InternalToolDefinition<SearchCodeArgs, SearchCodeData> = {
   name: 'search_code',
-  displayName: 'Search Code (Owner Only)',
+  displayName: 'Search Code',
   description: 'Search for text or patterns in permitted repository source files with automatic secret redaction.',
   category: 'system',
   permissionLevel: 'sensitive',
@@ -66,24 +66,12 @@ export const searchCodeTool: InternalToolDefinition<SearchCodeArgs, SearchCodeDa
     required: ['query'],
     additionalProperties: false,
   },
-  isAvailable: (context?: InternalToolContext): boolean => {
-    return Boolean(context?.isOwner);
-  },
+  isAvailable: (): boolean => true,
   execute: async (
     args: SearchCodeArgs,
     context: InternalToolContext
   ): Promise<ToolExecutionResult<SearchCodeData>> => {
     const startTime = Date.now();
-
-    // Guard: owner only
-    if (!context?.isOwner) {
-      return {
-        success: false,
-        toolName: 'search_code',
-        error: 'Access denied: search_code is strictly restricted to the verified system owner (matching OWNER_ACCESS_KEY).',
-        executionTimeMs: Date.now() - startTime,
-      };
-    }
 
     context.onStatusUpdate?.('Searching code…');
 

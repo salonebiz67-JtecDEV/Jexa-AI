@@ -1,5 +1,40 @@
-export type TextProviderType = 'development_mock' | 'openai' | 'anthropic' | 'gemini' | 'groq' | 'custom_http';
-export type VoiceProviderType = 'development_mock' | 'elevenlabs' | 'openai_voice' | 'browser_speech' | 'custom_tts' | 'gemini' | 'personal';
+export type TextProviderType = 'gemini';
+export type VoiceProviderType = 'gemini';
+
+export interface GeminiModelOption {
+  id: string;
+  label: string;
+  badge?: string;
+  isDefault?: boolean;
+}
+
+export const DEFAULT_CHAT_MODEL = 'gemini-3.8-flash';
+export const DEFAULT_BACKUP_MODEL = 'gemini-3.7-flash';
+export const DEFAULT_BACKGROUND_MODEL = 'gemini-3.5-flash-lite';
+export const DEFAULT_VOICE_MODEL = 'gemini-3.8-flash-lite-tts';
+
+export const FREE_GEMINI_CHAT_MODELS: GeminiModelOption[] = [
+  { id: 'gemini-4-hydrogen', label: 'gemini-4-hydrogen', badge: 'new, fast coding' },
+  { id: 'gemini-3.8-flash', label: 'gemini-3.8-flash', badge: 'default', isDefault: true },
+  { id: 'gemini-3.7-flash', label: 'gemini-3.7-flash' },
+  { id: 'gemini-3.6-flash', label: 'gemini-3.6-flash' },
+  { id: 'gemini-3.5-flash', label: 'gemini-3.5-flash' },
+  { id: 'gemini-3.5-flash-lite', label: 'gemini-3.5-flash-lite' },
+  { id: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite' },
+  { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro' },
+  { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
+  { id: 'gemini-2.5-flash-lite', label: 'gemini-2.5-flash-lite' },
+];
+
+export const FREE_GEMINI_VOICE_MODELS: GeminiModelOption[] = [
+  { id: 'gemini-3.8-flash-lite-tts', label: 'gemini-3.8-flash-lite-tts', badge: 'default', isDefault: true },
+  { id: 'gemini-3.8-flash-tts', label: 'gemini-3.8-flash-tts' },
+];
+
+export function isTtsModel(modelId?: string | null): boolean {
+  if (!modelId || typeof modelId !== 'string') return false;
+  return /(?:^|[-_\s])tts(?:$|[-_\s])|tts$/i.test(modelId.trim());
+}
 
 export type ProviderHealthStatus =
   | 'CONNECTED'
@@ -35,6 +70,7 @@ export interface ProviderStatus {
     isConfigured: boolean;
     hasApiKey: boolean;
     model: string;
+    backupModel?: string;
     status: ProviderHealthStatus;
     description?: string;
     lastError?: string;
@@ -73,6 +109,7 @@ export interface VoiceSynthesisRequest {
   text: string;
   voiceId?: string;
   provider?: VoiceProviderType;
+  model?: string;
   speed?: number;
   pitch?: number;
 }
@@ -89,45 +126,11 @@ export interface VoiceSynthesisResponse {
   model?: string;
 }
 
-export interface PersonalVoiceReferenceMetadata {
-  id: string;
-  name: string;
-  format?: string;
-  durationSeconds?: number;
-  sampleRate?: number;
-  recordedAt: string;
-  sizeBytes?: number;
-  isLocalOnly?: boolean;
-}
-
-export interface PersonalVoiceStatusResponse {
-  configured: boolean;
-  engine: string;
-  referenceVoice: boolean;
-  referenceMetadata?: PersonalVoiceReferenceMetadata | null;
-  ready: boolean;
-  model?: string;
-  apiUrl?: string;
-  message: string;
-  status: ProviderHealthStatus;
-}
-
 export interface VoiceHealthResponse {
   gemini: {
     configured: boolean;
     provider: 'gemini';
     model?: string;
-  };
-  elevenlabs: {
-    configured: boolean;
-    provider: 'elevenlabs';
-    model?: string;
-  };
-  personal?: {
-    configured: boolean;
-    provider: 'personal';
-    engine?: string;
-    referenceVoice?: boolean;
   };
 }
 
@@ -175,7 +178,7 @@ export function scrubSecretsAndUrls(text: string): string {
   s = s.replace(/ghp_[0-9a-zA-Z]{30,}/g, 'ghp_[REDACTED]');
   s = s.replace(/eyJhbGciOi[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g, '[REDACTED_JWT]');
   // 3. Scrub key=, secret=, token=, password=
-  s = s.replace(/(?:key|secret|token|password|apiKey|api_key|access_key|owner_key)\s*[:=]\s*["']?([^"',\s]+)["']?/gi, (m, val) => {
+  s = s.replace(/(?:key|secret|token|password|apiKey|api_key|access_key)\s*[:=]\s*["']?([^"',\s]+)["']?/gi, (m, val) => {
     return m.replace(val, '[REDACTED]');
   });
   // 4. Scrub long random strings
@@ -208,27 +211,12 @@ export function formatCleanProviderError(error: any): {
   const errObj = parsedJson?.error || parsedJson || {};
   const statusNum = error?.statusCode || error?.status || errObj.code || 500;
   const innerMsg = errObj.message || rawMsg;
-  const rawProvider = (error?.provider || errObj.provider || '').toString().toLowerCase();
+  const rawProvider = (error?.provider || errObj.provider || 'gemini').toString().toLowerCase();
   const rawModel = (error?.model || errObj?.model || (typeof error === 'object' && error?.modelName) || '').toString().trim();
   const fullText = `${rawMsg} ${innerMsg} ${error?.code || ''} ${rawProvider}`.toLowerCase();
 
-  // Detect genuine provider and counterpart
-  let providerName = 'AI';
-  let alternateProviderName = 'another provider';
-  let resolvedProviderKey: string | undefined = rawProvider || undefined;
-
-  if (rawProvider.includes('groq') || fullText.includes('groq')) {
-    providerName = 'Groq';
-    alternateProviderName = 'Gemini';
-    resolvedProviderKey = 'groq';
-  } else if (rawProvider.includes('gemini') || fullText.includes('gemini') || fullText.includes('google')) {
-    providerName = 'Gemini';
-    alternateProviderName = 'Groq';
-    resolvedProviderKey = 'gemini';
-  } else if (rawProvider) {
-    providerName = rawProvider.charAt(0).toUpperCase() + rawProvider.slice(1);
-    alternateProviderName = 'another provider in Settings';
-  }
+  const providerName = 'Gemini';
+  const resolvedProviderKey = 'gemini';
 
   // Extract retry-after if provided
   let retryAfterSeconds: number | undefined = error?.retryAfterSeconds;
@@ -267,10 +255,10 @@ export function formatCleanProviderError(error: any): {
   const modelDisplay = rawModel ? ` (${rawModel})` : '';
   const statusDisplay = `[Status ${statusNum}]`;
 
-  // Always write full raw error to error log via registered logger so recent_errors can show it to the owner
+  // Always write full raw error to error log via registered logger
   if (registeredErrorLogger) {
     registeredErrorLogger('ai_provider', rawMsg || String(error), {
-      provider: resolvedProviderKey || providerName.toLowerCase(),
+      provider: resolvedProviderKey,
       model: rawModel,
       statusCode: statusNum,
       realReason,
@@ -291,27 +279,24 @@ export function formatCleanProviderError(error: any): {
     fullText.includes('too many requests')
   ) {
     const isVoice =
-      (resolvedProviderKey === 'gemini' || resolvedProviderKey === 'elevenlabs' || fullText.includes('elevenlabs')) &&
-      (error?.model?.includes('tts') || error?.model?.includes('voice') || fullText.includes('voice') || fullText.includes('synthesize'));
+      isTtsModel(error?.model) || fullText.includes('voice') || fullText.includes('synthesize');
 
     if (isVoice) {
-      const voiceProvider = resolvedProviderKey === 'elevenlabs' ? 'ElevenLabs' : 'Gemini Voice';
-      const altVoice = resolvedProviderKey === 'elevenlabs' ? 'Gemini' : 'ElevenLabs';
       return {
-        cleanMessage: `${voiceProvider}${modelDisplay} quota reached: ${realReason}. Try ${altVoice} in Settings. ${statusDisplay}`,
+        cleanMessage: `Gemini Voice${modelDisplay} quota reached: ${realReason}. Try switching the voice model in Settings or try again shortly. ${statusDisplay}`,
         code: 'QUOTA_EXHAUSTED',
         statusCode: 429,
-        provider: resolvedProviderKey || 'voice',
+        provider: resolvedProviderKey,
         model: rawModel,
         retryAfterSeconds,
       };
     }
 
     return {
-      cleanMessage: `${providerName}${modelDisplay} rate limit reached: ${realReason}. Wait a minute or switch to ${alternateProviderName} in Settings. ${statusDisplay}`,
+      cleanMessage: `${providerName}${modelDisplay} rate limit reached: ${realReason}. Try again shortly or pick another Gemini model in Settings. ${statusDisplay}`,
       code: 'QUOTA_EXHAUSTED',
       statusCode: 429,
-      provider: resolvedProviderKey || providerName.toLowerCase(),
+      provider: resolvedProviderKey,
       model: rawModel,
       retryAfterSeconds,
     };
@@ -328,10 +313,10 @@ export function formatCleanProviderError(error: any): {
     fullText.includes('free tier')
   ) {
     return {
-      cleanMessage: `${providerName}${modelDisplay} requires a paid subscription: ${realReason}. ${statusDisplay}`,
+      cleanMessage: `${providerName}${modelDisplay} requires a paid plan: ${realReason}. ${statusDisplay}`,
       code: 'PAYMENT_REQUIRED',
       statusCode: 402,
-      provider: resolvedProviderKey || providerName.toLowerCase(),
+      provider: resolvedProviderKey,
       model: rawModel,
     };
   }
@@ -348,7 +333,7 @@ export function formatCleanProviderError(error: any): {
       cleanMessage: `${providerName}${modelDisplay} model not found: ${realReason}. ${statusDisplay}`,
       code: 'MODEL_NOT_FOUND',
       statusCode: 404,
-      provider: resolvedProviderKey || providerName.toLowerCase(),
+      provider: resolvedProviderKey,
       model: rawModel,
     };
   }
@@ -365,10 +350,10 @@ export function formatCleanProviderError(error: any): {
     fullText.includes('unauthorized')
   ) {
     return {
-      cleanMessage: `${providerName}${modelDisplay} authentication failed: ${realReason}. Check API key. ${statusDisplay}`,
+      cleanMessage: `${providerName}${modelDisplay} authentication failed: ${realReason}. Check GEMINI_API_KEY. ${statusDisplay}`,
       code: 'AUTHENTICATION_ERROR',
       statusCode: 401,
-      provider: resolvedProviderKey || providerName.toLowerCase(),
+      provider: resolvedProviderKey,
       model: rawModel,
     };
   }
@@ -386,41 +371,17 @@ export function formatCleanProviderError(error: any): {
       cleanMessage: `${providerName}${modelDisplay} temporarily unavailable: ${realReason}. ${statusDisplay}`,
       code: 'PROVIDER_UNAVAILABLE',
       statusCode: 503,
-      provider: resolvedProviderKey || providerName.toLowerCase(),
+      provider: resolvedProviderKey,
       model: rawModel,
     };
   }
 
-  // 6. Personal Voice not configured / missing reference
-  if (
-    error?.provider === 'personal' ||
-    fullText.includes('personal voice') ||
-    fullText.includes('personal_voice')
-  ) {
-    if (fullText.includes('sample') || fullText.includes('reference')) {
-      return {
-        cleanMessage: `Personal Voice: sample not recorded yet. Record or upload your voice sample in Settings. ${statusDisplay}`,
-        code: 'NOT_CONFIGURED',
-        statusCode: 400,
-        provider: 'personal',
-        model: rawModel,
-      };
-    }
-    return {
-      cleanMessage: `Personal Voice engine not configured: ${realReason}. ${statusDisplay}`,
-      code: 'NOT_CONFIGURED',
-      statusCode: 400,
-      provider: 'personal',
-      model: rawModel,
-    };
-  }
-
-  // General fallback: never replace with "encountered an unexpected error", always show real reason, provider, model, status
+  // General fallback
   return {
     cleanMessage: `${providerName}${modelDisplay}: ${realReason} ${statusDisplay}`.trim(),
     code: error?.code || 'PROVIDER_ERROR',
     statusCode: typeof statusNum === 'number' && statusNum >= 400 && statusNum < 600 ? statusNum : 500,
-    provider: resolvedProviderKey || providerName.toLowerCase(),
+    provider: resolvedProviderKey,
     model: rawModel,
   };
 }

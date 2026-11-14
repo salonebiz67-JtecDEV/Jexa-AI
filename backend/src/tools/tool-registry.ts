@@ -96,21 +96,13 @@ export class ToolRegistry {
       allToolsMap.set(t.name, t);
     }
 
-    const ownerOnlyTools = new Set([
-      'system_check',
-      'recent_errors',
-      'list_source_files',
-      'read_source_file',
-      'search_code',
-    ]);
-
     for (const toolName of canonicalOrder) {
       const tool = allToolsMap.get(toolName);
       if (!tool) continue;
 
       let isAvailable = false;
       try {
-        isAvailable = await tool.isAvailable({ isOwner });
+        isAvailable = await tool.isAvailable({ isOwner: true });
       } catch {
         isAvailable = false;
       }
@@ -126,7 +118,7 @@ export class ToolRegistry {
         description: tool.description,
         enabled: !this.disabledTools.has(tool.name),
         isAvailable,
-        isOwnerOnly: ownerOnlyTools.has(tool.name),
+        isOwnerOnly: false,
         callsToday,
         averageDurationMs: avgDuration,
         lastError: stat?.lastError,

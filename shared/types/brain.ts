@@ -11,6 +11,7 @@ export interface BrainProfile {
   activePersonality: PersonalityStyle;
   selectedTextProvider?: TextProviderType;
   selectedTextModel?: string;
+  selectedBackupModel?: string;
   selectedVoiceProvider?: VoiceProviderType;
   selectedVoiceModel?: string;
   theme?: 'dark' | 'midnight' | 'obsidian' | 'light' | 'system';
@@ -31,14 +32,6 @@ export interface BrainProfile {
     enabled: boolean;
     autoExtract: boolean;
     maxContextMemories: number;
-  };
-  personalVoiceSettings?: {
-    referenceId?: string;
-    sampleName?: string;
-    durationSeconds?: number;
-    recordedAt?: string;
-    engine?: string;
-    model?: string;
   };
 }
 

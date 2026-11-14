@@ -3,6 +3,12 @@ import { getSupabaseClient, isSupabaseConfigured, testSupabasePing } from './sup
 import { Conversation, ChatMessage } from '../../../shared/types/chat';
 import { MemoryItem, MemoryCreateInput, ResearchHistoryItem, ResearchHistorySource, normalizeCategory } from '../../../shared/types/memory';
 import { BrainProfile } from '../../../shared/types/brain';
+import {
+  DEFAULT_BACKUP_MODEL,
+  DEFAULT_CHAT_MODEL,
+  DEFAULT_VOICE_MODEL,
+  isTtsModel,
+} from '../../../shared/types/provider';
 import { DatabaseDiagnosticsResult, DatabaseHealthResponse, TestStepStatus } from '../../../shared/types/database';
 import { JEXA_IDENTITY } from '../../../ai/brain/identity';
 import { ErrorLogService } from '../services/error-log.service';
@@ -49,9 +55,10 @@ class InMemoryDatabase {
       version: JEXA_IDENTITY.version,
       activePersonality: 'empathetic_companion',
       selectedTextProvider: 'gemini',
-      selectedTextModel: 'gemini-2.5-flash',
+      selectedTextModel: DEFAULT_CHAT_MODEL,
+      selectedBackupModel: DEFAULT_BACKUP_MODEL,
       selectedVoiceProvider: 'gemini',
-      selectedVoiceModel: 'gemini-2.5-flash-tts',
+      selectedVoiceModel: DEFAULT_VOICE_MODEL,
       theme: 'dark',
       traits: ['Empathetic', 'Adaptive', 'Curious', 'Honest', 'Nuanced'],
       toneParameters: {
@@ -541,7 +548,7 @@ export class DatabaseService {
               model: m.model,
               tokens: m.tokens,
               audioUrl: m.audio_url,
-              isDevelopmentMock: m.is_development_mock,
+              isDevelopmentMock: false,
               ...dbMeta,
               ...cachedMeta,
             },
@@ -593,7 +600,7 @@ export class DatabaseService {
         model: message.metadata?.model || null,
         tokens: message.metadata?.tokens || null,
         audio_url: message.metadata?.audioUrl || null,
-        is_development_mock: message.metadata?.isDevelopmentMock ?? false,
+        is_development_mock: false,
         created_at: fullMessage.createdAt,
       };
 
@@ -902,6 +909,14 @@ export class DatabaseService {
           .maybeSingle();
 
         if (!error && data) {
+          const rawTextModel = data.selected_text_model || data.settings_json?.selectedTextModel || memoryStore.brainProfile.selectedTextModel;
+          const rawBackupModel = data.settings_json?.selectedBackupModel || memoryStore.brainProfile.selectedBackupModel || DEFAULT_BACKUP_MODEL;
+          const rawVoiceModel = data.selected_voice_model || data.settings_json?.selectedVoiceModel || memoryStore.brainProfile.selectedVoiceModel;
+
+          const sanitizedTextModel = rawTextModel && !isTtsModel(rawTextModel) ? rawTextModel : DEFAULT_CHAT_MODEL;
+          const sanitizedBackupModel = rawBackupModel && !isTtsModel(rawBackupModel) ? rawBackupModel : DEFAULT_BACKUP_MODEL;
+          const sanitizedVoiceModel = rawVoiceModel && isTtsModel(rawVoiceModel) ? rawVoiceModel : DEFAULT_VOICE_MODEL;
+
           const profile: BrainProfile = {
             id: `profile-${targetUserId}`,
             name: JEXA_IDENTITY.name,
@@ -909,10 +924,11 @@ export class DatabaseService {
             creator: JEXA_IDENTITY.creator,
             version: JEXA_IDENTITY.version,
             activePersonality: data.voice_persona || memoryStore.brainProfile.activePersonality,
-            selectedTextProvider: data.selected_text_provider || memoryStore.brainProfile.selectedTextProvider,
-            selectedTextModel: data.selected_text_model || data.settings_json?.selectedTextModel || memoryStore.brainProfile.selectedTextModel,
-            selectedVoiceProvider: data.selected_voice_provider || memoryStore.brainProfile.selectedVoiceProvider,
-            selectedVoiceModel: data.selected_voice_model || data.settings_json?.selectedVoiceModel || memoryStore.brainProfile.selectedVoiceModel,
+            selectedTextProvider: 'gemini',
+            selectedTextModel: sanitizedTextModel,
+            selectedBackupModel: sanitizedBackupModel,
+            selectedVoiceProvider: 'gemini',
+            selectedVoiceModel: sanitizedVoiceModel,
             theme: data.theme || data.settings_json?.theme || 'dark',
             traits: data.settings_json?.traits || memoryStore.brainProfile.traits,
             toneParameters: data.settings_json?.toneParameters || memoryStore.brainProfile.toneParameters,
@@ -927,7 +943,6 @@ export class DatabaseService {
               autoExtract: Boolean(data.settings_json?.autoExtract ?? memoryStore.brainProfile.memorySettings.autoExtract),
               maxContextMemories: Number(data.settings_json?.maxContextMemories ?? memoryStore.brainProfile.memorySettings.maxContextMemories),
             },
-            personalVoiceSettings: data.settings_json?.personalVoiceSettings || memoryStore.brainProfile.personalVoiceSettings,
           };
           memoryStore.userBrainProfiles.set(targetUserId, profile);
           return profile;
@@ -963,28 +978,33 @@ export class DatabaseService {
     userId?: string
   ): Promise<BrainProfile> {
     const targetUserId = toValidUUID(userId || DEFAULT_USER_ID);
+    const existing = memoryStore.userBrainProfiles.get(targetUserId) || memoryStore.brainProfile;
+
+    const candidateText = updates.selectedTextModel || existing.selectedTextModel || DEFAULT_CHAT_MODEL;
+    const candidateBackup = updates.selectedBackupModel || existing.selectedBackupModel || DEFAULT_BACKUP_MODEL;
+    const candidateVoice = updates.selectedVoiceModel || existing.selectedVoiceModel || DEFAULT_VOICE_MODEL;
 
     const merged: BrainProfile = {
-      ...memoryStore.brainProfile,
+      ...existing,
       ...updates,
-      selectedTextModel: updates.selectedTextModel || memoryStore.brainProfile.selectedTextModel,
-      selectedVoiceModel: updates.selectedVoiceModel || memoryStore.brainProfile.selectedVoiceModel,
-      theme: updates.theme || memoryStore.brainProfile.theme,
+      selectedTextProvider: 'gemini',
+      selectedVoiceProvider: 'gemini',
+      selectedTextModel: !isTtsModel(candidateText) ? candidateText : DEFAULT_CHAT_MODEL,
+      selectedBackupModel: !isTtsModel(candidateBackup) ? candidateBackup : DEFAULT_BACKUP_MODEL,
+      selectedVoiceModel: isTtsModel(candidateVoice) ? candidateVoice : DEFAULT_VOICE_MODEL,
+      theme: updates.theme || existing.theme,
       toneParameters: {
-        ...memoryStore.brainProfile.toneParameters,
+        ...existing.toneParameters,
         ...(updates.toneParameters || {}),
       },
       voiceSettings: {
-        ...memoryStore.brainProfile.voiceSettings,
+        ...existing.voiceSettings,
         ...(updates.voiceSettings || {}),
       },
       memorySettings: {
-        ...memoryStore.brainProfile.memorySettings,
+        ...existing.memorySettings,
         ...(updates.memorySettings || {}),
       },
-      personalVoiceSettings: updates.personalVoiceSettings
-        ? { ...memoryStore.brainProfile.personalVoiceSettings, ...updates.personalVoiceSettings }
-        : memoryStore.brainProfile.personalVoiceSettings,
     };
 
     memoryStore.userBrainProfiles.set(targetUserId, merged);
@@ -997,9 +1017,9 @@ export class DatabaseService {
       // Persist to user_settings table
       const settingsPayload = {
         user_id: targetUserId,
-        selected_text_provider: merged.selectedTextProvider,
+        selected_text_provider: 'gemini',
         selected_text_model: merged.selectedTextModel,
-        selected_voice_provider: merged.selectedVoiceProvider,
+        selected_voice_provider: 'gemini',
         selected_voice_model: merged.selectedVoiceModel,
         voice_persona: merged.activePersonality,
         theme: merged.theme || 'dark',
@@ -1010,13 +1030,13 @@ export class DatabaseService {
         memory_enabled: merged.memorySettings?.enabled,
         settings_json: {
           selectedTextModel: merged.selectedTextModel,
+          selectedBackupModel: merged.selectedBackupModel,
           selectedVoiceModel: merged.selectedVoiceModel,
           theme: merged.theme,
           toneParameters: merged.toneParameters,
           traits: merged.traits,
           voiceSettings: merged.voiceSettings,
           memorySettings: merged.memorySettings,
-          personalVoiceSettings: merged.personalVoiceSettings,
         },
         updated_at: new Date().toISOString(),
       };

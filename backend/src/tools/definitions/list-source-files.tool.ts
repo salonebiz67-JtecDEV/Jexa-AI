@@ -24,7 +24,7 @@ export interface ListSourceFilesData {
 
 export const listSourceFilesTool: InternalToolDefinition<ListSourceFilesArgs, ListSourceFilesData> = {
   name: 'list_source_files',
-  displayName: 'List Source Files (Owner Only)',
+  displayName: 'List Source Files',
   description: 'List source files on the server disk within allowed repository folders.',
   category: 'system',
   permissionLevel: 'sensitive',
@@ -47,24 +47,12 @@ export const listSourceFilesTool: InternalToolDefinition<ListSourceFilesArgs, Li
     },
     additionalProperties: false,
   },
-  isAvailable: (context?: InternalToolContext): boolean => {
-    return Boolean(context?.isOwner);
-  },
+  isAvailable: (): boolean => true,
   execute: async (
     args: ListSourceFilesArgs,
     context: InternalToolContext
   ): Promise<ToolExecutionResult<ListSourceFilesData>> => {
     const startTime = Date.now();
-
-    // Guard: strictly restricted to owner
-    if (!context?.isOwner) {
-      return {
-        success: false,
-        toolName: 'list_source_files',
-        error: 'Access denied: list_source_files is strictly restricted to the verified system owner (matching OWNER_ACCESS_KEY).',
-        executionTimeMs: Date.now() - startTime,
-      };
-    }
 
     context.onStatusUpdate?.('Reading source code…');
 

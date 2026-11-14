@@ -620,12 +620,24 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             </p>
           </div>
         ) : message.status === 'error' ? (
-          <div className="p-3.5 rounded-2xl bg-rose-950/30 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2.5 shadow-sm max-w-lg">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <div className="font-semibold text-rose-300">AI Provider Notice</div>
-              <p className="leading-relaxed text-slate-300">{message.content}</p>
+          <div className="p-3.5 rounded-2xl bg-rose-950/30 border border-rose-500/30 text-rose-200 text-xs flex items-start justify-between gap-3 shadow-sm max-w-lg">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <div className="space-y-1 min-w-0">
+                <div className="font-semibold text-rose-300">Gemini Error</div>
+                <p className="leading-relaxed text-slate-300 break-words">{message.content}</p>
+              </div>
             </div>
+            {onRegenerate && (
+              <button
+                type="button"
+                onClick={() => onRegenerate()}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-semibold transition-colors cursor-pointer shrink-0 border border-rose-500/30"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Retry</span>
+              </button>
+            )}
           </div>
         ) : (
           /* Assistant Message Content */

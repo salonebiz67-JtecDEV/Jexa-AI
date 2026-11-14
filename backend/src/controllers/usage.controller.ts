@@ -1,15 +1,9 @@
 import { Request, Response } from 'express';
-import { isRequestOwner } from '../middleware/auth.middleware';
 import { UsageTracker } from '../services/usage-tracker.service';
 import { ToolRegistry } from '../tools/tool-registry';
 
 export class UsageController {
-  public static async getSummary(req: Request, res: Response): Promise<void> {
-    if (!isRequestOwner(req)) {
-      res.status(403).json({ error: 'Forbidden: Owner access required.' });
-      return;
-    }
-
+  public static async getSummary(_req: Request, res: Response): Promise<void> {
     try {
       const summary = await UsageTracker.getSummary();
       res.json(summary);
@@ -19,11 +13,10 @@ export class UsageController {
     }
   }
 
-  public static async getToolsStatus(req: Request, res: Response): Promise<void> {
+  public static async getToolsStatus(_req: Request, res: Response): Promise<void> {
     try {
-      const isOwner = isRequestOwner(req);
-      const tools = await ToolRegistry.getInstance().getToolStatusList(isOwner);
-      res.json({ tools, isOwner });
+      const tools = await ToolRegistry.getInstance().getToolStatusList(true);
+      res.json({ tools });
     } catch (err: any) {
       console.error('[UsageController] Error fetching tools status:', err.message);
       res.status(500).json({ error: 'Failed to retrieve tool statuses.' });
@@ -31,11 +24,6 @@ export class UsageController {
   }
 
   public static async toggleTool(req: Request, res: Response): Promise<void> {
-    if (!isRequestOwner(req)) {
-      res.status(403).json({ error: 'Forbidden: Owner access required.' });
-      return;
-    }
-
     const { toolName, enabled } = req.body || {};
     if (!toolName || typeof toolName !== 'string') {
       res.status(400).json({ error: 'toolName string is required.' });

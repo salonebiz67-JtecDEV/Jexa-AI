@@ -20,11 +20,12 @@ import {
   AlertTriangle,
   LogOut,
   User as UserIcon,
+  Wrench,
 } from 'lucide-react';
 import { Conversation } from '../../../shared/types';
 import { useAuth } from '../../hooks/useAuth';
 
-export type ActiveNavTab = 'chat' | 'projects' | 'images' | 'remote' | 'schedule' | 'plugins';
+export type ActiveNavTab = 'chat' | 'projects' | 'images' | 'remote' | 'schedule' | 'plugins' | 'tools';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -205,6 +206,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'remote', label: 'Remote', icon: Radio },
     { id: 'schedule', label: 'Schedule', icon: CalendarClock },
     { id: 'plugins', label: 'Plugins', icon: Puzzle },
+    { id: 'tools', label: 'Tools', icon: Wrench },
   ];
 
   return (

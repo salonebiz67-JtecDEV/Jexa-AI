@@ -1,6 +1,12 @@
 import { GoogleGenAI } from '@google/genai';
 import { ITextAIProvider, TextGenerationRequest, TextGenerationResponse } from './text-provider.interface';
-import { TextProviderType, ProviderError, formatCleanProviderError } from '../../shared/types/provider';
+import {
+  TextProviderType,
+  ProviderError,
+  formatCleanProviderError,
+  DEFAULT_CHAT_MODEL,
+  isTtsModel,
+} from '../../shared/types/provider';
 import { ErrorLogService } from '../../backend/src/services/error-log.service';
 import { UsageTracker } from '../../backend/src/services/usage-tracker.service';
 
@@ -18,20 +24,15 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       customModel ||
       process.env.TEXT_AI_MODEL ||
       process.env.GEMINI_MODEL ||
-      'gemini-3.8-flash'
+      DEFAULT_CHAT_MODEL
     ).trim();
 
-    if (rawModel.toLowerCase().includes('-tts') || rawModel.toLowerCase().endsWith('tts')) {
-      console.warn(`[GeminiTextAIProvider] TTS model '${rawModel}' cannot be used as a text model. Reverting to 'gemini-3.8-flash'.`);
-      rawModel = 'gemini-3.8-flash';
+    if (isTtsModel(rawModel)) {
+      console.warn(`[GeminiTextAIProvider] TTS model '${rawModel}' cannot be used as a chat model. Reverting to '${DEFAULT_CHAT_MODEL}'.`);
+      rawModel = DEFAULT_CHAT_MODEL;
     }
 
-    // Automatically alias deprecated models to modern gemini-3.8-flash
-    if (rawModel === 'gemini-2.5-flash' || rawModel === 'gemini-1.5-flash' || rawModel === 'gemini-pro') {
-      rawModel = 'gemini-3.8-flash';
-    }
-
-    this.modelName = rawModel;
+    this.modelName = rawModel || DEFAULT_CHAT_MODEL;
 
     const apiKey =
       process.env.GEMINI_API_KEY ||
@@ -49,6 +50,21 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         this.lastError = err.message;
       }
     }
+  }
+
+  private resolveRequestModel(requestedModel?: string): string {
+    const trimmed = (requestedModel || '').trim();
+    if (!trimmed) return this.modelName;
+    if (isTtsModel(trimmed)) {
+      throw new ProviderError(
+        `Voice/TTS model '${trimmed}' cannot be used for chat. Please select a Gemini chat model in Settings.`,
+        'gemini',
+        'INVALID_MODEL_TYPE',
+        400,
+        trimmed
+      );
+    }
+    return trimmed;
   }
 
   private formatGeminiContents(messages: TextGenerationRequest['messages']): any[] {
@@ -131,6 +147,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       );
     }
 
+    const targetModel = this.resolveRequestModel(request.model);
     const contents = this.formatGeminiContents(request.messages);
 
     const maxTokens = request.maxTokens ?? 4096;
@@ -177,7 +194,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
           const response = await this.ai.models.generateContent({
-            model: this.modelName,
+            model: targetModel,
             contents,
             config,
           });
@@ -216,7 +233,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
           UsageTracker.recordAICall({
             provider: 'gemini',
-            model: this.modelName,
+            model: targetModel,
             purpose: request.purpose || (hasToolCalls ? 'tool_round' : 'chat'),
             promptTokens,
             completionTokens,
@@ -229,7 +246,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
           return {
             content: responseText,
-            model: this.modelName,
+            model: targetModel,
             provider: this.providerType,
             tokensUsed: {
               prompt: promptTokens,
@@ -244,20 +261,18 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         } catch (error: any) {
           lastError = error;
 
-          // If aborted by our 30 second timeout, stop immediately and report timeout
           if (controller.signal.aborted) {
             throw new ProviderError(
               'Gemini request timed out after 30 seconds.',
               'gemini',
               'PROVIDER_TIMEOUT',
               504,
-              this.modelName
+              targetModel
             );
           }
 
           const msg = String(error?.message || '');
 
-          // Requirement 6: If API rejects thinkingConfig, retry once without it and stop sending it after that
           const isThinkingConfigRejection =
             config.thinkingConfig &&
             (/thinking[-_]?config|thinking[-_]?budget|thinking_process/i.test(msg) ||
@@ -269,7 +284,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
             delete config.thinkingConfig;
             try {
               const retryResponse = await this.ai.models.generateContent({
-                model: this.modelName,
+                model: targetModel,
                 contents,
                 config,
               });
@@ -280,7 +295,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
               UsageTracker.recordAICall({
                 provider: 'gemini',
-                model: this.modelName,
+                model: targetModel,
                 purpose: request.purpose || 'chat',
                 promptTokens: promptTok,
                 completionTokens: compTok,
@@ -293,7 +308,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
               return {
                 content: retryText,
-                model: this.modelName,
+                model: targetModel,
                 provider: this.providerType,
                 tokensUsed: {
                   prompt: promptTok,
@@ -321,16 +336,16 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       console.error('[GeminiTextAIProvider] API call failed:', lastError);
       if (lastError && typeof lastError === 'object') {
         (lastError as any).provider = 'gemini';
-        (lastError as any).model = this.modelName;
+        (lastError as any).model = targetModel;
       }
-      ErrorLogService.log('ai_provider', lastError, { provider: 'gemini', model: this.modelName });
+      ErrorLogService.log('ai_provider', lastError, { provider: 'gemini', model: targetModel });
       const formatted = formatCleanProviderError(lastError);
       this.lastError = formatted.cleanMessage;
 
-      const isRateLimited = formatted.code === 'RATE_LIMIT' || formatted.statusCode === 429;
+      const isRateLimited = formatted.code === 'QUOTA_EXHAUSTED' || formatted.statusCode === 429;
       UsageTracker.recordAICall({
         provider: 'gemini',
-        model: this.modelName,
+        model: targetModel,
         purpose: request.purpose || 'chat',
         promptTokens: Math.ceil(request.systemPrompt.length / 4),
         completionTokens: 0,
@@ -347,7 +362,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         'gemini',
         formatted.code,
         formatted.statusCode,
-        this.modelName,
+        targetModel,
         formatted.retryAfterSeconds
       );
     } finally {
@@ -369,6 +384,8 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       );
     }
 
+    const targetModel = this.resolveRequestModel(request.model);
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       controller.abort();
@@ -387,7 +404,6 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         abortSignal: controller.signal,
       };
 
-      // Small thinking budget if supported so thinking can never use up the whole answer
       if (GeminiTextAIProvider.supportsThinkingConfig && maxTokens > 300) {
         config.thinkingConfig = {
           thinkingBudget: 256,
@@ -397,7 +413,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       let responseStream: any;
       try {
         responseStream = await this.ai.models.generateContentStream({
-          model: this.modelName,
+          model: targetModel,
           contents,
           config,
         });
@@ -408,7 +424,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
             'gemini',
             'PROVIDER_TIMEOUT',
             504,
-            this.modelName
+            targetModel
           );
         }
         const msg = String(streamInitErr?.message || '');
@@ -421,7 +437,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           GeminiTextAIProvider.supportsThinkingConfig = false;
           delete config.thinkingConfig;
           responseStream = await this.ai.models.generateContentStream({
-            model: this.modelName,
+            model: targetModel,
             contents,
             config,
           });
@@ -438,7 +454,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
             'gemini',
             'PROVIDER_TIMEOUT',
             504,
-            this.modelName
+            targetModel
           );
         }
         const piece = chunk.text || '';
@@ -455,7 +471,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
       UsageTracker.recordAICall({
         provider: 'gemini',
-        model: this.modelName,
+        model: targetModel,
         purpose: request.purpose || 'chat',
         promptTokens,
         completionTokens,
@@ -468,7 +484,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
       return {
         content: fullText,
-        model: this.modelName,
+        model: targetModel,
         provider: this.providerType,
         tokensUsed: {
           prompt: promptTokens,
@@ -485,13 +501,13 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           'gemini',
           'PROVIDER_TIMEOUT',
           504,
-          this.modelName
+          targetModel
         );
-        ErrorLogService.log('ai_provider', timeoutErr, { provider: 'gemini', model: this.modelName, stream: true });
+        ErrorLogService.log('ai_provider', timeoutErr, { provider: 'gemini', model: targetModel, stream: true });
         this.lastError = timeoutErr.message;
         UsageTracker.recordAICall({
           provider: 'gemini',
-          model: this.modelName,
+          model: targetModel,
           purpose: request.purpose || 'chat',
           promptTokens: Math.ceil(request.systemPrompt.length / 4),
           completionTokens: 0,
@@ -507,16 +523,16 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       console.error('[GeminiTextAIProvider] Streaming failed:', error);
       if (error && typeof error === 'object') {
         (error as any).provider = 'gemini';
-        (error as any).model = this.modelName;
+        (error as any).model = targetModel;
       }
-      ErrorLogService.log('ai_provider', error, { provider: 'gemini', model: this.modelName, stream: true });
+      ErrorLogService.log('ai_provider', error, { provider: 'gemini', model: targetModel, stream: true });
       const formatted = formatCleanProviderError(error);
       this.lastError = formatted.cleanMessage;
 
-      const isRateLimited = formatted.code === 'RATE_LIMIT' || formatted.statusCode === 429;
+      const isRateLimited = formatted.code === 'QUOTA_EXHAUSTED' || formatted.statusCode === 429;
       UsageTracker.recordAICall({
         provider: 'gemini',
-        model: this.modelName,
+        model: targetModel,
         purpose: request.purpose || 'chat',
         promptTokens: Math.ceil(request.systemPrompt.length / 4),
         completionTokens: 0,
@@ -533,7 +549,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         'gemini',
         formatted.code,
         formatted.statusCode,
-        this.modelName,
+        targetModel,
         formatted.retryAfterSeconds
       );
     } finally {
@@ -541,12 +557,14 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     }
   }
 
-  public async testConnection(): Promise<{ success: boolean; latencyMs: number; model: string; error?: string }> {
+  public async testConnection(customModel?: string): Promise<{ success: boolean; latencyMs: number; model: string; error?: string }> {
+    const targetModel = this.resolveRequestModel(customModel);
+
     if (!this.ai || !this.isConfigured) {
       return {
         success: false,
         latencyMs: 0,
-        model: this.modelName,
+        model: targetModel,
         error: 'GEMINI_API_KEY is not configured on the backend server.',
       };
     }
@@ -554,9 +572,10 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     const startTime = Date.now();
     try {
       const res = await this.generateResponse({
+        model: targetModel,
         systemPrompt: 'Respond with exactly one word: ping',
         messages: [{ role: 'user', content: 'ping' }],
-        maxTokens: 5,
+        maxTokens: 16,
         temperature: 0.1,
       });
 
@@ -573,7 +592,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       return {
         success: false,
         latencyMs: Date.now() - startTime,
-        model: this.modelName,
+        model: targetModel,
         error: formatted.cleanMessage,
       };
     }

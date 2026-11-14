@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { ChatService } from '../services/chat.service';
 import { SendMessagePayload, StreamChatEvent } from '../../../shared/types/chat';
 import { formatCleanProviderError } from '../../../shared/types/provider';
-import { getResolvedUserId, isRequestOwner } from '../middleware/auth.middleware';
+import { getResolvedUserId } from '../middleware/auth.middleware';
 import { ErrorLogService } from '../services/error-log.service';
 
 export class ChatController {
@@ -10,7 +10,6 @@ export class ChatController {
     const payload: SendMessagePayload = req.body || {};
     const userId = getResolvedUserId(req);
     payload.userId = userId;
-    payload.isOwner = isRequestOwner(req);
 
     if (!payload.message || typeof payload.message !== 'string' || !payload.message.trim()) {
       res.status(400).json({ success: false, error: 'A non-empty message string is required.' });

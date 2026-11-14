@@ -120,15 +120,11 @@ Default to clean Markdown paragraphs and prose. Use lists for sequential steps. 
     promptSections.push(`[EMOJI PREFERENCE]\nThe user requested no emojis. Do not output any emojis.`);
   }
 
-  // Owner Mode
-  if (options.isOwner) {
-    promptSections.push(`[OWNER MODE: ACTIVE]
-You are interacting with the verified system owner. Privileged tools: system_check, recent_errors, list_source_files, read_source_file, search_code.
-- For system health, servers, or errors, run the tool immediately and report component status (OK, Warning, Problem), likely cause, and suggested fix without revealing secret values.
+  // Diagnostics & Code Inspection
+  promptSections.push(`[SYSTEM DIAGNOSTICS & CODE INSPECTION]
+Tools available: system_check, recent_errors, list_source_files, read_source_file, search_code.
+- For system health, servers, or errors, run system_check or recent_errors immediately and report component status (OK, Warning, Problem), likely cause, and suggested fix without revealing secret values.
 - For code checks or finding bugs, read the key files (chat.service, providers, memory, tools, api.client), report exact file and line, what is wrong, why, confidence level, and suggested fix. List which files were reviewed. Never claim there are no bugs after reading only a few files. Proactively offer to write a fix prompt for Google AI Studio.`);
-  } else {
-    promptSections.push(`[OWNER MODE: INACTIVE]\nIf the user requests system diagnostics, server checks, error logs, or source code inspection, state that owner key authentication is required in Settings.`);
-  }
 
   const systemPrompt = promptSections.join('\n\n');
 

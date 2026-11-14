@@ -112,15 +112,16 @@ async function runTests() {
 
   // 8. Test Settings Save & Reload
   console.log('[Test 8] Testing Settings Save & Reload...');
-  const updatedProfile = await DatabaseService.updateBrainProfile({
-    selectedTextProvider: 'groq',
-    selectedTextModel: 'llama-3.3-70b-versatile',
-    selectedVoiceProvider: 'elevenlabs',
-    selectedVoiceModel: 'eleven_multilingual_v2',
+  await DatabaseService.updateBrainProfile({
+    selectedTextProvider: 'gemini',
+    selectedTextModel: 'gemini-4-hydrogen',
+    selectedBackupModel: 'gemini-3.7-flash',
+    selectedVoiceProvider: 'gemini',
+    selectedVoiceModel: 'gemini-3.8-flash-tts',
     activePersonality: 'deep_thinker',
     theme: 'midnight',
     voiceSettings: {
-      voiceId: 'aura-deep',
+      voiceId: 'aura',
       speed: 1.1,
       pitch: 0.95,
       autoSpeak: true,
@@ -131,6 +132,7 @@ async function runTests() {
   console.log('Reloaded profile settings:', {
     textProvider: reloadedProfile.selectedTextProvider,
     textModel: reloadedProfile.selectedTextModel,
+    backupModel: reloadedProfile.selectedBackupModel,
     voiceProvider: reloadedProfile.selectedVoiceProvider,
     voiceModel: reloadedProfile.selectedVoiceModel,
     persona: reloadedProfile.activePersonality,
@@ -139,9 +141,11 @@ async function runTests() {
   });
 
   const settingsMatched =
-    reloadedProfile.selectedTextProvider === 'groq' &&
-    reloadedProfile.selectedTextModel === 'llama-3.3-70b-versatile' &&
-    reloadedProfile.selectedVoiceProvider === 'elevenlabs' &&
+    reloadedProfile.selectedTextProvider === 'gemini' &&
+    reloadedProfile.selectedTextModel === 'gemini-4-hydrogen' &&
+    reloadedProfile.selectedBackupModel === 'gemini-3.7-flash' &&
+    reloadedProfile.selectedVoiceProvider === 'gemini' &&
+    reloadedProfile.selectedVoiceModel === 'gemini-3.8-flash-tts' &&
     reloadedProfile.activePersonality === 'deep_thinker' &&
     reloadedProfile.theme === 'midnight';
 

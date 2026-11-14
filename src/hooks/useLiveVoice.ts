@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApiClient } from '../services/api.client';
 import { safeStorage } from '../services/storage';
-import { TextProviderType, VoiceProviderType } from '../../shared/types/provider';
 
 export type LiveVoiceStatus =
   | 'idle'
@@ -240,10 +239,9 @@ export function useLiveVoice({
         onUserSpoke(cleanText);
       }
 
-      const activeTextProvider: TextProviderType =
-        (safeStorage.getItem('jexa_text_provider') as TextProviderType) || 'gemini';
-      const activeVoiceProvider: VoiceProviderType =
-        (safeStorage.getItem('jexa_voice_provider') as VoiceProviderType) || 'gemini';
+      const activeTextModel = safeStorage.getItem('jexa_text_model') || undefined;
+      const activeBackupModel = safeStorage.getItem('jexa_backup_model') || undefined;
+      const activeVoiceModel = safeStorage.getItem('jexa_voice_model') || undefined;
       const activeVoiceName = safeStorage.getItem('jexa_voice_name') || 'aura';
 
       const startTime = Date.now();
@@ -253,7 +251,9 @@ export function useLiveVoice({
           conversationId: conversationId || undefined,
           message: cleanText,
           isVoiceMode: true,
-          textProvider: activeTextProvider,
+          textProvider: 'gemini',
+          textModel: activeTextModel,
+          backupModel: activeBackupModel,
         });
 
         const latency = Date.now() - startTime;
@@ -265,8 +265,8 @@ export function useLiveVoice({
         const replyTokens = Math.ceil(replyContent.length / 4);
         setDebugStats((prev) => ({
           ...prev,
-          textProvider: activeTextProvider,
-          voiceProvider: activeVoiceProvider,
+          textProvider: 'gemini',
+          voiceProvider: 'gemini',
           connectionLatencyMs: latency,
           approximateTokens: prev.approximateTokens + promptTokens + replyTokens,
           lastError: null,
@@ -287,12 +287,13 @@ export function useLiveVoice({
           return;
         }
 
-        // Play Speech Synthesis using selected AI voice provider (Gemini or ElevenLabs)
+        // Play Speech Synthesis using Gemini TTS
         try {
           const voiceRes = await ApiClient.requestVoiceSynthesis({
             text: cleanSpokenText,
             voiceId: activeVoiceName,
-            provider: activeVoiceProvider,
+            provider: 'gemini',
+            model: activeVoiceModel,
           });
 
           if (voiceRes?.audioUrl) {
@@ -353,24 +354,15 @@ export function useLiveVoice({
             rawErr.includes('quota') ||
             rawErr.includes('RESOURCE_EXHAUSTED')
           ) {
-            friendlyError = 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.';
-          } else if (
-            voiceErr.status === 402 ||
-            voiceErr.code === 'PAYMENT_REQUIRED' ||
-            rawErr.includes('402') ||
-            rawErr.includes('paid plan')
-          ) {
-            friendlyError = 'This ElevenLabs voice requires a paid plan.';
+            friendlyError = 'Gemini Voice quota exhausted. Try again later or switch the voice model in Settings.';
           } else if (voiceErr.status === 401 || voiceErr.status === 403 || rawErr.includes('401')) {
-            friendlyError = 'Provider authentication or permission failed.';
+            friendlyError = 'Gemini authentication failed. Please check GEMINI_API_KEY.';
           } else if (voiceErr.status === 404 || rawErr.includes('404')) {
-            friendlyError = 'The selected model or voice was not found.';
+            friendlyError = 'The selected Gemini voice model was not found.';
           } else if (voiceErr.status === 503) {
-            friendlyError = 'The provider is temporarily unavailable.';
+            friendlyError = 'Gemini Voice is temporarily unavailable.';
           } else if (!friendlyError) {
-            friendlyError = activeVoiceProvider === 'gemini'
-              ? 'Gemini Voice is temporarily unavailable.'
-              : 'ElevenLabs voice synthesis failed.';
+            friendlyError = 'Gemini Voice synthesis failed.';
           }
 
           setStatus('error');

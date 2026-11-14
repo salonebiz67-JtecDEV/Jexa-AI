@@ -41,17 +41,15 @@ export class ErrorLogService {
     sanitized = sanitized.replace(/(postgres(?:ql)?:\/\/[^:\s]+:)([^@\s]+)(@[^/\s]+)/gi, '$1[REDACTED_PASSWORD]$3');
 
     // 7. Scrub explicit password/secret/api_key key-value patterns
-    sanitized = sanitized.replace(/(?:password|secret|apiKey|api_key|token|access_key|owner_key)\s*[:=]\s*["']?([^"',\s]+)["']?/gi, (match, val) => {
+    sanitized = sanitized.replace(/(?:password|secret|apiKey|api_key|token|access_key)\s*[:=]\s*["']?([^"',\s]+)["']?/gi, (match, val) => {
       return match.replace(val, '[REDACTED]');
     });
 
     // 8. Mask any known runtime environment secrets if they appear literally
     const sensitiveEnvKeys = [
-      'OWNER_ACCESS_KEY',
       'GEMINI_API_KEY',
-      'GROQ_API_KEY',
+      'AI_API_KEY',
       'TAVILY_API_KEY',
-      'ELEVENLABS_API_KEY',
       'SUPABASE_SERVICE_ROLE_KEY',
       'SUPABASE_ANON_KEY',
     ];

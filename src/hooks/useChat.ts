@@ -170,10 +170,10 @@ export function useChat() {
           const remaining = conversations.filter((c) => c.id !== id);
           if (remaining.length > 0) {
             setCurrentConversationId(remaining[0].id);
-            safeStorage.setItem('jexa_active_conv_id', remaining[0].id);
+            safeStorage.setItem(`jexa_active_conv_id_${user?.id || 'guest'}`, remaining[0].id);
           } else {
             setCurrentConversationId(null);
-            safeStorage.removeItem('jexa_active_conv_id');
+            safeStorage.removeItem(`jexa_active_conv_id_${user?.id || 'guest'}`);
             setMessages([]);
           }
         }
@@ -182,7 +182,7 @@ export function useChat() {
         setError("Couldn't save. Please try again.");
       }
     },
-    [conversations, currentConversationId]
+    [conversations, currentConversationId, user?.id]
   );
 
   const sendMessage = useCallback(
@@ -237,7 +237,8 @@ export function useChat() {
       resetSilenceTimer();
 
       try {
-        const savedTextProvider = safeStorage.getItem('jexa_text_provider') as any;
+        const savedTextModel = safeStorage.getItem('jexa_text_model') || undefined;
+        const savedBackupModel = safeStorage.getItem('jexa_backup_model') || undefined;
 
         let accumulatedStreamContent = '';
         const streamingAssistantId = `streaming-assistant-${Date.now()}`;
@@ -252,7 +253,9 @@ export function useChat() {
             userId: user?.id,
             message: finalMessage,
             personaId: cleanPersona,
-            textProvider: savedTextProvider || undefined,
+            textProvider: 'gemini',
+            textModel: savedTextModel,
+            backupModel: savedBackupModel,
           },
           {
             onStatusUpdate(status, details) {
@@ -377,32 +380,27 @@ export function useChat() {
           return;
         }
         console.error('[useChat] Send message failed:', err);
-        setError("Couldn't save. Please try again.");
+        setError("Couldn't complete response. Please try again.");
         setActivityStatus('Search failed — retry available');
         setActivityDetails({
           error: err.message,
-          provider: err.provider,
+          provider: 'gemini',
           model: err.model,
           fallbackUsed: err.fallbackUsed,
         });
 
-        let providerInfo = '';
-        if (err.provider) {
-          providerInfo = ` [Provider: ${err.provider}${err.model ? `, Model: ${err.model}` : ''}${err.fallbackUsed ? ', Fallback attempted' : ''}]`;
-        }
-
-        let userHelpMessage = `I encountered an issue connecting to the AI provider${providerInfo}: ${err.message}`;
+        let userHelpMessage = err.message || 'Gemini failed to respond. Please try again.';
         if (err.code === 'MODEL_NOT_FOUND') {
-          userHelpMessage = `The configured model was not found${providerInfo} (${err.message}). You can switch providers in Settings or configure a supported model in environment settings.`;
+          userHelpMessage = `The selected Gemini model${err.model ? ` (${err.model})` : ''} was not found (${err.message}). Choose another Gemini model in Settings or try again.`;
         } else if (err.code === 'AUTHENTICATION_ERROR') {
-          userHelpMessage = `Authentication failed for ${err.provider || 'the selected provider'}. Please verify your API key in environment settings or switch to an active provider in Settings.`;
+          userHelpMessage = 'Gemini authentication failed. Please verify your GEMINI_API_KEY configuration.';
         } else if (err.code === 'MISSING_CREDENTIALS') {
-          userHelpMessage = `The selected provider (${err.provider || 'AI'}) is missing its API key. Please configure the required API key in your environment variables or switch to an active provider in Settings.`;
+          userHelpMessage = 'Gemini API key (GEMINI_API_KEY) is not configured on the server.';
         }
 
-        // Append non-crashing friendly error message in the chat
+        // Remove partial streaming placeholder and append clear error message with Retry support
         setMessages((prev) => [
-          ...prev,
+          ...prev.filter((m) => !m.id.startsWith('streaming-assistant-')),
           {
             id: `err-${Date.now()}`,
             conversationId: currentConversationId || '',
@@ -411,7 +409,7 @@ export function useChat() {
             createdAt: new Date().toISOString(),
             status: 'error',
             metadata: {
-              provider: err.provider,
+              provider: 'gemini',
               model: err.model,
               fallbackUsed: err.fallbackUsed,
             },

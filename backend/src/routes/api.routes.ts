@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { ChatController } from '../controllers/chat.controller';
 import { VoiceController } from '../controllers/voice.controller';
-import { PersonalVoiceController } from '../controllers/personal-voice.controller';
 import { ConversationController } from '../controllers/conversation.controller';
 import { MemoryController } from '../controllers/memory.controller';
 import { BrainController } from '../controllers/brain.controller';
@@ -11,17 +10,12 @@ import { DatabaseController } from '../controllers/database.controller';
 import { AuthController } from '../controllers/auth.controller';
 import { UsageController } from '../controllers/usage.controller';
 
-import { authenticateRequest, isRequestOwner } from '../middleware/auth.middleware';
+import { authenticateRequest } from '../middleware/auth.middleware';
 
 const router = Router();
 
 // Apply cryptographic authentication & verified user resolution middleware
 router.use(authenticateRequest);
-
-// Owner Status Verification
-router.get('/owner/status', (req, res) => {
-  res.json({ isOwner: isRequestOwner(req) });
-});
 
 // Authentication & User Profile
 router.get('/auth/config', AuthController.getConfig);
@@ -40,20 +34,13 @@ router.post('/voice/synthesize', VoiceController.handleVoice);
 router.get('/voice/health', VoiceController.getHealth);
 router.post('/voice/test', VoiceController.testVoice);
 
-// Personal Voice Engine Endpoints
-router.get('/voice/personal/status', PersonalVoiceController.getStatus);
-router.post('/voice/personal/reference', PersonalVoiceController.saveReference);
-router.delete('/voice/personal/reference', PersonalVoiceController.deleteReference);
-router.post('/voice/personal/test', PersonalVoiceController.testPersonalVoice);
-router.post('/voice/personal/synthesize', PersonalVoiceController.synthesize);
-
 // Provider Status, Selection & Testing
 router.get('/providers/status', ProviderController.getStatus);
 router.post('/providers/select', ProviderController.selectProviders);
 router.post('/providers/test-text', ProviderController.testText);
 router.post('/providers/test-voice', ProviderController.testVoice);
 
-// Usage Tracking & Tool Administration (Owner Only)
+// Usage Tracking & Tool Administration
 router.get('/usage/summary', UsageController.getSummary);
 router.get('/tools/status', UsageController.getToolsStatus);
 router.post('/tools/toggle', UsageController.toggleTool);
@@ -74,7 +61,6 @@ router.put('/memories/:id', MemoryController.update);
 router.patch('/memories/:id', MemoryController.update);
 router.delete('/memories/:id', MemoryController.delete);
 router.get('/research-history', MemoryController.listResearch);
-
 
 // AI Brain & Profile
 router.get('/ai/brain-profile', BrainController.getProfile);

@@ -244,7 +244,7 @@ export class SearchDecisionService {
     // 11. AI Provider Decision: For ambiguous or factual inquiries, ask background AI model (never chat model)
     try {
       const backgroundProvider = AIProviderRegistry.getInstance().getBackgroundTextProvider();
-      if (backgroundProvider && backgroundProvider.isConfigured && backgroundProvider.providerType !== 'development_mock') {
+      if (backgroundProvider && backgroundProvider.isConfigured) {
         const aiDecision = await this.classifyWithAIProvider(raw, backgroundProvider, recentDialogue);
         if (aiDecision) {
           return aiDecision;
@@ -308,6 +308,7 @@ Respond ONLY with a valid JSON object in this exact schema:
         messages: [{ role: 'user', content: cleanMsg }],
         temperature: 0.1,
         maxTokens: 80,
+        purpose: 'search_decision',
       });
 
       const response = await Promise.race([
@@ -391,7 +392,7 @@ Respond ONLY with a valid JSON object in this exact schema:
 
   private static isPureCodingSyntaxOrAlgo(text: string): boolean {
     return /^(write|code|create|implement|debug|explain)\s+(?:a|an\s+)?(?:[a-z0-9_\-]+\s+)*(?:function|method|class|algorithm|regex|sql\s+query|loop|component|hook)\s+(?:to|that|for|in|using|with)\s+[a-z0-9_\s]+$/i.test(text.trim()) &&
-      !/(latest|recent|current|2025|2026|tavily|supabase|groq|gemini|next\.js|react\s*19|capacitor|tailwind\s*v?4|drizzle|v[0-9]|version|migrate|upgrade|deprecated|plugin|breaking|config)/i.test(text);
+      !/(latest|recent|current|2025|2026|tavily|supabase|gemini|next\.js|react\s*19|capacitor|tailwind\s*v?4|drizzle|v[0-9]|version|migrate|upgrade|deprecated|plugin|breaking|config)/i.test(text);
   }
 
   // --- Positive Rule Helpers ---

@@ -25,6 +25,7 @@ export interface ToolInputSchema {
 export interface InternalToolContext {
   userId?: string;
   conversationId?: string;
+  messageId?: string;
   isOwner?: boolean;
   onStatusUpdate?: (status: any, details?: any) => void;
   userContext?: {

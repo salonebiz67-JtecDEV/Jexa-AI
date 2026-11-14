@@ -2,12 +2,18 @@ import { ITextAIProvider } from './text-provider.interface';
 import { IVoiceAIProvider } from './voice-provider.interface';
 import { GeminiTextAIProvider } from './gemini.provider';
 import { GeminiVoiceAIProvider } from './gemini-voice.provider';
-import { GroqTextAIProvider } from './groq.provider';
-import { ElevenLabsVoiceAIProvider } from './elevenlabs.provider';
-import { PersonalVoiceAIProvider } from './personal-voice.provider';
-import { DevelopmentTextAIProvider } from './text-development.provider';
-import { ProviderStatus, TextProviderType, VoiceProviderType, ProviderDetail, ProviderHealthStatus } from '../../shared/types/provider';
-import { AIProvidersConfig, loadAIProvidersConfig } from './config';
+import {
+  ProviderStatus,
+  TextProviderType,
+  VoiceProviderType,
+  ProviderDetail,
+  ProviderHealthStatus,
+  DEFAULT_CHAT_MODEL,
+  DEFAULT_BACKUP_MODEL,
+  DEFAULT_VOICE_MODEL,
+  isTtsModel,
+} from '../../shared/types/provider';
+import { AIProvidersConfig, loadAIProvidersConfig, sanitizeTextModel, sanitizeVoiceModel } from './config';
 
 export class AIProviderRegistry {
   private static instance: AIProviderRegistry;
@@ -17,53 +23,32 @@ export class AIProviderRegistry {
   private defaultVoiceType: VoiceProviderType = 'gemini';
   private config: AIProvidersConfig;
 
+  private activeTextModel: string;
+  private activeBackupModel: string;
+  private activeVoiceModel: string;
+
   private backupTextProvider: ITextAIProvider;
   private backgroundTextProvider: ITextAIProvider;
 
   private constructor() {
     this.config = loadAIProvidersConfig();
+    this.activeTextModel = this.config.text.model;
+    this.activeBackupModel = this.config.text.backupModel;
+    this.activeVoiceModel = this.config.voice.model;
 
-    // Initialize Text Providers
-    const geminiText = new GeminiTextAIProvider(this.config.text.model);
-    const geminiBackup = new GeminiTextAIProvider(this.config.text.backupModel);
+    const geminiText = new GeminiTextAIProvider(this.activeTextModel);
+    const geminiBackup = new GeminiTextAIProvider(this.activeBackupModel);
     const geminiBackground = new GeminiTextAIProvider(this.config.text.backgroundModel);
-    const groqText = new GroqTextAIProvider();
-    const devText = new DevelopmentTextAIProvider();
+    const geminiVoice = new GeminiVoiceAIProvider(this.activeVoiceModel);
 
     this.textProviders.set('gemini', geminiText);
-    this.textProviders.set('groq', groqText);
-    this.textProviders.set('development_mock', devText);
+    this.voiceProviders.set('gemini', geminiVoice);
 
     this.backupTextProvider = geminiBackup.isConfigured ? geminiBackup : geminiText;
     this.backgroundTextProvider = geminiBackground.isConfigured ? geminiBackground : geminiText;
 
-    // Default text provider based on config or availability
-    if (this.config.text.provider === 'groq' && groqText.isConfigured) {
-      this.defaultTextType = 'groq';
-    } else {
-      this.defaultTextType = 'gemini';
-    }
-
-    // Initialize Voice Providers
-    const geminiVoice = new GeminiVoiceAIProvider();
-    const elevenLabsVoice = new ElevenLabsVoiceAIProvider();
-    const personalVoice = new PersonalVoiceAIProvider();
-
-    this.voiceProviders.set('gemini', geminiVoice);
-    this.voiceProviders.set('elevenlabs', elevenLabsVoice);
-    this.voiceProviders.set('personal', personalVoice);
-
-    // Default voice provider based on config or availability
-    if (this.config.voice.provider === 'elevenlabs' && elevenLabsVoice.isConfigured) {
-      this.defaultVoiceType = 'elevenlabs';
-    } else if (this.config.voice.provider === 'personal' && personalVoice.isConfigured) {
-      this.defaultVoiceType = 'personal';
-    } else {
-      this.defaultVoiceType = 'gemini';
-    }
-
     console.log(
-      `[AIProviderRegistry] Loaded providers - Text: [gemini: ${geminiText.modelName} (${geminiText.isConfigured ? 'ready' : 'missing key'}), backup: ${this.backupTextProvider.modelName}, background: ${this.backgroundTextProvider.modelName}, groq (${groqText.isConfigured ? 'ready' : 'missing key'})] | Voice: [gemini (${geminiVoice.isConfigured ? 'ready' : 'missing key'}), elevenlabs (${elevenLabsVoice.isConfigured ? 'ready' : 'missing key'})]`
+      `[AIProviderRegistry] Loaded Gemini providers - Text: ${geminiText.modelName} (${geminiText.isConfigured ? 'ready' : 'missing key'}), Backup: ${this.backupTextProvider.modelName}, Background: ${this.backgroundTextProvider.modelName} | Voice: ${geminiVoice.modelName} (${geminiVoice.isConfigured ? 'ready' : 'missing key'})`
     );
   }
 
@@ -74,23 +59,68 @@ export class AIProviderRegistry {
     return AIProviderRegistry.instance;
   }
 
-  public getTextProvider(type?: TextProviderType): ITextAIProvider {
-    const targetType = type || this.defaultTextType;
-    const provider = this.textProviders.get(targetType);
-    if (provider) {
-      return provider;
-    }
-    const fallback =
-      this.textProviders.get('gemini') ||
-      this.textProviders.get('groq') ||
-      this.textProviders.get('development_mock');
-    if (fallback) {
-      return fallback;
-    }
-    throw new Error('[AIProviderRegistry] No text provider available.');
+  public getConfig(): AIProvidersConfig {
+    return this.config;
   }
 
-  public getBackupTextProvider(): ITextAIProvider {
+  public getActiveTextModel(): string {
+    return this.activeTextModel;
+  }
+
+  public getActiveBackupModel(): string {
+    return this.activeBackupModel;
+  }
+
+  public getActiveVoiceModel(): string {
+    return this.activeVoiceModel;
+  }
+
+  public setSelectedModels(models: { textModel?: string; backupModel?: string; voiceModel?: string }): void {
+    if (models.textModel !== undefined) {
+      const clean = sanitizeTextModel(models.textModel, DEFAULT_CHAT_MODEL, 'selectedTextModel');
+      this.activeTextModel = clean;
+      this.textProviders.set('gemini', new GeminiTextAIProvider(clean));
+    }
+    if (models.backupModel !== undefined) {
+      const cleanBackup = sanitizeTextModel(models.backupModel, DEFAULT_BACKUP_MODEL, 'selectedBackupModel');
+      this.activeBackupModel = cleanBackup;
+      this.backupTextProvider = new GeminiTextAIProvider(cleanBackup);
+    }
+    if (models.voiceModel !== undefined) {
+      const cleanVoice = sanitizeVoiceModel(models.voiceModel, DEFAULT_VOICE_MODEL, 'selectedVoiceModel');
+      this.activeVoiceModel = cleanVoice;
+      this.voiceProviders.set('gemini', new GeminiVoiceAIProvider(cleanVoice));
+    }
+  }
+
+  public getTextProvider(_type?: TextProviderType, customModel?: string): ITextAIProvider {
+    if (customModel && customModel.trim()) {
+      const trimmed = customModel.trim();
+      if (isTtsModel(trimmed)) {
+        throw new Error(`TTS model '${trimmed}' cannot be used for chat.`);
+      }
+      const existing = this.textProviders.get('gemini');
+      if (existing && existing.modelName === trimmed) {
+        return existing;
+      }
+      return new GeminiTextAIProvider(trimmed);
+    }
+    const provider = this.textProviders.get('gemini');
+    if (provider) return provider;
+    throw new Error('[AIProviderRegistry] Gemini text provider unavailable.');
+  }
+
+  public getBackupTextProvider(customBackupModel?: string): ITextAIProvider {
+    if (customBackupModel && customBackupModel.trim()) {
+      const trimmed = customBackupModel.trim();
+      if (isTtsModel(trimmed)) {
+        return this.backupTextProvider;
+      }
+      if (this.backupTextProvider.modelName === trimmed) {
+        return this.backupTextProvider;
+      }
+      return new GeminiTextAIProvider(trimmed);
+    }
     return this.backupTextProvider || this.getTextProvider('gemini');
   }
 
@@ -98,20 +128,21 @@ export class AIProviderRegistry {
     return this.backgroundTextProvider || this.getTextProvider('gemini');
   }
 
-  public getVoiceProvider(type?: VoiceProviderType): IVoiceAIProvider {
-    const targetType = type || this.defaultVoiceType;
-    const provider = this.voiceProviders.get(targetType);
-    if (provider) {
-      return provider;
+  public getVoiceProvider(_type?: VoiceProviderType, customModel?: string): IVoiceAIProvider {
+    if (customModel && customModel.trim()) {
+      const trimmed = customModel.trim();
+      if (!isTtsModel(trimmed)) {
+        throw new Error(`Chat model '${trimmed}' cannot be used for voice synthesis.`);
+      }
+      const existing = this.voiceProviders.get('gemini');
+      if (existing && existing.modelName === trimmed) {
+        return existing;
+      }
+      return new GeminiVoiceAIProvider(trimmed);
     }
-    const fallback =
-      this.voiceProviders.get('gemini') ||
-      this.voiceProviders.get('elevenlabs') ||
-      this.voiceProviders.get('personal');
-    if (fallback) {
-      return fallback;
-    }
-    throw new Error('[AIProviderRegistry] No voice provider available.');
+    const provider = this.voiceProviders.get('gemini');
+    if (provider) return provider;
+    throw new Error('[AIProviderRegistry] Gemini voice provider unavailable.');
   }
 
   public registerTextProvider(provider: ITextAIProvider): void {
@@ -138,7 +169,7 @@ export class AIProviderRegistry {
     return this.defaultVoiceType;
   }
 
-  public async testTextProvider(type: TextProviderType): Promise<{
+  public async testTextProvider(_type?: TextProviderType, customModel?: string): Promise<{
     success: boolean;
     latencyMs: number;
     model: string;
@@ -146,12 +177,20 @@ export class AIProviderRegistry {
     status?: ProviderHealthStatus;
     error?: string;
   }> {
-    const provider = this.textProviders.get(type);
-    if (!provider) {
-      return { success: false, latencyMs: 0, model: 'unknown', code: 'UNAVAILABLE', status: 'UNAVAILABLE', error: `Text provider '${type}' is not registered.` };
+    if (customModel && isTtsModel(customModel)) {
+      return {
+        success: false,
+        latencyMs: 0,
+        model: customModel,
+        code: 'INVALID_MODEL_TYPE',
+        status: 'ERROR',
+        error: `Voice/TTS model '${customModel}' cannot be used as a chat model.`,
+      };
     }
+
+    const provider = this.getTextProvider('gemini', customModel);
     if ('testConnection' in provider && typeof (provider as any).testConnection === 'function') {
-      const res = await (provider as any).testConnection();
+      const res = await (provider as any).testConnection(customModel);
       const status: ProviderHealthStatus = res.success
         ? 'CONNECTED'
         : !provider.isConfigured
@@ -169,9 +208,10 @@ export class AIProviderRegistry {
     const startTime = Date.now();
     try {
       const res = await provider.generateResponse({
+        model: customModel,
         systemPrompt: 'Respond with exactly: ping',
         messages: [{ role: 'user', content: 'ping' }],
-        maxTokens: 5,
+        maxTokens: 16,
         temperature: 0.1,
       });
       return { success: true, latencyMs: Date.now() - startTime, model: res.model, status: 'CONNECTED' };
@@ -179,15 +219,15 @@ export class AIProviderRegistry {
       return {
         success: false,
         latencyMs: Date.now() - startTime,
-        model: provider.modelName,
-        code: 'UNAVAILABLE',
+        model: customModel || provider.modelName,
+        code: err.code || 'UNAVAILABLE',
         status: !provider.isConfigured ? 'NOT_CONFIGURED' : 'UNAVAILABLE',
         error: err.message,
       };
     }
   }
 
-  public async testVoiceProvider(type: VoiceProviderType): Promise<{
+  public async testVoiceProvider(_type?: VoiceProviderType, customModel?: string): Promise<{
     success: boolean;
     latencyMs: number;
     model: string;
@@ -198,21 +238,29 @@ export class AIProviderRegistry {
     error?: string;
     message?: string;
   }> {
-    const provider = this.voiceProviders.get(type);
-    if (!provider) {
-      return { success: false, latencyMs: 0, model: 'unknown', code: 'UNAVAILABLE', status: 'UNAVAILABLE', error: `Voice provider '${type}' is not registered.` };
+    if (customModel && !isTtsModel(customModel)) {
+      return {
+        success: false,
+        latencyMs: 0,
+        model: customModel,
+        code: 'INVALID_MODEL_TYPE',
+        status: 'ERROR',
+        error: `Chat model '${customModel}' cannot be used for voice. Select a TTS voice model.`,
+      };
     }
+
+    const provider = this.getVoiceProvider('gemini', customModel);
     if ('testConnection' in provider && typeof (provider as any).testConnection === 'function') {
-      return await (provider as any).testConnection();
+      return await (provider as any).testConnection(customModel);
     }
 
     const startTime = Date.now();
     try {
-      const res = await provider.synthesizeSpeech({ text: 'Hello', voiceId: 'aura' });
+      const res = await provider.synthesizeSpeech({ text: 'Hello', voiceId: 'aura', model: customModel });
       return {
         success: Boolean(res.audioUrl),
         latencyMs: Date.now() - startTime,
-        model: provider.modelName,
+        model: res.model || provider.modelName,
         audioUrl: res.audioUrl,
         code: 'CONNECTED',
         status: 'CONNECTED',
@@ -222,7 +270,7 @@ export class AIProviderRegistry {
       return {
         success: false,
         latencyMs: Date.now() - startTime,
-        model: provider.modelName,
+        model: customModel || provider.modelName,
         code: (err as any).code || 'UNAVAILABLE',
         status: !provider.isConfigured ? 'NOT_CONFIGURED' : 'UNAVAILABLE',
         error: err.message,
@@ -230,31 +278,30 @@ export class AIProviderRegistry {
     }
   }
 
-  public getStatus(hasSupabase: boolean, activeTextType?: TextProviderType, activeVoiceType?: VoiceProviderType): ProviderStatus {
-    const textType = activeTextType || this.defaultTextType;
-    const voiceType = activeVoiceType || this.defaultVoiceType;
-
-    const activeText = this.getTextProvider(textType);
-    const activeVoice = this.getVoiceProvider(voiceType);
-
+  public getStatus(
+    hasSupabase: boolean,
+    _activeTextType?: TextProviderType,
+    _activeVoiceType?: VoiceProviderType,
+    selectedTextModel?: string,
+    selectedBackupModel?: string,
+    selectedVoiceModel?: string
+  ): ProviderStatus {
     const geminiText = this.textProviders.get('gemini');
-    const groqText = this.textProviders.get('groq');
-
     const geminiVoice = this.voiceProviders.get('gemini') as any;
-    const elevenLabsVoice = this.voiceProviders.get('elevenlabs') as any;
-    const personalVoice = this.voiceProviders.get('personal') as any;
+
+    const currentTextModel = selectedTextModel
+      ? sanitizeTextModel(selectedTextModel, this.activeTextModel, 'statusTextModel')
+      : this.activeTextModel;
+    const currentBackupModel = selectedBackupModel
+      ? sanitizeTextModel(selectedBackupModel, this.activeBackupModel, 'statusBackupModel')
+      : this.activeBackupModel;
+    const currentVoiceModel = selectedVoiceModel
+      ? sanitizeVoiceModel(selectedVoiceModel, this.activeVoiceModel, 'statusVoiceModel')
+      : this.activeVoiceModel;
 
     const geminiTextStatus: ProviderHealthStatus = !geminiText?.isConfigured
       ? 'NOT_CONFIGURED'
       : (geminiText as any)?.lastError
-      ? 'UNAVAILABLE'
-      : 'CONNECTED';
-
-    const groqTextStatus: ProviderHealthStatus = !groqText?.isConfigured
-      ? 'NOT_CONFIGURED'
-      : (groqText as any)?.lastError?.includes('404')
-      ? 'MODEL_NOT_FOUND'
-      : (groqText as any)?.lastError
       ? 'UNAVAILABLE'
       : 'CONNECTED';
 
@@ -264,36 +311,15 @@ export class AIProviderRegistry {
       ? 'NOT_CONFIGURED'
       : 'UNAVAILABLE';
 
-    const elevenLabsVoiceStatus: ProviderHealthStatus = elevenLabsVoice?.getStatus
-      ? elevenLabsVoice.getStatus()
-      : !elevenLabsVoice?.isConfigured
-      ? 'NOT_CONFIGURED'
-      : 'UNAVAILABLE';
-
-    const personalVoiceStatus: ProviderHealthStatus = personalVoice?.getStatus
-      ? personalVoice.getStatus()
-      : !personalVoice?.isConfigured
-      ? 'NOT_CONFIGURED'
-      : 'UNAVAILABLE';
-
     const availableTextProviders: ProviderDetail[] = [
       {
         type: 'gemini',
         name: 'Google Gemini',
         isConfigured: Boolean(geminiText?.isConfigured),
-        model: geminiText?.modelName || 'gemini-3.8-flash',
-        description: 'Deep multimodal reasoning, large context window & fast latency',
+        model: currentTextModel,
+        description: 'Google Gemini chat, reasoning & native tool execution',
         status: geminiTextStatus,
         error: (geminiText as any)?.lastError,
-      },
-      {
-        type: 'groq',
-        name: 'Groq Cloud',
-        isConfigured: Boolean(groqText?.isConfigured),
-        model: groqText?.modelName || 'llama-3.3-70b-versatile',
-        description: 'Ultra high-speed LPU inference powered by Meta Llama 3.3',
-        status: groqTextStatus,
-        error: (groqText as any)?.lastError,
       },
     ];
 
@@ -302,75 +328,36 @@ export class AIProviderRegistry {
         type: 'gemini',
         name: 'Gemini Voice TTS',
         isConfigured: Boolean(geminiVoice?.isConfigured),
-        model: geminiVoice?.modelName || 'gemini-3.8-flash-lite-tts',
+        model: currentVoiceModel,
         voiceId: 'Aoede (Aura) / Fenrir (Atlas) / Kore (Lyra)',
-        description: 'Direct expressive neural voice generated by Google GenAI',
+        description: 'Expressive neural speech synthesis powered by Google Gemini',
         status: geminiVoiceStatus,
         error: geminiVoice?.lastError,
         lastSuccessfulTest: geminiVoice?.lastSuccessfulTest,
       },
-      {
-        type: 'elevenlabs',
-        name: 'ElevenLabs',
-        isConfigured: Boolean(elevenLabsVoice?.isConfigured),
-        model: elevenLabsVoice?.modelName || 'eleven_multilingual_v2',
-        voiceId: elevenLabsVoice?.defaultVoiceId || '21m00Tcm4TlvDq8ikWAM (Rachel)',
-        description: 'Industry-standard realistic speech synthesis with emotional nuance',
-        status: elevenLabsVoiceStatus,
-        error: elevenLabsVoice?.lastError,
-        lastSuccessfulTest: elevenLabsVoice?.lastSuccessfulTest,
-      },
-      {
-        type: 'personal',
-        name: 'JEXA Personal Voice',
-        isConfigured: Boolean(personalVoice?.isConfigured),
-        model: personalVoice?.modelName || 'none',
-        voiceId: personalVoice?.referenceId || (personalVoice?.referenceMetadata ? 'Sample uploaded' : 'No voice sample'),
-        description: 'Personal reference-based voice synthesis using your recorded audio',
-        status: personalVoiceStatus,
-        error: personalVoice?.lastError,
-        lastSuccessfulTest: personalVoice?.lastSuccessfulTest,
-      },
     ];
-
-    const activeTextStatus = activeText.providerType === 'groq' ? groqTextStatus : geminiTextStatus;
-    const activeVoiceStatus =
-      activeVoice.providerType === 'elevenlabs'
-        ? elevenLabsVoiceStatus
-        : activeVoice.providerType === 'personal'
-        ? personalVoiceStatus
-        : geminiVoiceStatus;
 
     return {
       textProvider: {
-        type: activeText.providerType,
-        isConfigured: activeText.isConfigured,
-        hasApiKey: activeText.isConfigured,
-        model: activeText.modelName,
-        status: activeTextStatus,
-        description: `${activeText.providerType === 'groq' ? 'Groq LPU' : 'Google Gemini'} active`,
-        lastError: (activeText as any)?.lastError,
+        type: 'gemini',
+        isConfigured: Boolean(geminiText?.isConfigured),
+        hasApiKey: Boolean(geminiText?.isConfigured),
+        model: currentTextModel,
+        backupModel: currentBackupModel,
+        status: geminiTextStatus,
+        description: 'Google Gemini active',
+        lastError: (geminiText as any)?.lastError,
       },
       voiceProvider: {
-        type: activeVoice.providerType,
-        isConfigured: activeVoice.isConfigured,
-        hasApiKey: activeVoice.isConfigured,
-        model: activeVoice.modelName,
-        voiceId:
-          activeVoice.providerType === 'elevenlabs'
-            ? elevenLabsVoice?.defaultVoiceId || '21m00Tcm4TlvDq8ikWAM'
-            : activeVoice.providerType === 'personal'
-            ? personalVoice?.referenceId || (personalVoice?.referenceMetadata ? 'Sample uploaded' : 'No voice sample')
-            : 'Aoede / Fenrir / Kore',
-        status: activeVoiceStatus,
-        description:
-          activeVoice.providerType === 'elevenlabs'
-            ? 'ElevenLabs Speech active'
-            : activeVoice.providerType === 'personal'
-            ? `JEXA Personal Voice (${personalVoice?.engine || 'none'}) active`
-            : 'Gemini Neural Voice active',
-        lastError: (activeVoice as any)?.lastError,
-        lastSuccessfulTest: (activeVoice as any)?.lastSuccessfulTest,
+        type: 'gemini',
+        isConfigured: Boolean(geminiVoice?.isConfigured),
+        hasApiKey: Boolean(geminiVoice?.isConfigured),
+        model: currentVoiceModel,
+        voiceId: 'Aoede / Fenrir / Kore',
+        status: geminiVoiceStatus,
+        description: 'Gemini Neural Voice active',
+        lastError: geminiVoice?.lastError,
+        lastSuccessfulTest: geminiVoice?.lastSuccessfulTest,
       },
       availableTextProviders,
       availableVoiceProviders,
@@ -379,7 +366,7 @@ export class AIProviderRegistry {
         isConfigured: hasSupabase,
         status: hasSupabase ? 'connected' : 'unconfigured_fallback',
       },
-      isProductionReady: activeText.isConfigured && activeVoice.isConfigured && hasSupabase,
+      isProductionReady: Boolean(geminiText?.isConfigured) && Boolean(geminiVoice?.isConfigured) && hasSupabase,
     };
   }
 }

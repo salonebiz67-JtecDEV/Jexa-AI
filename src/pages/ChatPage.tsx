@@ -9,6 +9,7 @@ import { ImageLibrary } from '../components/panels/ImageLibrary';
 import { RemotePanel } from '../components/panels/RemotePanel';
 import { SchedulePanel } from '../components/panels/SchedulePanel';
 import { PluginPanel } from '../components/panels/PluginPanel';
+import { ToolsPanel } from '../components/panels/ToolsPanel';
 import { ArtifactWorkspace, ArtifactData } from '../components/panels/ArtifactWorkspace';
 import { LiveVoiceModal } from '../components/voice/LiveVoiceModal';
 import { SearchDialog } from '../components/dialogs/SearchDialog';
@@ -35,6 +36,7 @@ const getInitialTab = (): ActiveNavTab => {
   if (path.endsWith('/remote') || path.endsWith('/remote/')) return 'remote';
   if (path.endsWith('/schedule') || path.endsWith('/schedule/')) return 'schedule';
   if (path.endsWith('/plugins') || path.endsWith('/plugins/')) return 'plugins';
+  if (path.endsWith('/tools') || path.endsWith('/tools/')) return 'tools';
   return 'chat';
 };
 
@@ -93,6 +95,7 @@ export const ChatPage: React.FC = () => {
         else if (path.endsWith('/remote')) setActiveTab('remote');
         else if (path.endsWith('/schedule')) setActiveTab('schedule');
         else if (path.endsWith('/plugins')) setActiveTab('plugins');
+        else if (path.endsWith('/tools')) setActiveTab('tools');
         else setActiveTab('chat');
         setCurrentArtifact(null);
       }
@@ -356,17 +359,15 @@ export const ChatPage: React.FC = () => {
     );
   };
 
-  // Real AI Voice synthesis using selected Voice Provider (Gemini Neural TTS or ElevenLabs)
+  // Real AI Voice synthesis using Gemini Neural TTS
   const handleSpeak = async (text: string) => {
     if (AudioPlayer.isPlaying) {
       AudioPlayer.stop();
       return;
     }
 
-    const activeVoiceProvider =
-      (safeStorage.getItem('jexa_voice_provider') as any) || 'gemini';
-    const activeVoiceName =
-      safeStorage.getItem('jexa_voice_name') || 'aura';
+    const activeVoiceModel = safeStorage.getItem('jexa_voice_model') || undefined;
+    const activeVoiceName = safeStorage.getItem('jexa_voice_name') || 'aura';
 
     const cleanText = text
       .replace(/[*#`_\[\]()]/g, '')
@@ -375,46 +376,19 @@ export const ChatPage: React.FC = () => {
 
     if (!cleanText) return;
 
-    // Check if Gemini Voice quota is currently exhausted
-    const quotaExhaustedUntil = parseInt(
-      safeStorage.getItem('jexa_gemini_voice_quota_until') || '0',
-      10
-    );
-    if (activeVoiceProvider === 'gemini' && Date.now() < quotaExhaustedUntil) {
-      setVoiceNotification({
-        message: 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.',
-        type: 'warning',
-        actionLabel: 'Switch to ElevenLabs',
-        onAction: async () => {
-          safeStorage.setItem('jexa_voice_provider', 'elevenlabs');
-          try {
-            await ApiClient.selectProviders({ voiceProvider: 'elevenlabs' });
-          } catch (err: any) {
-            console.warn('[ChatPage] Failed to sync voice provider selection:', err.message);
-          }
-          setVoiceNotification({
-            message: 'Switched voice engine to ElevenLabs.',
-            type: 'info',
-          });
-          setTimeout(() => setVoiceNotification(null), 3500);
-          handleSpeak(text);
-        },
-      });
-      return;
-    }
-
     try {
       const voiceRes = await ApiClient.requestVoiceSynthesis({
         text: cleanText,
         voiceId: activeVoiceName,
-        provider: activeVoiceProvider,
+        provider: 'gemini',
+        model: activeVoiceModel,
       });
 
       if (voiceRes?.audioUrl) {
         await AudioPlayer.playUrl(voiceRes.audioUrl);
       }
     } catch (err: any) {
-      console.warn('[ChatPage] Real AI voice playback error:', err.message);
+      console.warn('[ChatPage] Gemini voice playback error:', err.message);
       const errMsg = err.message || '';
       const is429 =
         err.status === 429 ||
@@ -423,89 +397,23 @@ export const ChatPage: React.FC = () => {
         errMsg.includes('429') ||
         errMsg.includes('quota') ||
         errMsg.includes('RESOURCE_EXHAUSTED');
-      const is402 =
-        err.status === 402 ||
-        err.statusCode === 402 ||
-        err.code === 'PAYMENT_REQUIRED' ||
-        errMsg.includes('402') ||
-        errMsg.includes('paid plan');
 
-      if (activeVoiceProvider === 'personal') {
-        const cleanPersonalMsg =
-          errMsg.includes('not configured') || errMsg.includes('not recorded')
-            ? 'Personal Voice is not configured yet.'
-            : errMsg || 'Personal Voice is not configured yet.';
-        setVoiceNotification({
-          message: cleanPersonalMsg,
-          type: 'warning',
-          actionLabel: 'Set Up Personal Voice',
-          onAction: () => setSettingsOpen(true),
-        });
-        return;
-      }
+      const cleanMessage = is429
+        ? 'Gemini Voice quota reached. Try switching the voice model in Settings or try again shortly.'
+        : err.status === 401 || err.status === 403
+        ? 'Gemini authentication failed. Check GEMINI_API_KEY.'
+        : err.status === 404
+        ? 'The selected Gemini voice model was not found.'
+        : err.status === 503
+        ? 'Gemini Voice is temporarily unavailable.'
+        : errMsg || 'Voice synthesis failed.';
 
-      if (is429) {
-        // Record quota exhausted cooldown to stop spamming Gemini Voice
-        safeStorage.setItem(
-          'jexa_gemini_voice_quota_until',
-          String(Date.now() + 12 * 60 * 60 * 1000)
-        );
-        setVoiceNotification({
-          message: 'Gemini Voice quota exhausted. Try again later or switch to ElevenLabs.',
-          type: 'warning',
-          actionLabel: 'Switch to ElevenLabs',
-          onAction: async () => {
-            safeStorage.setItem('jexa_voice_provider', 'elevenlabs');
-            try {
-              await ApiClient.selectProviders({ voiceProvider: 'elevenlabs' });
-            } catch (selErr: any) {
-              console.warn('[ChatPage] Failed to sync voice provider:', selErr.message);
-            }
-            setVoiceNotification({
-              message: 'Switched voice engine to ElevenLabs.',
-              type: 'info',
-            });
-            setTimeout(() => setVoiceNotification(null), 3500);
-            handleSpeak(text);
-          },
-        });
-      } else if (is402) {
-        setVoiceNotification({
-          message: 'This ElevenLabs voice requires a paid plan.',
-          type: 'warning',
-          actionLabel: 'Switch to Gemini',
-          onAction: async () => {
-            safeStorage.setItem('jexa_voice_provider', 'gemini');
-            try {
-              await ApiClient.selectProviders({ voiceProvider: 'gemini' });
-            } catch (selErr: any) {
-              console.warn('[ChatPage] Failed to sync voice provider:', selErr.message);
-            }
-            setVoiceNotification({
-              message: 'Switched voice engine to Gemini.',
-              type: 'info',
-            });
-            setTimeout(() => setVoiceNotification(null), 3500);
-            handleSpeak(text);
-          },
-        });
-      } else {
-        const cleanMessage =
-          err.status === 401 || err.status === 403
-            ? 'Provider authentication or permission failed.'
-            : err.status === 404
-            ? 'The selected model or voice was not found.'
-            : err.status === 503
-            ? 'The provider is temporarily unavailable.'
-            : errMsg || 'Voice synthesis failed.';
-
-        setVoiceNotification({
-          message: cleanMessage,
-          type: 'error',
-          actionLabel: 'Settings',
-          onAction: () => setSettingsOpen(true),
-        });
-      }
+      setVoiceNotification({
+        message: cleanMessage,
+        type: is429 ? 'warning' : 'error',
+        actionLabel: 'Settings',
+        onAction: () => setSettingsOpen(true),
+      });
     }
   };
 
@@ -707,6 +615,9 @@ export const ChatPage: React.FC = () => {
             plugins={plugins}
             onTogglePlugin={handleTogglePlugin}
           />
+        ) : activeTab === 'tools' ? (
+          /* Tools & AI Token Tracker Screen with Clear Back Button */
+          <ToolsPanel onBack={handleBackToChat} />
         ) : null}
       </div>
 

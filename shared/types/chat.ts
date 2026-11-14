@@ -159,6 +159,8 @@ export interface SendMessagePayload {
   stream?: boolean;
   personaId?: string;
   textProvider?: TextProviderType;
+  textModel?: string;
+  backupModel?: string;
   isVoiceMode?: boolean;
   isOwner?: boolean;
   userContext?: {

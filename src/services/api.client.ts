@@ -15,8 +15,6 @@ import {
   VoiceProviderType,
   VoiceHealthResponse,
   ProviderHealthStatus,
-  PersonalVoiceStatusResponse,
-  PersonalVoiceReferenceMetadata,
   DatabaseHealthResponse,
   DatabaseDiagnosticsResult,
   AIActivityStatus,
@@ -49,28 +47,9 @@ export function getClientUserId(): string {
   return uid;
 }
 
-const OWNER_KEY_STORAGE = 'jexa_owner_key';
-
-export function getOwnerAccessKey(): string {
-  return safeStorage.getItem(OWNER_KEY_STORAGE) || '';
-}
-
-export function setOwnerAccessKey(key: string): void {
-  const trimmed = key ? key.trim() : '';
-  if (trimmed) {
-    safeStorage.setItem(OWNER_KEY_STORAGE, trimmed);
-  } else {
-    safeStorage.removeItem(OWNER_KEY_STORAGE);
-  }
-}
-
-
 // =========================================================================
 // Centralized API Configuration for GitHub Pages & Render Deployment
 // =========================================================================
-// - In local dev / monolithic mode: defaults to '/api' (proxied by Vite/Express)
-// - In GitHub Pages production: points to Render backend via VITE_API_BASE_URL
-//   or falls back automatically to the official deployed production service
 const DEFAULT_PROD_RENDER_URL = 'https://jexa-ai.onrender.com';
 const isGitHubPages =
   typeof window !== 'undefined' && window.location.hostname.includes('github.io');
@@ -100,6 +79,7 @@ export interface ProviderStatusSummary {
   text: {
     provider: string;
     model: string;
+    backupModel?: string;
     configured: boolean;
     status?: ProviderHealthStatus;
     error?: string;
@@ -163,10 +143,6 @@ async function fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 
   const customHeaders: Record<string, string> = {
     'x-user-id': uid,
   };
-  const ownerKey = getOwnerAccessKey();
-  if (ownerKey) {
-    customHeaders['x-owner-key'] = ownerKey;
-  }
   if (authenticatedToken) {
     customHeaders['Authorization'] = `Bearer ${authenticatedToken}`;
   }
@@ -198,12 +174,10 @@ async function fetchJson<T>(url: string, options?: RequestInit, allowRetry = tru
       },
     });
   } catch (netErr: any) {
-    // If aborted due to timeout
     if (netErr?.name === 'AbortError') {
       throw new ApiError('Request timed out while waiting for server response.', 408, 'REQUEST_TIMEOUT');
     }
 
-    // Single retry for transient network failure
     if (allowRetry && (!options?.method || options.method === 'GET')) {
       try {
         await new Promise((r) => setTimeout(r, 600));
@@ -269,7 +243,9 @@ export const ApiClient = {
       message: typeof payload?.message === 'string' ? payload.message : '',
       conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
       personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
-      textProvider: payload?.textProvider,
+      textProvider: payload?.textProvider || 'gemini',
+      textModel: typeof payload?.textModel === 'string' ? payload.textModel : undefined,
+      backupModel: typeof payload?.backupModel === 'string' ? payload.backupModel : undefined,
       stream: false,
       isVoiceMode: Boolean(payload?.isVoiceMode),
       userContext: payload?.userContext,
@@ -289,7 +265,9 @@ export const ApiClient = {
       message: typeof payload?.message === 'string' ? payload.message : '',
       conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
       personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
-      textProvider: payload?.textProvider,
+      textProvider: payload?.textProvider || 'gemini',
+      textModel: typeof payload?.textModel === 'string' ? payload.textModel : undefined,
+      backupModel: typeof payload?.backupModel === 'string' ? payload.backupModel : undefined,
       stream: true,
       isVoiceMode: Boolean(payload?.isVoiceMode),
       userContext: payload?.userContext,
@@ -297,15 +275,11 @@ export const ApiClient = {
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'Accept': 'text/event-stream, application/json',
+      Accept: 'text/event-stream, application/json',
     };
     const uid = getClientUserId();
     if (uid) {
       headers['x-user-id'] = uid;
-    }
-    const ownerKey = getOwnerAccessKey();
-    if (ownerKey) {
-      headers['x-owner-key'] = ownerKey;
     }
     if (authenticatedToken) {
       headers['Authorization'] = `Bearer ${authenticatedToken}`;
@@ -324,13 +298,20 @@ export const ApiClient = {
 
       if (!response.ok) {
         let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+        let errorCode: string | undefined;
+        let errorProvider: string | undefined;
+        let errorModel: string | undefined;
         try {
           const body = await response.json();
           errorMsg = body?.error || body?.message || errorMsg;
+          errorCode = body?.code;
+          errorProvider = body?.provider;
+          errorModel = body?.model;
         } catch {
           // ignore
         }
-        const err = new ApiError(errorMsg, response.status);
+        const err = new ApiError(errorMsg, response.status, errorCode, errorProvider);
+        (err as any).model = errorModel;
         options?.onError?.(err);
         throw err;
       }
@@ -373,8 +354,7 @@ export const ApiClient = {
                 finalResult = event.data;
                 options?.onComplete?.(event.data);
               } else if (event.type === 'error') {
-                const err = new ApiError(event.error || 'Server error during chat stream.', 500, event.code);
-                (err as any).provider = event.provider;
+                const err = new ApiError(event.error || 'Server error during chat stream.', 500, event.code, event.provider);
                 (err as any).model = event.model;
                 (err as any).fallbackUsed = event.fallbackUsed;
                 throw err;
@@ -410,12 +390,13 @@ export const ApiClient = {
     }
   },
 
-  // Voice Synthesis (handles binary audio Blob and JSON data URLs safely)
+  // Voice Synthesis (Gemini TTS — handles binary audio Blob and JSON data URLs safely)
   async requestVoiceSynthesis(payload: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
     const cleanPayload: VoiceSynthesisRequest = {
       text: typeof payload?.text === 'string' ? payload.text : '',
       voiceId: payload?.voiceId,
-      provider: payload?.provider,
+      provider: 'gemini',
+      model: typeof payload?.model === 'string' ? payload.model : undefined,
       speed: payload?.speed,
       pitch: payload?.pitch,
     };
@@ -432,18 +413,17 @@ export const ApiClient = {
           },
           body: JSON.stringify(cleanPayload),
         },
-        20000
+        25000
       );
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        throw new ApiError('Voice synthesis timed out after 20 seconds.', 504, 'VOICE_TIMEOUT');
+        throw new ApiError('Voice synthesis timed out after 25 seconds.', 504, 'VOICE_TIMEOUT');
       }
       throw err;
     }
 
     const contentType = res.headers.get('content-type') || '';
 
-    // Direct binary audio response (audio/mpeg, audio/wav, audio/pcm)
     if (contentType.includes('audio/') || contentType.includes('application/octet-stream')) {
       if (!res.ok) {
         throw new ApiError(`Voice provider failed with status ${res.status}.`, res.status);
@@ -452,14 +432,14 @@ export const ApiClient = {
       const objectUrl = URL.createObjectURL(blob);
       return {
         audioUrl: objectUrl,
-        format: contentType.includes('mpeg') ? 'audio/mpeg' : 'audio/wav',
+        format: 'audio/wav',
         isSimulated: false,
         message: 'Voice synthesized successfully.',
-        provider: payload.provider,
+        provider: 'gemini',
+        model: cleanPayload.model,
       };
     }
 
-    // JSON response (includes data URL or error)
     const body: any = await res.json();
     if (!res.ok || body.success === false) {
       const errorMsg = body?.message || body?.error || `Voice synthesis failed (${res.status})`;
@@ -472,7 +452,8 @@ export const ApiClient = {
     const cleanPayload: VoiceSynthesisRequest = {
       text: typeof payload?.text === 'string' ? payload.text : '',
       voiceId: payload?.voiceId,
-      provider: payload?.provider,
+      provider: 'gemini',
+      model: typeof payload?.model === 'string' ? payload.model : undefined,
       speed: payload?.speed,
       pitch: payload?.pitch,
     };
@@ -481,7 +462,7 @@ export const ApiClient = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Accept: 'audio/mpeg, audio/wav, audio/*',
+        Accept: 'audio/wav, audio/*',
       },
       body: JSON.stringify(cleanPayload),
     });
@@ -591,15 +572,15 @@ export const ApiClient = {
     });
   },
 
-  // Provider Status & Testing
+  // Provider Status & Testing (Gemini Only)
   async getProviderStatus(): Promise<ProviderStatusSummary> {
     return fetchJson<ProviderStatusSummary>(`${API_BASE}/providers/status`);
   },
 
-  async testTextProvider(provider: TextProviderType): Promise<ProviderTestResult> {
+  async testTextProvider(provider: TextProviderType = 'gemini', model?: string): Promise<ProviderTestResult> {
     return fetchJson<ProviderTestResult>(`${API_BASE}/providers/test-text`, {
       method: 'POST',
-      body: JSON.stringify({ provider }),
+      body: JSON.stringify({ provider, model }),
     });
   },
 
@@ -607,6 +588,7 @@ export const ApiClient = {
     textProvider?: TextProviderType;
     voiceProvider?: VoiceProviderType;
     textModel?: string;
+    backupModel?: string;
     voiceModel?: string;
     theme?: string;
   }): Promise<{ success: boolean; data: any }> {
@@ -616,58 +598,18 @@ export const ApiClient = {
     });
   },
 
-  async testVoiceProvider(provider: VoiceProviderType, text?: string): Promise<ProviderTestResult> {
+  async testVoiceProvider(provider: VoiceProviderType = 'gemini', text?: string, model?: string): Promise<ProviderTestResult> {
     try {
       return await fetchJson<ProviderTestResult>(`${API_BASE}/voice/test`, {
         method: 'POST',
-        body: JSON.stringify({ provider, text }),
+        body: JSON.stringify({ provider, text, model }),
       });
     } catch {
       return await fetchJson<ProviderTestResult>(`${API_BASE}/providers/test-voice`, {
         method: 'POST',
-        body: JSON.stringify({ provider }),
+        body: JSON.stringify({ provider, model }),
       });
     }
-  },
-
-  // Personal Voice Engine Endpoints
-  async getPersonalVoiceStatus(): Promise<PersonalVoiceStatusResponse> {
-    const res = await fetchJson<{ success: boolean; data: PersonalVoiceStatusResponse }>(
-      `${API_BASE}/voice/personal/status`
-    );
-    return res.data;
-  },
-
-  async savePersonalVoiceReference(payload: {
-    name: string;
-    audioData?: string;
-    format?: string;
-    durationSeconds?: number;
-    sampleRate?: number;
-  }): Promise<{ success: boolean; data: PersonalVoiceReferenceMetadata }> {
-    return fetchJson<{ success: boolean; data: PersonalVoiceReferenceMetadata }>(
-      `${API_BASE}/voice/personal/reference`,
-      {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      }
-    );
-  },
-
-  async deletePersonalVoiceReference(): Promise<{ success: boolean; message: string }> {
-    return fetchJson<{ success: boolean; message: string }>(
-      `${API_BASE}/voice/personal/reference`,
-      {
-        method: 'DELETE',
-      }
-    );
-  },
-
-  async testPersonalVoice(text?: string): Promise<ProviderTestResult> {
-    return fetchJson<ProviderTestResult>(`${API_BASE}/voice/personal/test`, {
-      method: 'POST',
-      body: JSON.stringify({ text }),
-    });
   },
 
   // Database Health & Real Diagnostics
@@ -709,18 +651,13 @@ export const ApiClient = {
     return fetchJson<HealthCheckResponse>(`${API_BASE}/health`);
   },
 
-  // Owner Status Verification
-  async getOwnerStatus(): Promise<{ isOwner: boolean }> {
-    return fetchJson<{ isOwner: boolean }>(`${API_BASE}/owner/status`);
-  },
-
-  // Usage Tracker & Tools (Owner)
+  // Usage Tracker & Tools
   async getUsageSummary(): Promise<any> {
     return fetchJson<any>(`${API_BASE}/usage/summary`);
   },
 
-  async getToolsStatus(): Promise<{ tools: any[]; isOwner: boolean }> {
-    return fetchJson<{ tools: any[]; isOwner: boolean }>(`${API_BASE}/tools/status`);
+  async getToolsStatus(): Promise<{ tools: any[] }> {
+    return fetchJson<{ tools: any[] }>(`${API_BASE}/tools/status`);
   },
 
   async toggleTool(toolName: string, enabled?: boolean): Promise<{ success: boolean; toolName: string; enabled: boolean }> {

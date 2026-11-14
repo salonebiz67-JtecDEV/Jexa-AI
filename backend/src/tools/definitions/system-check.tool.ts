@@ -31,10 +31,8 @@ export interface SystemCheckData {
     error?: string;
   };
   aiProviders: {
-    geminiText: { configured: boolean; model: string };
-    groqText: { configured: boolean; model: string };
-    geminiVoice: { configured: boolean };
-    elevenLabsVoice: { configured: boolean };
+    geminiText: { configured: boolean; model: string; backupModel: string };
+    geminiVoice: { configured: boolean; model: string };
   };
   search: {
     tavilyConfigured: boolean;
@@ -64,25 +62,12 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
     },
     additionalProperties: false,
   },
-  isAvailable: (context?: InternalToolContext): boolean => {
-    return Boolean(context?.isOwner);
-  },
+  isAvailable: (): boolean => true,
   execute: async (
     _args: SystemCheckArgs,
     context: InternalToolContext
   ): Promise<ToolExecutionResult<SystemCheckData>> => {
     const startTime = Date.now();
-
-    // Guard: Only authorized owner can execute this tool
-    if (!context?.isOwner) {
-      return {
-        success: false,
-        toolName: 'system_check',
-        error: 'Access denied: The system_check tool is strictly restricted to the verified system owner (matching OWNER_ACCESS_KEY).',
-        executionTimeMs: Date.now() - startTime,
-      };
-    }
-
     context.onStatusUpdate?.('Checking servers…');
 
     // 1. Server Uptime & Node info
@@ -105,11 +90,8 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
 
     // 2. Environment Variables Audit (Names ONLY, NEVER values!)
     const auditVars = [
-      'OWNER_ACCESS_KEY',
       'GEMINI_API_KEY',
-      'GROQ_API_KEY',
       'TAVILY_API_KEY',
-      'ELEVENLABS_API_KEY',
       'SUPABASE_URL',
       'SUPABASE_SERVICE_ROLE_KEY',
       'SUPABASE_ANON_KEY',
@@ -143,6 +125,7 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
       'research_history',
       'database_diagnostics_test',
       'system_error_logs',
+      'ai_usage_log',
     ];
 
     const tablesChecked: Record<string, 'present' | 'missing' | 'error'> = {};
@@ -173,7 +156,6 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
         dbErrorMsg = err.message;
       }
 
-      // Check all tables
       for (const table of tablesToCheck) {
         try {
           const { error } = await client.from(table).select('*', { count: 'exact', head: true });
@@ -182,63 +164,45 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
           } else if ((error as any).code === '42P01' || error.message?.includes('relation') || error.message?.includes('does not exist')) {
             tablesChecked[table] = 'missing';
           } else {
-            tablesChecked[table] = 'present'; // Table exists, might have RLS notice
+            tablesChecked[table] = 'present';
           }
         } catch {
           tablesChecked[table] = 'error';
         }
       }
 
-      // Check important schema columns explicitly
-      // 1. memories.memory_type
       try {
         const { error } = await client.from('memories').select('id, memory_type').limit(1);
-        if (error && ((error as any).code === '42703' || error.message?.includes('memory_type'))) {
-          columnsChecked['memories.memory_type'] = 'missing';
-        } else {
-          columnsChecked['memories.memory_type'] = 'present';
-        }
+        columnsChecked['memories.memory_type'] =
+          error && ((error as any).code === '42703' || error.message?.includes('memory_type')) ? 'missing' : 'present';
       } catch {
         columnsChecked['memories.memory_type'] = 'error';
       }
 
-      // 2. messages.metadata
       try {
         const { error } = await client.from('messages').select('id, metadata').limit(1);
-        if (error && ((error as any).code === '42703' || error.message?.includes('metadata'))) {
-          columnsChecked['messages.metadata'] = 'missing';
-        } else {
-          columnsChecked['messages.metadata'] = 'present';
-        }
+        columnsChecked['messages.metadata'] =
+          error && ((error as any).code === '42703' || error.message?.includes('metadata')) ? 'missing' : 'present';
       } catch {
         columnsChecked['messages.metadata'] = 'error';
       }
 
-      // 3. user_settings.selected_text_provider
       try {
         const { error } = await client.from('user_settings').select('id, selected_text_provider').limit(1);
-        if (error && ((error as any).code === '42703' || error.message?.includes('selected_text_provider'))) {
-          columnsChecked['user_settings.selected_text_provider'] = 'missing';
-        } else {
-          columnsChecked['user_settings.selected_text_provider'] = 'present';
-        }
+        columnsChecked['user_settings.selected_text_provider'] =
+          error && ((error as any).code === '42703' || error.message?.includes('selected_text_provider')) ? 'missing' : 'present';
       } catch {
         columnsChecked['user_settings.selected_text_provider'] = 'error';
       }
 
-      // 4. system_error_logs.details
       try {
         const { error } = await client.from('system_error_logs').select('id, details').limit(1);
-        if (error && ((error as any).code === '42703' || error.message?.includes('details'))) {
-          columnsChecked['system_error_logs.details'] = 'missing';
-        } else {
-          columnsChecked['system_error_logs.details'] = 'present';
-        }
+        columnsChecked['system_error_logs.details'] =
+          error && ((error as any).code === '42703' || error.message?.includes('details')) ? 'missing' : 'present';
       } catch {
         columnsChecked['system_error_logs.details'] = 'error';
       }
 
-      // Safe Read / Write test
       try {
         const rwStart = Date.now();
         const testPayload = {
@@ -255,7 +219,6 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
         if (writeError) {
           rwTest = { status: 'failed', error: writeError.message };
         } else if (writeData?.id) {
-          // Read back
           const { error: readError } = await client
             .from('system_error_logs')
             .select('id, source')
@@ -266,7 +229,6 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
             rwTest = { status: 'failed', error: readError.message };
           } else {
             rwTest = { status: 'passed', latencyMs: Date.now() - rwStart };
-            // Clean up test entry
             await client.from('system_error_logs').delete().eq('id', writeData.id);
           }
         }
@@ -275,28 +237,26 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
       }
     }
 
-    // 4. AI Providers
+    // 4. AI Providers (Gemini Only)
     const registry = AIProviderRegistry.getInstance();
     let geminiConfigured = false;
-    let groqConfigured = false;
     try {
       const gemini = registry.getTextProvider('gemini');
       geminiConfigured = Boolean(gemini?.isConfigured);
     } catch {
       geminiConfigured = Boolean(process.env.GEMINI_API_KEY?.trim());
     }
-    try {
-      const groq = registry.getTextProvider('groq');
-      groqConfigured = Boolean(groq?.isConfigured);
-    } catch {
-      groqConfigured = Boolean(process.env.GROQ_API_KEY?.trim());
-    }
 
     const aiProviders = {
-      geminiText: { configured: geminiConfigured, model: 'gemini-2.5-flash' },
-      groqText: { configured: groqConfigured, model: 'llama-3.3-70b-versatile' },
-      geminiVoice: { configured: Boolean(process.env.GEMINI_API_KEY?.trim()) },
-      elevenLabsVoice: { configured: Boolean(process.env.ELEVENLABS_API_KEY?.trim()) },
+      geminiText: {
+        configured: geminiConfigured,
+        model: registry.getActiveTextModel(),
+        backupModel: registry.getActiveBackupModel(),
+      },
+      geminiVoice: {
+        configured: Boolean(process.env.GEMINI_API_KEY?.trim() || process.env.VOICE_AI_API_KEY?.trim()),
+        model: registry.getActiveVoiceModel(),
+      },
     };
 
     // 5. Tavily Search
@@ -313,6 +273,11 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
       recommendations.push(
         'Supabase is not connected. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Render environment variables.'
       );
+    }
+
+    if (!geminiConfigured) {
+      overallStatus = 'Problem';
+      recommendations.push('GEMINI_API_KEY is not configured. Add GEMINI_API_KEY to enable Gemini chat and voice.');
     }
 
     const missingTables = Object.entries(tablesChecked).filter(([_, status]) => status === 'missing');
@@ -335,12 +300,6 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
       if (overallStatus === 'OK') overallStatus = 'Warning';
       recommendations.push(
         'TAVILY_API_KEY is not set. Add TAVILY_API_KEY to enable live web search.'
-      );
-    }
-
-    if (!aiProviders.groqText.configured) {
-      recommendations.push(
-        'GROQ_API_KEY is not set (fallback provider). Add it to enable low-latency failover.'
       );
     }
 
