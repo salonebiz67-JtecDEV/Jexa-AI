@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, MessageSquare, FolderKanban, Image as ImageIcon, ArrowRight, ArrowLeft } from 'lucide-react';
 import { Conversation, Project, ImageItem } from '../../../shared/types';
+import { localChatDb } from '../../services/localChatDb';
 
 interface SearchDialogProps {
   isOpen: boolean;
@@ -22,6 +23,7 @@ export const SearchDialog: React.FC<SearchDialogProps> = ({
   onSelectProject,
 }) => {
   const [query, setQuery] = useState('');
+  const [matchedConversations, setMatchedConversations] = useState<Array<{ conversation: Conversation; matchedSnippet?: string }>>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -32,17 +34,34 @@ export const SearchDialog: React.FC<SearchDialogProps> = ({
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setMatchedConversations(conversations.slice(0, 5).map((c) => ({ conversation: c, matchedSnippet: c.previewMessage })));
+      return;
+    }
+    localChatDb.searchConversations(trimmed).then((res) => {
+      if (active) setMatchedConversations(res);
+    }).catch(() => {
+      if (active) {
+        const lower = trimmed.toLowerCase();
+        setMatchedConversations(
+          conversations
+            .filter((c) => c.title.toLowerCase().includes(lower) || c.previewMessage?.toLowerCase().includes(lower))
+            .map((c) => ({ conversation: c, matchedSnippet: c.previewMessage }))
+        );
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [isOpen, query, conversations]);
+
   if (!isOpen) return null;
 
   const q = query.toLowerCase().trim();
-
-  const matchingConversations = q
-    ? conversations.filter(
-        (c) =>
-          c.title.toLowerCase().includes(q) ||
-          (c.previewMessage && c.previewMessage.toLowerCase().includes(q))
-      )
-    : conversations.slice(0, 5);
 
   const matchingProjects = q
     ? projects.filter((p) => p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q))
@@ -96,11 +115,11 @@ export const SearchDialog: React.FC<SearchDialogProps> = ({
               <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
               <span>Conversations</span>
             </div>
-            {matchingConversations.length === 0 ? (
+            {matchedConversations.length === 0 ? (
               <div className="px-2 py-2 text-slate-500">No matching conversations found.</div>
             ) : (
               <div className="space-y-1">
-                {matchingConversations.map((c) => (
+                {matchedConversations.map(({ conversation: c, matchedSnippet }) => (
                   <button
                     key={c.id}
                     onClick={() => {
@@ -111,8 +130,10 @@ export const SearchDialog: React.FC<SearchDialogProps> = ({
                   >
                     <div className="min-w-0 pr-2">
                       <div className="font-medium text-xs text-white truncate">{c.title}</div>
-                      {c.previewMessage && (
-                        <div className="text-[11px] text-slate-400 truncate">{c.previewMessage}</div>
+                      {(matchedSnippet || c.previewMessage) && (
+                        <div className="text-[11px] text-slate-400 truncate">
+                          {matchedSnippet || c.previewMessage}
+                        </div>
                       )}
                     </div>
                     <ArrowRight className="w-3.5 h-3.5 text-slate-500 opacity-0 group-hover:opacity-100 shrink-0 transition-opacity" />

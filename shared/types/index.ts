@@ -1,9 +1,7 @@
 export * from './chat';
 export * from './brain';
-export * from './memory';
 export * from './provider';
 export * from './features';
-export * from './database';
 export * from './diagnostics';
 export * from './tools';
 
@@ -21,10 +19,6 @@ export interface HealthCheckResponse {
   version: string;
   environment: string;
   services: {
-    database: {
-      provider: string;
-      status: 'connected' | 'fallback_active';
-    };
     textAI: {
       provider: string;
       status: string;

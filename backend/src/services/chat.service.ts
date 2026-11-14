@@ -1,19 +1,18 @@
+import crypto from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
-import { DatabaseService } from '../database/db-service';
-import { isSupabaseConfigured } from '../database/supabase';
-import { MemoryService } from './memory.service';
 import { SearchDecisionService } from './search-decision.service';
 import { ToolRegistry } from '../tools/tool-registry';
 import { ToolExecutor } from '../tools/tool-executor';
 import { ErrorLogService } from './error-log.service';
-import { UserStyleLearner } from './user-style-learner.service';
+import { getInMemoryBrainProfile } from '../controllers/brain.controller';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { assembleConversationContext } from '../../../ai/brain/context-handler';
 import { cleanAndNormalizeResponseContent } from '../../../ai/brain/response-cleaner';
 import {
   SendMessagePayload,
   ChatResponsePayload,
+  ChatMessage,
   AIActivityStatus,
   WebSearchResultItem,
 } from '../../../shared/types/chat';
@@ -30,7 +29,6 @@ import {
   TextGenerationRequest,
   TextGenerationResponse,
 } from '../../../ai/providers/text-provider.interface';
-import { MemoryExtractionResult } from '../../../shared/types/memory';
 
 // Wire error logger so all clean provider errors are logged for recent_errors tool
 setErrorLogger((source, message, details) => {
@@ -65,8 +63,6 @@ export type StatusUpdateCallback = (
     query?: string;
     sourcesCount?: number;
     error?: string;
-    memoryFact?: string;
-    memoryAction?: string;
     sources?: WebSearchResultItem[];
     searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results';
     searchTrigger?: 'manual' | 'automatic' | 'none';
@@ -172,16 +168,21 @@ export function buildReadableAnswerFromToolResults(
   for (const t of executedTools) {
     const data = t.result?.data ?? t.result;
     if (t.name === 'system_check' && data) {
-      const dbStatus = data.supabase?.connected ? 'Connected' : 'Unavailable';
-      const serverStatus = data.server?.status || 'Online';
-      const env = data.environment?.mode || 'Production';
+      const overall = data.overallStatus || 'OK';
+      const geminiOk = data.aiProviders?.geminiText?.configured ? 'Configured' : 'Missing GEMINI_API_KEY';
+      const tavilyOk = data.search?.tavilyConfigured ? 'Configured' : 'Not configured';
+      const recs = Array.isArray(data.recommendations) && data.recommendations.length > 0
+        ? `\n- **Recommendations:** ${data.recommendations.join('; ')}`
+        : '';
       sections.push(
         `### System Health Report\n` +
-        `- **Server Status:** ${serverStatus}\n` +
-        `- **Database (Supabase):** ${dbStatus}\n` +
-        `- **Environment:** ${env}\n` +
-        `- **Node Version:** ${data.environment?.nodeVersion || 'v20+'}\n` +
-        `- **Timestamp:** ${data.timestamp || new Date().toISOString()}`
+        `- **Overall Status:** ${overall}\n` +
+        `- **Mode:** Stateless Backend (On-device storage)\n` +
+        `- **Uptime:** ${data.server?.uptimeFormatted || 'Online'}\n` +
+        `- **Node Version:** ${data.server?.nodeVersion || process.version}\n` +
+        `- **Gemini AI:** ${geminiOk} (${data.aiProviders?.geminiText?.model || 'default'})\n` +
+        `- **Tavily Search:** ${tavilyOk}` +
+        recs
       );
     } else if (t.name === 'recent_errors' && data) {
       const errors = Array.isArray(data.errors) ? data.errors : [];
@@ -309,32 +310,21 @@ export class ChatService {
     // 1. Initial activity status
     onStatusUpdate?.('Thinking...');
 
-    let convId = payload.conversationId;
-    let isNewConversation = false;
+    const isNewConversation = !payload.conversationId || !payload.conversationId.trim();
+    const convId = !isNewConversation ? payload.conversationId!.trim() : crypto.randomUUID();
 
-    // 2. Resolve or create conversation
-    if (!convId) {
-      const title = payload.message.slice(0, 30) || 'New Conversation';
-      const newConv = await DatabaseService.createConversation(title, payload.personaId, payload.userId);
-      convId = newConv.id;
-      isNewConversation = true;
-    } else {
-      const existing = await DatabaseService.getConversation(convId);
-      if (!existing) {
-        const newConv = await DatabaseService.createConversation('New Conversation', payload.personaId, payload.userId);
-        convId = newConv.id;
-        isNewConversation = true;
-      }
-    }
-
-    // 3. Persist user message
-    const userMessage = await DatabaseService.saveMessage(convId, {
+    // 2. Construct stateless user message metadata
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      conversationId: convId,
       role: 'user',
       content: payload.message,
-    });
+      createdAt: new Date().toISOString(),
+      status: 'complete',
+    };
 
-    // 4. Retrieve Brain profile & resolve Gemini primary + backup models
-    const profile = await DatabaseService.getBrainProfile(payload.userId);
+    // 3. Resolve Gemini primary + backup models
+    const profile = getInMemoryBrainProfile();
     const registry = AIProviderRegistry.getInstance();
 
     const candidatePrimary =
@@ -355,89 +345,20 @@ export class ChatService {
     const primaryProvider = registry.getTextProvider('gemini', activeTextModel);
     const backupProvider = registry.getBackupTextProvider(activeBackupModel);
 
-    // 4b. Fetch recent messages early to enable conversational context resolution
-    const recentMessages = await DatabaseService.getMessages(convId);
-    const recentDialogueSnippet = recentMessages
+    // 4. Read last 8 messages supplied by the client for conversational context
+    const clientHistory = Array.isArray(payload.history) ? payload.history.slice(-8) : [];
+    const recentDialogueSnippet = clientHistory
       .slice(-4)
       .map((m) => `${m.role.toUpperCase()}: ${m.content.slice(0, 200)}`)
       .join('\n');
 
-    // 5. Memory Management & Context Loading
-    const isProduction =
-      process.env.NODE_ENV === 'production' ||
-      Boolean(process.env.RENDER);
-
-    let relevantMemories: any[] = [];
-    let activeMemoryResult: MemoryExtractionResult | undefined;
-
-    if (profile.memorySettings.enabled && !isSupabaseConfigured && isProduction) {
-      onStatusUpdate?.('Memory storage unavailable', {
-        error: 'Permanent memory storage is unavailable because Supabase is not configured in production (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY missing).',
-      });
-    }
-
-    let userMemories: any[] = [];
-    if (profile.memorySettings.enabled) {
-      onStatusUpdate?.('Checking memories...');
-      try {
-        userMemories = await DatabaseService.getMemories(payload.userId);
-        relevantMemories = MemoryService.rankMemories(
-          payload.message,
-          userMemories,
-          5,
-          recentDialogueSnippet
-        );
-      } catch (err: any) {
-        console.warn('[ChatService] Memory retrieval notice:', err.message);
-        onStatusUpdate?.('Memory retrieval failed', { error: err.message });
-      }
-    }
-
-    const memoryIntent = MemoryService.detectMemoryIntent(payload.message);
-    const isExplicitDirective =
-      memoryIntent.type === 'explicit' ||
-      memoryIntent.type === 'forget' ||
-      memoryIntent.type === 'privacy';
-    const isTrivial = MemoryService.isTrivialGreetingOrChitChat(payload.message);
-    const shouldExtract =
-      profile.memorySettings.enabled &&
-      (isExplicitDirective || (profile.memorySettings.autoExtract && !isTrivial));
-
-    // Run extraction with BACKGROUND_AI_MODEL (never chat model)
-    if (shouldExtract) {
-      try {
-        const backgroundProvider = registry.getBackgroundTextProvider();
-        activeMemoryResult = await MemoryService.extractAndStoreFromMessage(
-          payload.message,
-          convId,
-          payload.userId,
-          onStatusUpdate,
-          backgroundProvider,
-          recentDialogueSnippet,
-          userMemories
-        ).catch(() => undefined);
-      } catch {
-        // Silently skip extraction
-      }
-    }
-
-    if (activeMemoryResult && (activeMemoryResult.action === 'saved' || activeMemoryResult.action === 'updated')) {
-      if (activeMemoryResult.memories && activeMemoryResult.memories.length > 0) {
-        for (const newMem of activeMemoryResult.memories) {
-          const exists = relevantMemories.some((m) => m.id === newMem.id);
-          if (!exists) {
-            relevantMemories = [newMem, ...relevantMemories];
-          }
-        }
-      }
-    }
-
-    // 6. Assemble modular brain context (~1,200 tokens instruction message, top 5 memories, last 8 messages)
+    // 5. Assemble modular brain context with device-stored About Me & Behavior instructions
     const assembled = assembleConversationContext({
       personality: (payload.personaId as any) || profile.activePersonality,
-      memories: relevantMemories.slice(0, 5),
-      activeMemoryResult,
-      recentMessages,
+      aboutMe: payload.aboutMe,
+      behaviorInstructions: payload.behaviorInstructions,
+      history: clientHistory,
+      currentMessage: payload.message,
       userContext: payload.userContext,
       isVoiceMode: Boolean(payload.isVoiceMode),
     });
@@ -483,7 +404,6 @@ export class ChatService {
 
       const toolRegistry = ToolRegistry.getInstance();
       const toolContext = {
-        userId: payload.userId,
         conversationId: convId,
         onStatusUpdate,
         userContext: payload.userContext,
@@ -697,12 +617,6 @@ export class ChatService {
                 onStatusUpdate?.('Reading source code…');
               } else if (tc.name === 'search_code') {
                 onStatusUpdate?.('Searching code…');
-              } else if (tc.name === 'memory_search') {
-                onStatusUpdate?.('Recalling personal context...');
-              } else if (tc.name === 'past_conversations_search') {
-                onStatusUpdate?.('Reviewing past conversations...');
-              } else if (tc.name === 'research_history_search') {
-                onStatusUpdate?.('Consulting research history...');
               } else if (tc.name === 'system_time') {
                 onStatusUpdate?.('Verifying temporal grounding...');
               }
@@ -786,22 +700,6 @@ Notice: Live web search for "${finalSearchQuery}" returned 0 results. Inform the
                       searchStatus: 'success',
                       searchTrigger: 'automatic',
                     });
-
-                    const topSources = searchResults.slice(0, 4).map((s) => ({
-                      title: s.title,
-                      url: s.url,
-                      domain: s.domain,
-                      publishedDate: s.publishedDate,
-                    }));
-                    DatabaseService.saveResearchHistory(
-                      {
-                        query: finalSearchQuery,
-                        summary: searchResults[0].content?.slice(0, 240) || 'Verified live web results',
-                        sources: topSources,
-                        sourceConversationId: convId,
-                      },
-                      payload.userId
-                    ).catch((e) => console.warn('[ChatService] Error saving research history:', e.message));
 
                     const formattedSources = results
                       .map((src: WebSearchResultItem, idx: number) => {
@@ -1126,7 +1024,6 @@ ${formattedSources}
               urlsToInspect: searchDecision.urlsToInspect,
             },
             {
-              userId: payload.userId,
               conversationId: convId,
               userContext: payload.userContext,
             },
@@ -1169,7 +1066,6 @@ ${formattedSources}
                       urlsToInspect: searchDecision.urlsToInspect,
                     },
                     {
-                      userId: payload.userId,
                       conversationId: convId,
                       userContext: payload.userContext,
                     },
@@ -1212,23 +1108,6 @@ ${formattedSources}
                 searchStatus: 'success',
                 searchTrigger: searchDecision.isManual ? 'manual' : 'automatic',
               });
-
-              const topSources = searchResults.slice(0, 4).map((s) => ({
-                title: s.title,
-                url: s.url,
-                domain: s.domain,
-                publishedDate: s.publishedDate,
-              }));
-              const summarySnippet = searchResults[0].content?.slice(0, 240) || 'Verified live web results';
-              DatabaseService.saveResearchHistory(
-                {
-                  query: searchDecision.query,
-                  summary: summarySnippet,
-                  sources: topSources,
-                  sourceConversationId: convId,
-                },
-                payload.userId
-              ).catch((e) => console.warn('[ChatService] Error saving research history:', e.message));
             }
           }
         }
@@ -1392,7 +1271,7 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
     }
 
     // 12. Clean, normalize and unwrap assistant message
-    const isFirstTurn = isNewConversation || recentMessages.length <= 1;
+    const isFirstTurn = isNewConversation || clientHistory.length === 0;
     const userAskedIdentity = /^(who\s+are\s+you|what\s+is\s+your\s+name|what\s+can\s+you\s+do|tell\s+me\s+about\s+yourself)\b/i.test(
       payload.message.trim()
     );
@@ -1418,10 +1297,14 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
       }
     }
 
-    // 13. Persist assistant message with search & memory metadata
-    const assistantMessage = await DatabaseService.saveMessage(convId, {
+    // 13. Build stateless assistant message payload (stored locally on client device via IndexedDB)
+    const assistantMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      conversationId: convId,
       role: 'assistant',
       content: cleanContent,
+      createdAt: new Date().toISOString(),
+      status: 'complete',
       metadata: {
         model: providerResponse.model,
         provider: providerResponse.provider,
@@ -1429,9 +1312,6 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
         isDevelopmentMock: false,
         fallbackUsed,
         originalProvider: primaryProviderType,
-        memoriesReferenced: assembled.referencedMemoryIds,
-        memoryActionTaken: activeMemoryResult?.action,
-        memoryFactSaved: activeMemoryResult?.factSummary,
         sources: searchResults.length > 0 ? searchResults : undefined,
         searchQuery: searchPerformed ? finalSearchQuery : undefined,
         searchPerformed,
@@ -1441,20 +1321,16 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
         searchDecisionReason,
         searchTrigger: isManualSearch ? 'manual' : searchPerformed ? 'automatic' : 'none',
       },
-    });
+    };
 
     // 14. Signal answer complete
     onStatusUpdate?.('Answer complete');
-
-    // Learn how the user talks: every 10 user messages, analyze in background
-    UserStyleLearner.maybeLearnUserStyle(payload.userId).catch(() => {});
 
     return {
       message: assistantMessage,
       userMessage,
       conversationId: convId,
       isNewConversation,
-      memoriesRetrieved: assembled.referencedMemoryIds,
     };
   }
 }

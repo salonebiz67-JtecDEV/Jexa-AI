@@ -28,11 +28,6 @@ export interface BrainProfile {
     pitch: number;
     autoSpeak: boolean;
   };
-  memorySettings: {
-    enabled: boolean;
-    autoExtract: boolean;
-    maxContextMemories: number;
-  };
 }
 
 export interface PersonalityDefinition {

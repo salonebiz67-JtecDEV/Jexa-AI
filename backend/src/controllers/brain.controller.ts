@@ -1,17 +1,73 @@
 import { Request, Response } from 'express';
-import { DatabaseService } from '../database/db-service';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
-import { getResolvedUserId } from '../middleware/auth.middleware';
+import { JEXA_IDENTITY } from '../../../ai/brain/identity';
+import { BrainProfile } from '../../../shared/types/brain';
 import { isTtsModel } from '../../../shared/types/provider';
 
+let inMemoryBrainProfile: BrainProfile | null = null;
+
+export function getInMemoryBrainProfile(): BrainProfile {
+  const registry = AIProviderRegistry.getInstance();
+  if (!inMemoryBrainProfile) {
+    inMemoryBrainProfile = {
+      id: 'default-jexa-profile',
+      name: JEXA_IDENTITY.name,
+      tagline: JEXA_IDENTITY.tagline,
+      creator: JEXA_IDENTITY.creator,
+      version: JEXA_IDENTITY.version,
+      activePersonality: 'empathetic_companion',
+      selectedTextProvider: 'gemini',
+      selectedTextModel: registry.getActiveTextModel(),
+      selectedBackupModel: registry.getActiveBackupModel(),
+      selectedVoiceProvider: 'gemini',
+      selectedVoiceModel: registry.getActiveVoiceModel(),
+      theme: 'midnight',
+      traits: [
+        'Context-Aware Companion',
+        'Calmly Confident',
+        'Warm & Grounded',
+        'Intellectually Sharp',
+      ],
+      toneParameters: {
+        warmth: 0.78,
+        humor: 0.35,
+        conciseness: 0.65,
+        curiosity: 0.82,
+      },
+      voiceSettings: {
+        voiceId: 'aura',
+        speed: 1.0,
+        pitch: 1.0,
+        autoSpeak: false,
+      },
+    };
+  }
+  return inMemoryBrainProfile;
+}
+
+export function updateInMemoryBrainProfile(updates: Partial<BrainProfile>): BrainProfile {
+  const current = getInMemoryBrainProfile();
+  inMemoryBrainProfile = {
+    ...current,
+    ...updates,
+    toneParameters: {
+      ...current.toneParameters,
+      ...(updates.toneParameters || {}),
+    },
+    voiceSettings: {
+      ...current.voiceSettings,
+      ...(updates.voiceSettings || {}),
+    },
+  };
+  return inMemoryBrainProfile;
+}
+
 export class BrainController {
-  public static async getProfile(req: Request, res: Response): Promise<void> {
+  public static async getProfile(_req: Request, res: Response): Promise<void> {
     try {
-      const userId = getResolvedUserId(req);
-      const profile = await DatabaseService.getBrainProfile(userId);
-      const isDbConnected = await DatabaseService.isConnected();
+      const profile = getInMemoryBrainProfile();
       const providerStatus = AIProviderRegistry.getInstance().getStatus(
-        isDbConnected,
+        false,
         'gemini',
         'gemini',
         profile.selectedTextModel,
@@ -36,7 +92,6 @@ export class BrainController {
   public static async updateProfile(req: Request, res: Response): Promise<void> {
     try {
       const updates = { ...(req.body || {}) };
-      const userId = getResolvedUserId(req);
 
       if (updates.selectedTextModel && isTtsModel(updates.selectedTextModel)) {
         res.status(400).json({
@@ -65,7 +120,7 @@ export class BrainController {
       updates.selectedTextProvider = 'gemini';
       updates.selectedVoiceProvider = 'gemini';
 
-      const updated = await DatabaseService.updateBrainProfile(updates, userId);
+      const updated = updateInMemoryBrainProfile(updates);
 
       const registry = AIProviderRegistry.getInstance();
       registry.setDefaultTextType('gemini');

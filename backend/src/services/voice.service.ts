@@ -8,29 +8,23 @@ import {
   DEFAULT_VOICE_MODEL,
   isTtsModel,
 } from '../../../shared/types/provider';
-import { DatabaseService } from '../database/db-service';
 import { UsageTracker } from './usage-tracker.service';
 
 export class VoiceService {
   /**
    * Main entry point: converts text into speech using Gemini Neural TTS.
    */
-  public static async speak(request: VoiceSynthesisRequest, userId?: string): Promise<VoiceSynthesisResponse> {
-    return this.synthesizeSpeech(request, userId);
+  public static async speak(request: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
+    return this.synthesizeSpeech(request);
   }
 
-  public static async synthesizeSpeech(request: VoiceSynthesisRequest, userId?: string): Promise<VoiceSynthesisResponse> {
+  public static async synthesizeSpeech(request: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
     const registry = AIProviderRegistry.getInstance();
 
-    let targetModel = typeof request.model === 'string' && request.model.trim() ? request.model.trim() : '';
-    if (!targetModel) {
-      try {
-        const profile = await DatabaseService.getBrainProfile(userId);
-        targetModel = profile.selectedVoiceModel || registry.getActiveVoiceModel() || DEFAULT_VOICE_MODEL;
-      } catch {
-        targetModel = registry.getActiveVoiceModel() || DEFAULT_VOICE_MODEL;
-      }
-    }
+    const targetModel =
+      (typeof request.model === 'string' && request.model.trim()) ||
+      registry.getActiveVoiceModel() ||
+      DEFAULT_VOICE_MODEL;
 
     if (!isTtsModel(targetModel)) {
       throw new ProviderError(

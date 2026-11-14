@@ -75,6 +75,7 @@ export const ChatPage: React.FC = () => {
     deleteConversation,
     togglePinConversation,
     renameConversation,
+    clearAllConversations,
     sendMessage,
     refreshMessages,
   } = useChat();
@@ -428,8 +429,8 @@ export const ChatPage: React.FC = () => {
     setShareOpen(true);
   };
 
-  const handleClearHistory = () => {
-    conversations.forEach((c) => deleteConversation(c.id));
+  const handleClearHistory = async () => {
+    await clearAllConversations();
     setSettingsOpen(false);
   };
 

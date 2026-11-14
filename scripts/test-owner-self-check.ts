@@ -84,11 +84,10 @@ async function runDiagnosticsVerificationSuite() {
   const checksValid =
     execRes.success &&
     Boolean(execRes.data?.server?.uptimeFormatted) &&
-    Boolean(execRes.data?.database?.tablesChecked) &&
     hasEnvNamesOnly;
 
   if (checksValid) {
-    console.log('  -> system_check executed safely; verified server uptime, DB tables, and env vars without exposing secrets.');
+    console.log('  -> system_check executed safely; verified server uptime and env vars without exposing secrets.');
     report['system_check Execution'] = 'PASS';
   } else {
     console.error('  -> system_check failed:', execRes);

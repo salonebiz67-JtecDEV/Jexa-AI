@@ -1,7 +1,7 @@
 # JEXA — AI Companion Web Application
 > **Powered by JOHNEY TEC**
 
-A production-ready, consumer AI companion web application architected with React, TypeScript, a modular AI Brain, independent Text & Voice provider abstractions, real-time audio-reactive LIVE voice mode, and Supabase persistent memory foundation.
+A production-ready, consumer AI companion web application architected with React, TypeScript, a modular AI Brain, independent Gemini Text & Voice providers, real-time audio-reactive LIVE voice mode, and local device IndexedDB storage.
 
 Designed for automated deployment: **Frontend on GitHub Pages** (via GitHub Actions) and **Backend on Render**.
 
@@ -13,6 +13,7 @@ Designed for automated deployment: **Frontend on GitHub Pages** (via GitHub Acti
                   ┌─────────────────────────────────────────┐
                   │          GITHUB PAGES FRONTEND          │
                   │   - Minimal Consumer Chat & Sidebar     │
+                  │   - Local IndexedDB Chat Persistence    │
                   │   - Audio-Reactive 60 FPS Voice Orb     │
                   │   - Web Audio Analyser & Speech Input   │
                   │   - SPA Routing (404.html fallback)     │
@@ -23,10 +24,9 @@ Designed for automated deployment: **Frontend on GitHub Pages** (via GitHub Acti
                                        ▼
                   ┌─────────────────────────────────────────┐
                   │             RENDER BACKEND              │
-                  │   - Node.js + Express API (/api/*)      │
+                  │   - Stateless Express API (/api/*)      │
                   │   - Modular AI Brain & Identity         │
                   │   - Gemini AI Provider (@google/genai)  │
-                  │   - Supabase Service Role Persistence   │
                   │   - Server Secrets securely held        │
                   └─────────────────────────────────────────┘
 ```
@@ -64,7 +64,7 @@ GitHub Pages serves `public/404.html` when a user navigates or refreshes directl
 
 ## ☁️ Render Backend Deployment
 
-The backend runs as a secure Node.js service on [Render](https://render.com).
+The backend runs as a stateless Node.js service on [Render](https://render.com).
 
 ### Render Web Service Settings:
 - **Build Command**: `npm install && npm run build`
@@ -73,12 +73,9 @@ The backend runs as a secure Node.js service on [Render](https://render.com).
   - `NODE_ENV`: `production`
   - `PORT`: Handled automatically by Render (binds to `0.0.0.0`)
   - `GEMINI_API_KEY` or `AI_API_KEY`: Your Gemini API Key
-  - `GROQ_API_KEY`: Your Groq API Key (optional fallback provider)
   - `TAVILY_API_KEY`: Your Tavily Search API Key for real-time live web search and clickable citations (free at https://tavily.com)
-  - `SUPABASE_URL`: Your Supabase database URL (optional, defaults to in-memory store)
-  - `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase Service Role Key (server-side only)
 
-> **Security Guarantee**: Private server secrets (`GEMINI_API_KEY`, `TAVILY_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) are stored **exclusively** on Render and never exposed to the client or committed to GitHub.
+> **Security Guarantee**: Private server secrets (`GEMINI_API_KEY`, `TAVILY_API_KEY`) are stored **exclusively** on Render and never exposed to the client or committed to GitHub.
 
 ---
 

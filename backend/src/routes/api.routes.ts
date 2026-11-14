@@ -1,31 +1,12 @@
 import { Router } from 'express';
 import { ChatController } from '../controllers/chat.controller';
 import { VoiceController } from '../controllers/voice.controller';
-import { ConversationController } from '../controllers/conversation.controller';
-import { MemoryController } from '../controllers/memory.controller';
 import { BrainController } from '../controllers/brain.controller';
 import { HealthController } from '../controllers/health.controller';
 import { ProviderController } from '../controllers/provider.controller';
-import { DatabaseController } from '../controllers/database.controller';
-import { AuthController } from '../controllers/auth.controller';
 import { UsageController } from '../controllers/usage.controller';
 
-import { authenticateRequest } from '../middleware/auth.middleware';
-
 const router = Router();
-
-// Apply cryptographic authentication & verified user resolution middleware
-router.use(authenticateRequest);
-
-// Authentication & User Profile
-router.get('/auth/config', AuthController.getConfig);
-router.get('/auth/me', AuthController.getMe);
-router.post('/auth/profile', AuthController.syncProfile);
-
-// Database Health & Diagnostics
-router.get('/database/health', DatabaseController.getHealth);
-router.post('/database/test', DatabaseController.runTest);
-router.get('/database/schema', DatabaseController.getSchema);
 
 // Chat & Voice
 router.post('/chat', ChatController.sendMessage);
@@ -44,23 +25,6 @@ router.post('/providers/test-voice', ProviderController.testVoice);
 router.get('/usage/summary', UsageController.getSummary);
 router.get('/tools/status', UsageController.getToolsStatus);
 router.post('/tools/toggle', UsageController.toggleTool);
-
-// Conversations
-router.get('/conversations', ConversationController.list);
-router.post('/conversations', ConversationController.create);
-router.get('/conversations/:id', ConversationController.getById);
-router.patch('/conversations/:id', ConversationController.update);
-router.patch('/conversations/:id/pin', ConversationController.togglePin);
-router.get('/conversations/:id/messages', ConversationController.getMessages);
-router.delete('/conversations/:id', ConversationController.delete);
-
-// Memories
-router.get('/memories', MemoryController.list);
-router.post('/memories', MemoryController.create);
-router.put('/memories/:id', MemoryController.update);
-router.patch('/memories/:id', MemoryController.update);
-router.delete('/memories/:id', MemoryController.delete);
-router.get('/research-history', MemoryController.listResearch);
 
 // AI Brain & Profile
 router.get('/ai/brain-profile', BrainController.getProfile);

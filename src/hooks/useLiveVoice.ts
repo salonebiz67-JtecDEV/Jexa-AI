@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApiClient } from '../services/api.client';
-import { safeStorage } from '../services/storage';
+import { getAboutMe, getBehaviorInstructions, safeStorage } from '../services/storage';
+import { localChatDb } from '../services/localChatDb';
 
 export type LiveVoiceStatus =
   | 'idle'
@@ -247,9 +248,19 @@ export function useLiveVoice({
       const startTime = Date.now();
 
       try {
+        const localHistory = conversationId
+          ? (await localChatDb.getMessages(conversationId))
+              .filter((m) => m.status !== 'error' && (m.role === 'user' || m.role === 'assistant'))
+              .slice(-8)
+              .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+          : [];
+
         const response = await ApiClient.sendMessage({
           conversationId: conversationId || undefined,
           message: cleanText,
+          history: localHistory,
+          aboutMe: getAboutMe(),
+          behaviorInstructions: getBehaviorInstructions(),
           isVoiceMode: true,
           textProvider: 'gemini',
           textModel: activeTextModel,

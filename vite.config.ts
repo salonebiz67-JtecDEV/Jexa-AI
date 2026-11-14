@@ -36,11 +36,6 @@ export default defineConfig(({ mode }) => {
     base = '/';
   }
 
-  const supabaseUrl = (process.env.VITE_SUPABASE_URL || env.VITE_SUPABASE_URL || '').trim();
-  const supabaseAnonKey = (process.env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || '').trim();
-  const isUrlConfigured = Boolean(supabaseUrl);
-  const isKeyConfigured = Boolean(supabaseAnonKey);
-
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10);
   const commitSha = process.env.GITHUB_SHA
@@ -49,11 +44,9 @@ export default defineConfig(({ mode }) => {
   const buildId = `${dateStr}-build-${commitSha}`;
   const buildTime = now.toUTCString();
 
-  // Safe build-time diagnostic reporting (never print actual keys)
+  // Safe build-time diagnostic reporting
   console.log('-----------------------------------------');
-  console.log(`JEXA Build Diagnostics (${buildId}):`);
-  console.log(`Supabase URL configured: ${isUrlConfigured}`);
-  console.log(`Supabase public key configured: ${isKeyConfigured}`);
+  console.log(`JEXA Build Diagnostics (${buildId}) - Stateless Mode`);
   console.log('-----------------------------------------');
 
   return {
@@ -153,8 +146,6 @@ export default defineConfig(({ mode }) => {
       },
     },
     define: {
-      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabaseUrl),
-      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(supabaseAnonKey),
       'import.meta.env.VITE_BUILD_ID': JSON.stringify(buildId),
       'import.meta.env.VITE_BUILD_TIME': JSON.stringify(buildTime),
     },

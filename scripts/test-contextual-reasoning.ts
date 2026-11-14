@@ -1,10 +1,5 @@
-import { DatabaseService } from '../backend/src/database/db-service';
-import { MemoryService } from '../backend/src/services/memory.service';
-import { AIMemoryExtractor } from '../backend/src/services/ai-memory-extractor.service';
 import { SearchDecisionService } from '../backend/src/services/search-decision.service';
-import { searchRelevantMemories } from '../ai/memory/memory-retrieval';
 import { assembleConversationContext } from '../ai/brain/context-handler';
-import { MemoryItem } from '../shared/types/memory';
 
 async function runContextualReasoningSuite() {
   console.log('====================================================');
@@ -12,104 +7,11 @@ async function runContextualReasoningSuite() {
   console.log('====================================================\n');
 
   const report: Record<string, 'PASS' | 'FAIL'> = {};
-  const testUserId = '00000000-0000-0000-0000-000000000003';
-
-  // Cleanup test user memories
-  try {
-    const existing = await DatabaseService.getMemories(testUserId);
-    for (const m of existing) {
-      await DatabaseService.deleteMemory(m.id, testUserId);
-    }
-  } catch (e) {
-    // ignore
-  }
-
-  // Seed baseline memories for testing
-  const memorySister = await DatabaseService.createMemory(
-    {
-      category: 'relationships_dates',
-      fact: "User's sister is Mariama.",
-      confidence: 0.95,
-      memoryType: 'confirmed_fact',
-    },
-    testUserId
-  );
-
-  const memoryProject = await DatabaseService.createMemory(
-    {
-      category: 'projects_goals',
-      fact: 'User is building a solar energy billing platform for West Africa.',
-      confidence: 0.95,
-      memoryType: 'confirmed_fact',
-    },
-    testUserId
-  );
-
-  const memoryName = await DatabaseService.createMemory(
-    {
-      category: 'user_profile',
-      fact: "User's preferred name is Johnny.",
-      confidence: 0.98,
-      memoryType: 'confirmed_fact',
-    },
-    testUserId
-  );
 
   // --------------------------------------------------------------------------
-  // TEST 1: Spelling Error & Typo Interpretation in Memory Retrieval
+  // TEST 1: Contextual Follow-up Search Query Formulation
   // --------------------------------------------------------------------------
-  console.log('[Test 1] Testing Spelling Error, Slang & Typo Interpretation...');
-  const typoQuery1 = 'wat do u kno bout my sistr?';
-  const memories1 = await MemoryService.getRelevantMemories(typoQuery1, 5, testUserId);
-  const foundSister = memories1.some((m) => m.fact.includes('Mariama'));
-
-  const typoQuery2 = 'tell me bout dat projek';
-  const memories2 = await MemoryService.getRelevantMemories(typoQuery2, 5, testUserId);
-  const foundProject = memories2.some((m) => m.fact.includes('solar energy billing'));
-
-  const typoQuery3 = 'wats my nam';
-  const memories3 = await MemoryService.getRelevantMemories(typoQuery3, 5, testUserId);
-  const foundName = memories3.some((m) => m.fact.includes('Johnny'));
-
-  console.log('  Typo retrieval results:', { foundSister, foundProject, foundName });
-
-  if (foundSister && foundProject && foundName) {
-    console.log('  -> Typos, phonetic contractions, and slang successfully resolved to correct memories.');
-    report['Spelling error & slang interpretation'] = 'PASS';
-  } else {
-    console.error('  -> Failed typo retrieval:', { memories1, memories2, memories3 });
-    report['Spelling error & slang interpretation'] = 'FAIL';
-  }
-
-  // --------------------------------------------------------------------------
-  // TEST 2: Contextual Follow-ups & Pronoun Resolution in Memory Retrieval
-  // --------------------------------------------------------------------------
-  console.log('\n[Test 2] Testing Contextual Follow-up & Pronoun Resolution...');
-  const followUpQuery = 'How is it going with that?';
-  const recentDialogue = 'USER: I was reviewing our solar energy billing platform earlier.\nASSISTANT: We discussed the billing schedule.';
-
-  const followUpMemories = await MemoryService.getRelevantMemories(
-    followUpQuery,
-    5,
-    testUserId,
-    recentDialogue
-  );
-  const resolvedContextualProject = followUpMemories.some((m) => m.fact.includes('solar energy billing'));
-
-  console.log('  Follow-up resolution result:', { resolvedContextualProject });
-
-  if (resolvedContextualProject) {
-    console.log('  -> Pronoun "that" accurately resolved using recent conversation dialogue.');
-    report['Contextual follow-up pronoun resolution'] = 'PASS';
-  } else {
-    console.error('  -> Failed follow-up resolution:', followUpMemories);
-    report['Contextual follow-up pronoun resolution'] = 'FAIL';
-  }
-
-  // --------------------------------------------------------------------------
-  // TEST 3: Contextual Follow-up Search Query Formulation
-  // --------------------------------------------------------------------------
-  console.log('\n[Test 3] Testing Contextual Search Query Formulation...');
+  console.log('[Test 1] Testing Contextual Search Query Formulation...');
   const searchFollowUpDecision = await SearchDecisionService.evaluate(
     'can you search for that online?',
     undefined,
@@ -137,71 +39,35 @@ async function runContextualReasoningSuite() {
   }
 
   // --------------------------------------------------------------------------
-  // TEST 4: Intelligent Tool Selection (Direct Answer vs Live Search)
+  // TEST 2: Intelligent Tool Selection (Direct Answer vs Live Search)
   // --------------------------------------------------------------------------
-  console.log('\n[Test 4] Testing Intelligent Tool Selection (Search vs Direct Answer)...');
+  console.log('\n[Test 2] Testing Intelligent Tool Selection (Search vs Direct Answer)...');
 
-  // Case A: Real-time news / sports / EDSA inquiry -> Should search
   const liveDecision = await SearchDecisionService.evaluate('latest EDSA power outage news in Freetown Sierra Leone');
-  // Case B: General coding / algorithm question -> Should NOT search
   const codingDecision = await SearchDecisionService.evaluate('write a TypeScript function to reverse a linked list');
-  // Case C: Memory statement -> Should NOT search
-  const memoryDecision = await SearchDecisionService.evaluate('remember that my favorite IDE is Cursor');
+  const greetingDecision = await SearchDecisionService.evaluate('hello, how are you doing today?');
 
   console.log('  Tool selection categories:', {
     liveSearch: liveDecision.shouldSearch,
     codingDirect: !codingDecision.shouldSearch,
-    memoryDirect: !memoryDecision.shouldSearch,
+    greetingDirect: !greetingDecision.shouldSearch,
   });
 
-  if (liveDecision.shouldSearch && !codingDecision.shouldSearch && !memoryDecision.shouldSearch) {
-    console.log('  -> Search triggered appropriately for live facts and suppressed for general logic/memory.');
+  if (liveDecision.shouldSearch && !codingDecision.shouldSearch && !greetingDecision.shouldSearch) {
+    console.log('  -> Search triggered appropriately for live facts and suppressed for general logic/greetings.');
     report['Intelligent tool selection'] = 'PASS';
   } else {
     report['Intelligent tool selection'] = 'FAIL';
   }
 
   // --------------------------------------------------------------------------
-  // TEST 5: Cross-Chat Past Conversation Recall
+  // TEST 3: Stateless Personalization Prompt Assembly (About me & Behavior)
   // --------------------------------------------------------------------------
-  console.log('\n[Test 5] Testing Cross-Chat Conversation Search...');
-  // Seed past conversation in another chat
-  const pastConv = await DatabaseService.createConversation('Old Solar Planning Chat', 'empathetic_companion', testUserId);
-  await DatabaseService.saveMessage(pastConv.id, {
-    role: 'user',
-    content: 'We decided to use Drizzle ORM and Postgres for the solar billing engine.',
-  });
-  await DatabaseService.saveMessage(pastConv.id, {
-    role: 'assistant',
-    content: 'Drizzle ORM with Postgres provides type safety and migrations for the billing system.',
-  });
-
-  const pastRecall = await DatabaseService.searchPastMessages(
-    testUserId,
-    'what have I told you about Drizzle ORM in my past chats?',
-    'different-active-conv-id',
-    4
-  );
-
-  const foundPastDiscussion = pastRecall.some((m) => m.content.includes('Drizzle ORM'));
-  console.log('  Past chat recall results count:', pastRecall.length, 'found Drizzle:', foundPastDiscussion);
-
-  if (foundPastDiscussion) {
-    console.log('  -> Cross-conversation message search recalled past decisions without asking user to repeat.');
-    report['Cross-chat past conversation recall'] = 'PASS';
-  } else {
-    console.error('  -> Failed cross-chat recall:', pastRecall);
-    report['Cross-chat past conversation recall'] = 'FAIL';
-  }
-
-  // --------------------------------------------------------------------------
-  // TEST 6: Structured Reasoning & Truthful Prompt Context Assembly
-  // --------------------------------------------------------------------------
-  console.log('\n[Test 6] Testing Structured Reasoning & Truthfulness Context...');
+  console.log('\n[Test 3] Testing Stateless Prompt Assembly with About Me & Behavior...');
   const assembled = assembleConversationContext({
     personality: 'empathetic_companion',
-    memories: [memorySister, memoryProject],
-    pastConversationMessages: pastRecall,
+    aboutMe: 'My preferred name is Johnny. My sister is Mariama. I am building a solar billing platform.',
+    behaviorInstructions: 'Be concise and use practical TypeScript examples.',
     recentMessages: [
       {
         id: '1',
@@ -214,23 +80,21 @@ async function runContextualReasoningSuite() {
   });
 
   const prompt = assembled.systemPrompt;
-  const hasAntiParrot = prompt.includes('Never repeat or rephrase the user');
-  const hasReasoning = prompt.includes('Structured Problem-Solving');
-  const hasHonesty = prompt.includes('Never pretend to recall past events');
-  const hasContextDirectives = prompt.includes('Intent Over Surface Grammar');
+  const hasAboutMe = prompt.includes('Johnny') && prompt.includes('Mariama');
+  const hasBehavior = prompt.includes('practical TypeScript examples');
+  const hasHonesty = prompt.includes('Never pretend') || prompt.includes('Never invent');
 
-  console.log('  System prompt invariant presence:', {
-    hasAntiParrot,
-    hasReasoning,
+  console.log('  System prompt check:', {
+    hasAboutMe,
+    hasBehavior,
     hasHonesty,
-    hasContextDirectives,
   });
 
-  if (hasAntiParrot && hasReasoning && hasHonesty && hasContextDirectives) {
-    console.log('  -> Prompt architecture enforces structured multi-step reasoning and truthful boundaries.');
-    report['Reliable reasoning & truthful context assembly'] = 'PASS';
+  if (hasAboutMe && hasBehavior && hasHonesty) {
+    console.log('  -> Prompt architecture injects on-device About me, behavior rules, and truthfulness constraints.');
+    report['Stateless personalization & truthfulness'] = 'PASS';
   } else {
-    report['Reliable reasoning & truthful context assembly'] = 'FAIL';
+    report['Stateless personalization & truthfulness'] = 'FAIL';
   }
 
   // --------------------------------------------------------------------------

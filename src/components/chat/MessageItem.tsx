@@ -11,9 +11,11 @@ import {
   Globe,
   ThumbsUp,
   ThumbsDown,
+  BookmarkPlus,
 } from 'lucide-react';
 import { ChatMessage, Project } from '../../../shared/types';
 import { cleanAndNormalizeResponseContent, repairUnclosedMarkdown } from '../../../ai/brain/response-cleaner';
+import { appendToAboutMe } from '../../services/storage';
 import { MessageSources } from './MessageSources';
 
 interface MessageItemProps {
@@ -45,8 +47,24 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const [copiedCodeIndex, setCopiedCodeIndex] = useState<number | null>(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [feedback, setFeedback] = useState<'liked' | 'disliked' | null>(null);
+  const [savedInfoState, setSavedInfoState] = useState<'idle' | 'saved' | 'duplicate' | 'full'>('idle');
 
   const isUser = message.role === 'user';
+
+  const handleSaveToMyInfo = () => {
+    const cleanText = message.content
+      .replace(/\[web\s+search\s+requested\]\s*/gi, '')
+      .trim();
+    const res = appendToAboutMe(cleanText);
+    if (res.alreadyFull) {
+      setSavedInfoState('full');
+    } else if (res.duplicate) {
+      setSavedInfoState('duplicate');
+    } else {
+      setSavedInfoState('saved');
+    }
+    setTimeout(() => setSavedInfoState('idle'), 2500);
+  };
 
   const handleLike = () => {
     setFeedback((prev) => (prev === 'liked' ? null : 'liked'));
@@ -608,16 +626,48 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       <div className={`max-w-[94%] sm:max-w-[85%] space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
         {/* User Message Bubble */}
         {isUser ? (
-          <div className="bg-[#172133] text-slate-100 px-4 py-2.5 rounded-2xl rounded-tr-md border border-white/[0.09] shadow-sm text-[14.5px] sm:text-[15px]">
-            {/\[web\s+search\s+requested\]/i.test(message.content) && (
-              <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-[11px] font-medium text-cyan-300 mb-1.5">
-                <Globe className="w-3 h-3 text-cyan-400" />
-                <span>Search Web</span>
-              </div>
-            )}
-            <p className="whitespace-pre-wrap leading-relaxed break-words">
-              {message.content.replace(/\[web\s+search\s+requested\]\s*/gi, '').trim()}
-            </p>
+          <div className="flex flex-col items-end gap-1">
+            <div className="bg-[#172133] text-slate-100 px-4 py-2.5 rounded-2xl rounded-tr-md border border-white/[0.09] shadow-sm text-[14.5px] sm:text-[15px]">
+              {/\[web\s+search\s+requested\]/i.test(message.content) && (
+                <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-[11px] font-medium text-cyan-300 mb-1.5">
+                  <Globe className="w-3 h-3 text-cyan-400" />
+                  <span>Search Web</span>
+                </div>
+              )}
+              <p className="whitespace-pre-wrap leading-relaxed break-words">
+                {message.content.replace(/\[web\s+search\s+requested\]\s*/gi, '').trim()}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleSaveToMyInfo}
+              title="Append this message to About me in Settings"
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] transition-all cursor-pointer ${
+                savedInfoState === 'saved'
+                  ? 'text-emerald-300 bg-emerald-500/15 opacity-100'
+                  : savedInfoState === 'full'
+                  ? 'text-amber-300 bg-amber-500/15 opacity-100'
+                  : savedInfoState === 'duplicate'
+                  ? 'text-cyan-300 bg-cyan-500/15 opacity-100'
+                  : 'text-slate-500 hover:text-slate-200 hover:bg-white/[0.05] opacity-0 group-hover:opacity-100 focus:opacity-100'
+              }`}
+            >
+              {savedInfoState === 'saved' ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-400" />
+                  <span>Saved to my info</span>
+                </>
+              ) : savedInfoState === 'full' ? (
+                <span>About me limit reached (1,500 chars)</span>
+              ) : savedInfoState === 'duplicate' ? (
+                <span>Already in About me</span>
+              ) : (
+                <>
+                  <BookmarkPlus className="w-3 h-3" />
+                  <span>Save to my info</span>
+                </>
+              )}
+            </button>
           </div>
         ) : message.status === 'error' ? (
           <div className="p-3.5 rounded-2xl bg-rose-950/30 border border-rose-500/30 text-rose-200 text-xs flex items-start justify-between gap-3 shadow-sm max-w-lg">
@@ -785,6 +835,39 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   <RefreshCw className="w-3.5 h-3.5" />
                 </button>
               )}
+
+              {/* Save to my info */}
+              <button
+                type="button"
+                onClick={handleSaveToMyInfo}
+                title="Save this text to About me"
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg transition-colors cursor-pointer ${
+                  savedInfoState === 'saved'
+                    ? 'text-emerald-300 bg-emerald-500/15'
+                    : savedInfoState === 'full'
+                    ? 'text-amber-300 bg-amber-500/15'
+                    : savedInfoState === 'duplicate'
+                    ? 'text-cyan-300 bg-cyan-500/15'
+                    : 'hover:text-white hover:bg-white/[0.06]'
+                }`}
+                aria-label="Save to my info"
+              >
+                {savedInfoState === 'saved' ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-[11px] font-medium">Saved to my info</span>
+                  </>
+                ) : savedInfoState === 'full' ? (
+                  <span className="text-[11px] font-medium">About me full</span>
+                ) : savedInfoState === 'duplicate' ? (
+                  <span className="text-[11px] font-medium">Already saved</span>
+                ) : (
+                  <>
+                    <BookmarkPlus className="w-3.5 h-3.5" />
+                    <span className="text-[11px]">Save to my info</span>
+                  </>
+                )}
+              </button>
 
               {/* Add to Project */}
               {projects.length > 0 && onAddToProject && (

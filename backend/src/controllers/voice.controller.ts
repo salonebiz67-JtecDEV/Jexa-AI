@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import { VoiceService } from '../services/voice.service';
 import { VoiceSynthesisRequest, isTtsModel } from '../../../shared/types/provider';
-import { getResolvedUserId } from '../middleware/auth.middleware';
 
 export class VoiceController {
   /**
@@ -10,7 +9,6 @@ export class VoiceController {
   public static async handleVoice(req: Request, res: Response): Promise<void> {
     try {
       const payload: VoiceSynthesisRequest = { ...(req.body || {}) };
-      const userId = getResolvedUserId(req);
 
       if (!payload.text || typeof payload.text !== 'string' || !payload.text.trim()) {
         res.status(400).json({ success: false, error: 'Text is required for voice processing.' });
@@ -28,7 +26,7 @@ export class VoiceController {
         return;
       }
 
-      const result = await VoiceService.speak(payload, userId);
+      const result = await VoiceService.speak(payload);
 
       // Support direct binary audio streaming if requested via Accept header or format query
       const acceptsBinary =

@@ -1,12 +1,7 @@
 import {
-  ChatMessage,
-  Conversation,
   SendMessagePayload,
   ChatResponsePayload,
   BrainProfile,
-  MemoryItem,
-  MemoryCreateInput,
-  ResearchHistoryItem,
   ProviderStatus,
   VoiceSynthesisRequest,
   VoiceSynthesisResponse,
@@ -15,37 +10,10 @@ import {
   VoiceProviderType,
   VoiceHealthResponse,
   ProviderHealthStatus,
-  DatabaseHealthResponse,
-  DatabaseDiagnosticsResult,
   AIActivityStatus,
   StreamChatEvent,
   WebSearchResultItem,
 } from '../../shared/types';
-import { safeStorage } from './storage';
-
-let authenticatedUserId: string | null = null;
-let authenticatedToken: string | null = null;
-
-export function setAuthenticatedUser(userId: string | null, token?: string | null): void {
-  authenticatedUserId = userId;
-  authenticatedToken = token || null;
-  if (userId) {
-    safeStorage.setItem('jexa_persistent_user_id', userId);
-  }
-}
-
-export function getClientUserId(): string {
-  if (authenticatedUserId) {
-    return authenticatedUserId;
-  }
-  const STORAGE_KEY = 'jexa_persistent_user_id';
-  let uid = safeStorage.getItem(STORAGE_KEY);
-  if (!uid || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uid)) {
-    uid = '00000000-0000-0000-0000-000000000001';
-    safeStorage.setItem(STORAGE_KEY, uid);
-  }
-  return uid;
-}
 
 // =========================================================================
 // Centralized API Configuration for GitHub Pages & Render Deployment
@@ -139,19 +107,10 @@ async function fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  const uid = getClientUserId();
-  const customHeaders: Record<string, string> = {
-    'x-user-id': uid,
-  };
-  if (authenticatedToken) {
-    customHeaders['Authorization'] = `Bearer ${authenticatedToken}`;
-  }
-
   try {
     const res = await fetch(url, {
       ...options,
       headers: {
-        ...customHeaders,
         ...(options?.headers || {}),
       },
       signal: controller.signal,
@@ -221,8 +180,6 @@ export interface SendMessageStreamOptions {
       query?: string;
       sourcesCount?: number;
       error?: string;
-      memoryFact?: string;
-      memoryAction?: string;
       sources?: WebSearchResultItem[];
       searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results';
       searchTrigger?: 'manual' | 'automatic' | 'none';
@@ -246,6 +203,12 @@ export const ApiClient = {
       textProvider: payload?.textProvider || 'gemini',
       textModel: typeof payload?.textModel === 'string' ? payload.textModel : undefined,
       backupModel: typeof payload?.backupModel === 'string' ? payload.backupModel : undefined,
+      history: Array.isArray(payload?.history) ? payload.history.slice(-8) : undefined,
+      aboutMe: typeof payload?.aboutMe === 'string' ? payload.aboutMe.slice(0, 1500) : undefined,
+      behaviorInstructions:
+        typeof payload?.behaviorInstructions === 'string'
+          ? payload.behaviorInstructions.slice(0, 1500)
+          : undefined,
       stream: false,
       isVoiceMode: Boolean(payload?.isVoiceMode),
       userContext: payload?.userContext,
@@ -268,6 +231,12 @@ export const ApiClient = {
       textProvider: payload?.textProvider || 'gemini',
       textModel: typeof payload?.textModel === 'string' ? payload.textModel : undefined,
       backupModel: typeof payload?.backupModel === 'string' ? payload.backupModel : undefined,
+      history: Array.isArray(payload?.history) ? payload.history.slice(-8) : undefined,
+      aboutMe: typeof payload?.aboutMe === 'string' ? payload.aboutMe.slice(0, 1500) : undefined,
+      behaviorInstructions:
+        typeof payload?.behaviorInstructions === 'string'
+          ? payload.behaviorInstructions.slice(0, 1500)
+          : undefined,
       stream: true,
       isVoiceMode: Boolean(payload?.isVoiceMode),
       userContext: payload?.userContext,
@@ -277,13 +246,6 @@ export const ApiClient = {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream, application/json',
     };
-    const uid = getClientUserId();
-    if (uid) {
-      headers['x-user-id'] = uid;
-    }
-    if (authenticatedToken) {
-      headers['Authorization'] = `Bearer ${authenticatedToken}`;
-    }
 
     try {
       const response = await fetchWithTimeout(
@@ -485,81 +447,6 @@ export const ApiClient = {
     return fetchJson<VoiceHealthResponse>(`${API_BASE}/voice/health`);
   },
 
-  // Conversations
-  async getConversations(): Promise<Conversation[]> {
-    return fetchJson<Conversation[]>(`${API_BASE}/conversations`);
-  },
-
-  async createConversation(title?: string, personaId?: string): Promise<Conversation> {
-    const cleanTitle = typeof title === 'string' ? title : 'New Conversation';
-    const cleanPersonaId = typeof personaId === 'string' ? personaId : undefined;
-    return fetchJson<Conversation>(`${API_BASE}/conversations`, {
-      method: 'POST',
-      body: JSON.stringify({ title: cleanTitle, personaId: cleanPersonaId }),
-    });
-  },
-
-  async getConversation(id: string): Promise<Conversation> {
-    return fetchJson<Conversation>(`${API_BASE}/conversations/${id}`);
-  },
-
-  async getMessages(conversationId: string): Promise<ChatMessage[]> {
-    return fetchJson<ChatMessage[]>(`${API_BASE}/conversations/${conversationId}/messages`);
-  },
-
-  async renameConversation(id: string, title: string): Promise<Conversation> {
-    return fetchJson<Conversation>(`${API_BASE}/conversations/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ title }),
-    });
-  },
-
-  async togglePinConversation(id: string, pinned: boolean): Promise<Conversation> {
-    return fetchJson<Conversation>(`${API_BASE}/conversations/${id}/pin`, {
-      method: 'PATCH',
-      body: JSON.stringify({ pinned }),
-    });
-  },
-
-  async deleteConversation(id: string): Promise<boolean> {
-    const res = await fetchJson<{ id: string; deleted: boolean }>(`${API_BASE}/conversations/${id}`, {
-      method: 'DELETE',
-    });
-    return res.deleted;
-  },
-
-  // Memories
-  async getMemories(): Promise<MemoryItem[]> {
-    return fetchJson<MemoryItem[]>(`${API_BASE}/memories`);
-  },
-
-  async createMemory(input: MemoryCreateInput): Promise<MemoryItem> {
-    return fetchJson<MemoryItem>(`${API_BASE}/memories`, {
-      method: 'POST',
-      body: JSON.stringify(input),
-    });
-  },
-
-  async updateMemory(id: string, updates: Partial<MemoryItem>): Promise<MemoryItem> {
-    return fetchJson<MemoryItem>(`${API_BASE}/memories/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(updates),
-    });
-  },
-
-  async deleteMemory(id: string): Promise<boolean> {
-    const res = await fetchJson<{ id: string; deleted: boolean }>(`${API_BASE}/memories/${id}`, {
-      method: 'DELETE',
-    });
-    return res.deleted;
-  },
-
-  // Research History
-  async getResearchHistory(query?: string): Promise<ResearchHistoryItem[]> {
-    const url = query ? `${API_BASE}/research-history?q=${encodeURIComponent(query)}` : `${API_BASE}/research-history`;
-    return fetchJson<ResearchHistoryItem[]>(url);
-  },
-
   // Brain Profile & Providers
   async getBrainProfile(): Promise<{ profile: BrainProfile; providerStatus: ProviderStatus }> {
     return fetchJson<{ profile: BrainProfile; providerStatus: ProviderStatus }>(`${API_BASE}/ai/brain-profile`);
@@ -610,40 +497,6 @@ export const ApiClient = {
         body: JSON.stringify({ provider, model }),
       });
     }
-  },
-
-  // Database Health & Real Diagnostics
-  async getDatabaseHealth(): Promise<DatabaseHealthResponse> {
-    return fetchJson<DatabaseHealthResponse>(`${API_BASE}/database/health`);
-  },
-
-  async runDatabaseTest(): Promise<DatabaseDiagnosticsResult> {
-    return fetchJson<DatabaseDiagnosticsResult>(`${API_BASE}/database/test`, {
-      method: 'POST',
-    });
-  },
-
-  async getDatabaseSchema(): Promise<{ sql: string }> {
-    return fetchJson<{ sql: string }>(`${API_BASE}/database/schema`);
-  },
-
-  // Authentication & User Profile
-  async getAuthConfig(): Promise<{ configured: boolean; supabaseUrl: string; supabaseAnonKey: string }> {
-    return fetchJson<{ success: boolean; data: { configured: boolean; supabaseUrl: string; supabaseAnonKey: string } }>(
-      `${API_BASE}/auth/config`
-    ).then((r) => r.data);
-  },
-
-  async syncUserProfile(profile: { id: string; email?: string; fullName?: string; avatarUrl?: string }): Promise<any> {
-    return fetchJson<{ success: boolean; data: any }>(`${API_BASE}/auth/profile`, {
-      method: 'POST',
-      body: JSON.stringify(profile),
-    }).then((r) => r.data);
-  },
-
-  async getUserProfile(userId?: string): Promise<any> {
-    const url = userId ? `${API_BASE}/auth/me?userId=${encodeURIComponent(userId)}` : `${API_BASE}/auth/me`;
-    return fetchJson<{ success: boolean; data: any }>(url).then((r) => r.data);
   },
 
   // Health

@@ -6,7 +6,6 @@ import fs from 'node:fs';
 import dotenv from 'dotenv';
 import apiRoutes from './backend/src/routes/api.routes';
 import { errorHandler } from './backend/src/middleware/error.middleware';
-import { isSupabaseConfigured } from './backend/src/database/supabase';
 import { AIProviderRegistry } from './ai/providers/registry';
 
 // Load environment variables
@@ -70,7 +69,7 @@ app.get('/health', (_req, res) => {
   res.status(200).json({
     status: 'ok',
     service: 'jexa-ai',
-    database: isSupabaseConfigured ? 'connected' : 'fallback_active',
+    stateless: true,
     textProvider: registry.getDefaultTextType(),
     voiceProvider: registry.getDefaultVoiceType(),
   });
@@ -115,13 +114,7 @@ async function startServer() {
     console.log(` Port: ${PORT}`);
     console.log(` Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(` URL: http://0.0.0.0:${PORT}`);
-    if (isSupabaseConfigured) {
-      console.log(`[Database] Supabase connected`);
-    } else if (isProd) {
-      console.error(`[Database] CONFIGURATION ERROR: Supabase credentials missing in production environment.`);
-    } else {
-      console.log(`[Database] Operating in memory-buffered development mode.`);
-    }
+    console.log(`[Server] Stateless API mode active (device-local persistence)`);
     console.log(`[Server] Ready`);
     console.log(`=========================================`);
   });

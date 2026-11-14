@@ -1,11 +1,22 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ApiClient } from '../services/api.client';
-import { ChatMessage, Conversation, AIActivityStatus, WebSearchResultItem } from '../../shared/types';
-import { safeStorage } from '../services/storage';
-import { useAuth } from './useAuth';
+import {
+  ChatMessage,
+  ClientHistoryMessage,
+  Conversation,
+  AIActivityStatus,
+  WebSearchResultItem,
+} from '../../shared/types';
+import {
+  getAboutMe,
+  getBehaviorInstructions,
+  safeStorage,
+} from '../services/storage';
+import { deriveConversationTitle, localChatDb } from '../services/localChatDb';
+
+const ACTIVE_CONV_STORAGE_KEY = 'jexa_active_conv_id';
 
 export function useChat() {
-  const { user } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -19,40 +30,38 @@ export function useChat() {
     sources?: WebSearchResultItem[];
     searchStatus?: any;
     searchTrigger?: any;
-    memoryFact?: string;
-    memoryAction?: string;
     provider?: string;
     model?: string;
     fallbackUsed?: boolean;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Load conversations on mount or whenever authenticated user changes
-  const refreshConversations = useCallback(async () => {
+  // Load conversations from local IndexedDB on mount
+  const refreshConversations = useCallback(async (preferredId?: string) => {
     try {
-      const list = await ApiClient.getConversations();
+      const list = await localChatDb.listConversations();
       setConversations(list);
-      const savedActiveId = safeStorage.getItem(`jexa_active_conv_id_${user?.id || 'guest'}`);
-      if (savedActiveId && list.some((c) => c.id === savedActiveId)) {
-        setCurrentConversationId(savedActiveId);
+      const targetId = preferredId || safeStorage.getItem(ACTIVE_CONV_STORAGE_KEY);
+      if (targetId && list.some((c) => c.id === targetId)) {
+        setCurrentConversationId(targetId);
       } else if (list.length > 0) {
         setCurrentConversationId(list[0].id);
-        safeStorage.setItem(`jexa_active_conv_id_${user?.id || 'guest'}`, list[0].id);
+        safeStorage.setItem(ACTIVE_CONV_STORAGE_KEY, list[0].id);
       } else {
         setCurrentConversationId(null);
         setMessages([]);
       }
     } catch (err: any) {
-      console.error('[useChat] Failed to load conversations from database:', err);
-      setError('Unable to sync with the server.');
+      console.error('[useChat] Failed to load conversations from IndexedDB:', err);
+      setError('Unable to load local chats from device storage.');
     }
-  }, [user?.id]);
+  }, []);
 
   useEffect(() => {
     refreshConversations();
   }, [refreshConversations]);
 
-  // Load messages whenever currentConversationId changes
+  // Load messages from local IndexedDB whenever currentConversationId changes
   useEffect(() => {
     if (!currentConversationId) {
       setMessages([]);
@@ -62,24 +71,17 @@ export function useChat() {
     let isMounted = true;
     setIsLoading(true);
 
-    ApiClient.getMessages(currentConversationId)
+    localChatDb
+      .getMessages(currentConversationId)
       .then((msgs) => {
         if (isMounted) {
-          const seen = new Set<string>();
-          const deduped: ChatMessage[] = [];
-          for (const m of msgs) {
-            if (m.id && !seen.has(m.id)) {
-              seen.add(m.id);
-              deduped.push(m);
-            }
-          }
-          setMessages(deduped);
+          setMessages(msgs);
           setIsLoading(false);
         }
       })
       .catch((err) => {
         if (isMounted) {
-          console.error('[useChat] Error fetching messages:', err);
+          console.error('[useChat] Error loading local messages:', err);
           setIsLoading(false);
         }
       });
@@ -92,7 +94,7 @@ export function useChat() {
   const refreshMessages = useCallback(async () => {
     if (!currentConversationId) return;
     try {
-      const msgs = await ApiClient.getMessages(currentConversationId);
+      const msgs = await localChatDb.getMessages(currentConversationId);
       setMessages(msgs);
     } catch (err) {
       console.error('[useChat] Error refreshing messages:', err);
@@ -102,17 +104,17 @@ export function useChat() {
   const selectConversation = useCallback((id: string) => {
     if (typeof id === 'string') {
       setCurrentConversationId(id);
-      safeStorage.setItem(`jexa_active_conv_id_${user?.id || 'guest'}`, id);
+      safeStorage.setItem(ACTIVE_CONV_STORAGE_KEY, id);
     }
-  }, [user?.id]);
+  }, []);
 
   const startNewChat = useCallback(async (personaId?: string) => {
     try {
       const cleanPersona = typeof personaId === 'string' ? personaId : undefined;
-      const newConv = await ApiClient.createConversation('New Conversation', cleanPersona);
+      const newConv = await localChatDb.createConversation('New Conversation', cleanPersona);
       setConversations((prev) => [newConv, ...prev]);
       setCurrentConversationId(newConv.id);
-      safeStorage.setItem(`jexa_active_conv_id_${user?.id || 'guest'}`, newConv.id);
+      safeStorage.setItem(ACTIVE_CONV_STORAGE_KEY, newConv.id);
       setMessages([]);
       return newConv.id;
     } catch (err: any) {
@@ -120,70 +122,71 @@ export function useChat() {
       setError("Couldn't save. Please try again.");
       return null;
     }
-  }, [user?.id]);
+  }, []);
 
-  const togglePinConversation = useCallback(
-    async (id: string, pinned: boolean) => {
-      if (typeof id !== 'string') return;
-      try {
-        const updated = await ApiClient.togglePinConversation(id, pinned);
-        setConversations((prev) => {
-          const next = prev.map((c) => (c.id === id ? { ...c, pinned: updated.pinned } : c));
-          return next.sort((a, b) => {
-            if (Boolean(b.pinned) !== Boolean(a.pinned)) {
-              return b.pinned ? 1 : -1;
-            }
-            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-          });
-        });
-      } catch (err: any) {
-        console.error('[useChat] Failed to toggle pin in database:', err);
-        setError("Couldn't save. Please try again.");
-      }
-    },
-    []
-  );
+  const togglePinConversation = useCallback(async (id: string, pinned: boolean) => {
+    if (typeof id !== 'string') return;
+    try {
+      const updated = await localChatDb.togglePinConversation(id, pinned);
+      if (!updated) return;
+      const list = await localChatDb.listConversations();
+      setConversations(list);
+    } catch (err: any) {
+      console.error('[useChat] Failed to toggle pin:', err);
+      setError("Couldn't save. Please try again.");
+    }
+  }, []);
 
-  const renameConversation = useCallback(
-    async (id: string, newTitle: string) => {
-      if (typeof id !== 'string' || !newTitle.trim()) return;
-      try {
-        const updated = await ApiClient.renameConversation(id, newTitle.trim());
-        setConversations((prev) =>
-          prev.map((c) => (c.id === id ? { ...c, title: updated.title } : c))
-        );
-      } catch (err: any) {
-        console.error('[useChat] Failed to rename conversation in database:', err);
-        setError("Couldn't save. Please try again.");
-      }
-    },
-    []
-  );
+  const renameConversation = useCallback(async (id: string, newTitle: string) => {
+    if (typeof id !== 'string' || !newTitle.trim()) return;
+    try {
+      const updated = await localChatDb.renameConversation(id, newTitle.trim());
+      if (!updated) return;
+      const list = await localChatDb.listConversations();
+      setConversations(list);
+    } catch (err: any) {
+      console.error('[useChat] Failed to rename conversation:', err);
+      setError("Couldn't save. Please try again.");
+    }
+  }, []);
 
   const deleteConversation = useCallback(
     async (id: string) => {
       if (typeof id !== 'string') return;
       try {
-        await ApiClient.deleteConversation(id);
-        setConversations((prev) => prev.filter((c) => c.id !== id));
+        await localChatDb.deleteConversation(id);
+        const remaining = await localChatDb.listConversations();
+        setConversations(remaining);
         if (currentConversationId === id) {
-          const remaining = conversations.filter((c) => c.id !== id);
           if (remaining.length > 0) {
             setCurrentConversationId(remaining[0].id);
-            safeStorage.setItem(`jexa_active_conv_id_${user?.id || 'guest'}`, remaining[0].id);
+            safeStorage.setItem(ACTIVE_CONV_STORAGE_KEY, remaining[0].id);
           } else {
             setCurrentConversationId(null);
-            safeStorage.removeItem(`jexa_active_conv_id_${user?.id || 'guest'}`);
+            safeStorage.removeItem(ACTIVE_CONV_STORAGE_KEY);
             setMessages([]);
           }
         }
       } catch (err: any) {
-        console.error('[useChat] Failed to delete conversation in database:', err);
+        console.error('[useChat] Failed to delete conversation:', err);
         setError("Couldn't save. Please try again.");
       }
     },
-    [conversations, currentConversationId, user?.id]
+    [currentConversationId]
   );
+
+  const clearAllConversations = useCallback(async () => {
+    try {
+      await localChatDb.clearAllConversations();
+      setConversations([]);
+      setCurrentConversationId(null);
+      setMessages([]);
+      safeStorage.removeItem(ACTIVE_CONV_STORAGE_KEY);
+    } catch (err: any) {
+      console.error('[useChat] Failed to clear conversations:', err);
+      setError("Couldn't clear local chat history.");
+    }
+  }, []);
 
   const sendMessage = useCallback(
     async (
@@ -204,19 +207,39 @@ export function useChat() {
       if (!finalMessage || isSending) return;
 
       const cleanPersona = typeof personaId === 'string' ? personaId : undefined;
-      const tempId = `temp-${Date.now()}`;
 
-      // Optimistic user message
-      const optimisticUserMsg: ChatMessage = {
-        id: tempId,
-        conversationId: currentConversationId || 'pending',
+      // Capture last 8 valid messages BEFORE appending the new turn
+      const historyPayload: ClientHistoryMessage[] = messages
+        .filter((m) => m.status !== 'error' && (m.role === 'user' || m.role === 'assistant') && m.content.trim())
+        .slice(-8)
+        .map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        }));
+
+      // Ensure a local IndexedDB conversation exists before streaming
+      let activeConvId = currentConversationId;
+      if (!activeConvId) {
+        const created = await localChatDb.createConversation(
+          deriveConversationTitle(finalMessage),
+          cleanPersona
+        );
+        activeConvId = created.id;
+        setCurrentConversationId(activeConvId);
+        safeStorage.setItem(ACTIVE_CONV_STORAGE_KEY, activeConvId);
+      }
+
+      // Persist user message to local IndexedDB immediately
+      const savedUserMsg = await localChatDb.addMessage(activeConvId, {
         role: 'user',
         content: finalMessage,
-        createdAt: new Date().toISOString(),
         status: 'complete',
-      };
+      });
 
-      setMessages((prev) => [...prev, optimisticUserMsg]);
+      setMessages((prev) => [...prev.filter((m) => m.id !== savedUserMsg.id), savedUserMsg]);
+      const updatedConvsAfterSend = await localChatDb.listConversations();
+      setConversations(updatedConvsAfterSend);
+
       setIsSending(true);
       setActivityStatus('Thinking...');
       setActivityDetails(null);
@@ -249,9 +272,11 @@ export function useChat() {
 
         const response = await ApiClient.sendMessageStream(
           {
-            conversationId: currentConversationId || undefined,
-            userId: user?.id,
+            conversationId: activeConvId,
             message: finalMessage,
+            history: historyPayload,
+            aboutMe: getAboutMe(),
+            behaviorInstructions: getBehaviorInstructions(),
             personaId: cleanPersona,
             textProvider: 'gemini',
             textModel: savedTextModel,
@@ -277,7 +302,6 @@ export function useChat() {
                   activeSearchTrigger = details.searchTrigger;
                 }
 
-                // If sources or search query arrived, update streaming message metadata early
                 if (activeSources || activeSearchQuery) {
                   setMessages((prev) => {
                     const streamIdx = prev.findIndex((m) => m.id === streamingAssistantId);
@@ -309,7 +333,7 @@ export function useChat() {
                 const streamIdx = prev.findIndex((m) => m.id === streamingAssistantId);
                 const streamingMsg: ChatMessage = {
                   id: streamingAssistantId,
-                  conversationId: currentConversationId || 'pending',
+                  conversationId: activeConvId!,
                   role: 'assistant',
                   content: accumulatedStreamContent,
                   createdAt: new Date().toISOString(),
@@ -340,33 +364,27 @@ export function useChat() {
           return;
         }
 
-        // Set conversation ID if new conversation was formed
-        if (response.isNewConversation) {
-          setCurrentConversationId(response.conversationId);
-          safeStorage.setItem(`jexa_active_conv_id_${user?.id || 'guest'}`, response.conversationId);
-          await refreshConversations();
-        }
-
-        // Replace optimistic user message with persisted user message if returned, and append assistant message
-        setMessages((prev) => {
-          const userMsgId = response.userMessage?.id;
-          const assistantMsgId = response.message?.id;
-          const withoutTemp = prev.filter(
-            (m) =>
-              m.id !== tempId &&
-              m.id !== userMsgId &&
-              m.id !== assistantMsgId &&
-              m.id !== streamingAssistantId
-          );
-          const finalUserMsg = response.userMessage || {
-            ...optimisticUserMsg,
-            conversationId: response.conversationId,
-          };
-          return [...withoutTemp, finalUserMsg, response.message];
+        // Save assistant message locally in IndexedDB
+        const savedAssistantMsg = await localChatDb.addMessage(activeConvId, {
+          id: response.message.id,
+          role: 'assistant',
+          content: response.message.content,
+          createdAt: response.message.createdAt,
+          status: 'complete',
+          metadata: response.message.metadata,
         });
 
+        setMessages((prev) => {
+          const withoutStream = prev.filter(
+            (m) => m.id !== streamingAssistantId && m.id !== savedAssistantMsg.id
+          );
+          return [...withoutStream, savedAssistantMsg];
+        });
+
+        const latestConvs = await localChatDb.listConversations();
+        setConversations(latestConvs);
+
         setActivityStatus('Answer complete');
-        // Brief smooth timeout for visual feedback
         setTimeout(() => {
           setIsSending(false);
           setActivityStatus(null);
@@ -398,12 +416,11 @@ export function useChat() {
           userHelpMessage = 'Gemini API key (GEMINI_API_KEY) is not configured on the server.';
         }
 
-        // Remove partial streaming placeholder and append clear error message with Retry support
         setMessages((prev) => [
           ...prev.filter((m) => !m.id.startsWith('streaming-assistant-')),
           {
             id: `err-${Date.now()}`,
-            conversationId: currentConversationId || '',
+            conversationId: activeConvId || '',
             role: 'assistant',
             content: userHelpMessage,
             createdAt: new Date().toISOString(),
@@ -418,7 +435,7 @@ export function useChat() {
         setIsSending(false);
       }
     },
-    [currentConversationId, isSending, refreshConversations, user?.id]
+    [currentConversationId, isSending, messages]
   );
 
   const retrySearch = useCallback(() => {
@@ -443,6 +460,7 @@ export function useChat() {
     deleteConversation,
     togglePinConversation,
     renameConversation,
+    clearAllConversations,
     sendMessage,
     refreshConversations,
     refreshMessages,

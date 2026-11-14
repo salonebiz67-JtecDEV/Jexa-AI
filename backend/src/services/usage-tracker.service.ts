@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import { getSupabaseClient } from '../database/supabase';
 
 export type UsagePurpose =
   | 'chat'
@@ -119,8 +118,8 @@ export class UsageTracker {
   private static inMemoryLog: AIUsageEntry[] = [];
 
   /**
-   * Records an AI or tool invocation.
-   * NEVER throws, never blocks the event loop, and writes to database in the background.
+   * Records an AI or tool invocation in-memory.
+   * NEVER throws and never blocks the event loop.
    */
   public static recordAICall(params: RecordAICallParams): void {
     try {
@@ -241,47 +240,12 @@ export class UsageTracker {
   }
 
   /**
-   * Adds entry to memory and queues background Supabase persistence
+   * Adds entry to in-memory circular buffer
    */
   private static addEntry(entry: AIUsageEntry): void {
     this.inMemoryLog.push(entry);
     if (this.inMemoryLog.length > this.MAX_MEMORY_ENTRIES) {
       this.inMemoryLog = this.inMemoryLog.slice(-this.MAX_MEMORY_ENTRIES);
-    }
-
-    // Background asynchronous database write (never blocking)
-    queueMicrotask(() => {
-      this.persistToSupabase(entry).catch(() => {
-        // Silently catch database write failures
-      });
-    });
-  }
-
-  private static async persistToSupabase(entry: AIUsageEntry): Promise<void> {
-    try {
-      const supabase = getSupabaseClient();
-      if (!supabase) return;
-
-      await supabase.from('ai_usage_log').insert({
-        id: entry.id,
-        timestamp_ms: entry.timestampMs,
-        provider: entry.provider,
-        model: entry.model,
-        purpose: entry.purpose,
-        prompt_tokens: entry.promptTokens,
-        completion_tokens: entry.completionTokens,
-        total_tokens: entry.totalTokens,
-        is_estimated: entry.isEstimated,
-        duration_ms: entry.durationMs,
-        status: entry.status,
-        message_id: entry.messageId || null,
-        tool_name: entry.toolName || null,
-        tavily_credits: entry.tavilyCredits || 0,
-        metadata: entry.metadata || {},
-        created_at: entry.createdAt,
-      });
-    } catch {
-      // Ignored: Supabase write failed, in-memory log remains authoritative
     }
   }
 

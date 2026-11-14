@@ -138,19 +138,7 @@ export class ToolExecutor {
       };
     }
 
-    // 3. Permission & Safety enforcement
-    if (tool.permissionLevel === 'destructive' || tool.permissionLevel === 'sensitive') {
-      // Require authenticated user context for sensitive or destructive operations
-      if (!context.userId) {
-        options.onStatusUpdate?.('Tool failed', { error: 'Authentication required' });
-        return {
-          success: false,
-          toolName: tool.name,
-          error: `Unauthorized: tool "${tool.name}" requires an authenticated user session.`,
-          executionTimeMs: Date.now() - startTime,
-        };
-      }
-    }
+    // 3. Stateless mode: no login/userId gate required; tools enforce their own path/secret sandboxing
 
     // 4. Status update: Inform UI of tool execution
     if (tool.name === 'web_search') {
@@ -159,8 +147,10 @@ export class ToolExecutor {
       options.onStatusUpdate?.('Checking servers…');
     } else if (tool.name === 'recent_errors') {
       options.onStatusUpdate?.('Reading error logs…');
-    } else if (tool.name === 'memory_search') {
-      options.onStatusUpdate?.('Checking memories...', { query: (args as any)?.query });
+    } else if (tool.name === 'list_source_files' || tool.name === 'read_source_file') {
+      options.onStatusUpdate?.('Reading source code…');
+    } else if (tool.name === 'search_code') {
+      options.onStatusUpdate?.('Searching code…');
     } else {
       options.onStatusUpdate?.('Selecting tool...', { tool: tool.displayName || tool.name });
     }

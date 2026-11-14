@@ -13,7 +13,6 @@ async function runTests() {
     'ai/brain/context-handler.ts',
     'shared/types/chat.ts',
     'scripts/test-owner-code-tools.ts',
-    'backend/src/database/schema.sql',
     'package.json',
     'render.yaml',
     'vite.config.ts',
@@ -65,34 +64,25 @@ async function runTests() {
   }
   console.log('✓ Secret redaction passed.');
 
-  // Test Tool Execution: Access Denied when not owner
-  const unauthContext = { isOwner: false };
-  const deniedList = await listSourceFilesTool.execute({ directory: 'src' }, unauthContext as any);
-  if (deniedList.success) {
-    console.error('FAIL: Unauthorized user could execute list_source_files');
-    process.exit(1);
-  }
-  console.log('✓ Owner-only guard rejected unauthorized caller.');
-
-  // Test Tool Execution: Authorized owner
-  const ownerContext = { isOwner: true, onStatusUpdate: (s: string) => console.log(`  [Status update]: ${s}`) };
-  const authList = await listSourceFilesTool.execute({ directory: 'backend/src/services', maxFiles: 10 }, ownerContext as any);
+  // Test Tool Execution
+  const toolContext = { onStatusUpdate: (s: string) => console.log(`  [Status update]: ${s}`) };
+  const authList = await listSourceFilesTool.execute({ directory: 'backend/src/services', maxFiles: 10 }, toolContext as any);
   if (!authList.success || !authList.data || authList.data.files.length === 0) {
-    console.error('FAIL: Authorized list_source_files failed:', authList.error);
+    console.error('FAIL: list_source_files failed:', authList.error);
     process.exit(1);
   }
-  console.log(`✓ Authorized list_source_files returned ${authList.data.files.length} files.`);
+  console.log(`✓ list_source_files returned ${authList.data.files.length} files.`);
 
   // Test read_source_file
-  const authRead = await readSourceFileTool.execute({ path: 'package.json', startLine: 1, endLine: 20 }, ownerContext as any);
+  const authRead = await readSourceFileTool.execute({ path: 'package.json', startLine: 1, endLine: 20 }, toolContext as any);
   if (!authRead.success || !authRead.data || !authRead.data.content.includes('"name"')) {
-    console.error('FAIL: Authorized read_source_file failed:', authRead.error);
+    console.error('FAIL: read_source_file failed:', authRead.error);
     process.exit(1);
   }
-  console.log(`✓ Authorized read_source_file read ${authRead.data.endLine} lines from package.json.`);
+  console.log(`✓ read_source_file read ${authRead.data.endLine} lines from package.json.`);
 
   // Test search_code
-  const authSearch = await searchCodeTool.execute({ query: 'ToolRegistry', maxResults: 5 }, ownerContext as any);
+  const authSearch = await searchCodeTool.execute({ query: 'ToolRegistry', maxResults: 5 }, toolContext as any);
   if (!authSearch.success || !authSearch.data || authSearch.data.matches.length === 0) {
     console.error('FAIL: Authorized search_code failed:', authSearch.error);
     process.exit(1);

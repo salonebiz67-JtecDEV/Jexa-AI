@@ -16,19 +16,11 @@ import {
   RotateCcw,
   ChevronDown,
   ChevronUp,
-  Database,
-  Copy,
-  RefreshCw,
-  FileCode,
-  LogOut,
-  Brain,
-  Trash2,
-  Edit2,
   ShieldAlert,
+  User,
 } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useBrainSettings } from '../../hooks/useBrainSettings';
-import { useAuth } from '../../hooks/useAuth';
 import {
   FREE_GEMINI_CHAT_MODELS,
   FREE_GEMINI_VOICE_MODELS,
@@ -37,12 +29,15 @@ import {
   DEFAULT_VOICE_MODEL,
   isTtsModel,
   ProviderHealthStatus,
-  DatabaseHealthResponse,
-  DatabaseDiagnosticsResult,
-  TestStepStatus,
 } from '../../../shared/types';
-import { MemoryItem, getCategoryLabel } from '../../../shared/types/memory';
-import { safeStorage } from '../../services/storage';
+import {
+  safeStorage,
+  MAX_INSTRUCTION_CHARS,
+  getAboutMe,
+  setAboutMe,
+  getBehaviorInstructions,
+  setBehaviorInstructions,
+} from '../../services/storage';
 import { ApiClient, ProviderTestResult } from '../../services/api.client';
 import { AudioPlayer } from '../../services/audioPlayer';
 import { LiveVoiceDebugStats } from '../../hooks/useLiveVoice';
@@ -67,7 +62,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   liveDebugStats,
 }) => {
   const { profile, providerStatus, updateSettings, refresh } = useBrainSettings();
-  const { user, signOut } = useAuth();
 
   const [theme, setTheme] = useState<'dark' | 'midnight' | 'obsidian'>('dark');
   const [voiceName, setVoiceName] = useState('aura');
@@ -113,32 +107,16 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   // Debug/Diagnostics panel toggle
   const [showDeveloperPanel, setShowDeveloperPanel] = useState(false);
 
-  // Database Health & Real Diagnostics State
-  const [dbHealth, setDbHealth] = useState<DatabaseHealthResponse | null>(null);
-  const [dbTestResult, setDbTestResult] = useState<DatabaseDiagnosticsResult | null>(null);
-  const [isRunningDbTest, setIsRunningDbTest] = useState(false);
-  const [dbTestError, setDbTestError] = useState<string | null>(null);
-  const [showDbDiagnostics, setShowDbDiagnostics] = useState(false);
-  const [showSchemaModal, setShowSchemaModal] = useState(false);
-  const [schemaSql, setSchemaSql] = useState<string>('');
-  const [copiedSql, setCopiedSql] = useState(false);
-  const [lastDbTestDate, setLastDbTestDate] = useState<string>(() => {
-    return safeStorage.getItem('jexa_last_db_test_date') || 'Not tested yet';
-  });
+  // Device-local personalization fields
+  const [aboutMe, setAboutMeState] = useState<string>(() => getAboutMe());
+  const [behaviorInstructions, setBehaviorInstructionsState] = useState<string>(() =>
+    getBehaviorInstructions()
+  );
   const [saveError, setSaveError] = useState<string | null>(null);
 
   // Real Notification Support
   const [notificationStatus, setNotificationStatus] = useState<NotificationPermission>('default');
   const { isInstallable, isInstalled, install } = usePWAInstall();
-
-  // Personal Memory Management
-  const [memoriesList, setMemoriesList] = useState<MemoryItem[]>([]);
-  const [loadingMemories, setLoadingMemories] = useState(false);
-  const [showMemoriesSection, setShowMemoriesSection] = useState(false);
-  const [deletingMemoryId, setDeletingMemoryId] = useState<string | null>(null);
-  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
-  const [editingFact, setEditingFact] = useState<string>('');
-  const [savingEditId, setSavingEditId] = useState<string | null>(null);
 
   // Effective resolved models (custom input takes precedence when non-empty)
   const effectiveTextModel = customTextModel.trim() || textModel;
@@ -165,69 +143,11 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     chatModelValidationError || backupModelValidationError || voiceModelValidationError
   );
 
-  const fetchMemories = async () => {
-    setLoadingMemories(true);
-    try {
-      const items = await ApiClient.getMemories();
-      setMemoriesList(items || []);
-    } catch (e) {
-      console.warn('[SettingsDialog] Could not fetch memories:', e);
-    } finally {
-      setLoadingMemories(false);
-    }
-  };
-
-  const handleDeleteMemory = async (id: string) => {
-    setDeletingMemoryId(id);
-    try {
-      await ApiClient.deleteMemory(id);
-      setMemoriesList((prev) => prev.filter((m) => m.id !== id));
-      if (editingMemoryId === id) {
-        setEditingMemoryId(null);
-        setEditingFact('');
-      }
-    } catch (e) {
-      console.warn('[SettingsDialog] Could not delete memory:', e);
-    } finally {
-      setDeletingMemoryId(null);
-    }
-  };
-
-  const handleStartEdit = (mem: MemoryItem) => {
-    setEditingMemoryId(mem.id);
-    setEditingFact(mem.fact);
-  };
-
-  const handleCancelEdit = () => {
-    setEditingMemoryId(null);
-    setEditingFact('');
-  };
-
-  const handleSaveEdit = async (id: string) => {
-    if (!editingFact.trim()) return;
-    setSavingEditId(id);
-    try {
-      const updated = await ApiClient.updateMemory(id, { fact: editingFact.trim() });
-      setMemoriesList((prev) =>
-        prev.map((m) =>
-          m.id === id
-            ? { ...m, fact: updated.fact, lastReinforcedAt: updated.lastReinforcedAt }
-            : m
-        )
-      );
-      setEditingMemoryId(null);
-      setEditingFact('');
-    } catch (e) {
-      console.warn('[SettingsDialog] Could not update memory:', e);
-    } finally {
-      setSavingEditId(null);
-    }
-  };
-
   // Sync state when dialog opens or profile loads
   useEffect(() => {
     if (isOpen) {
-      fetchMemories();
+      setAboutMeState(getAboutMe());
+      setBehaviorInstructionsState(getBehaviorInstructions());
     }
     if (profile?.selectedTextModel && !isTtsModel(profile.selectedTextModel)) {
       const m = profile.selectedTextModel;
@@ -270,64 +190,19 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     }
   }, [profile, isOpen]);
 
-  const loadDbHealth = async () => {
-    try {
-      const health = await ApiClient.getDatabaseHealth();
-      setDbHealth(health);
-    } catch (e: any) {
-      console.warn('[SettingsDialog] Could not load database health:', e.message);
-    }
-  };
-
-  const handleRunDatabaseTest = async () => {
-    setIsRunningDbTest(true);
-    setDbTestError(null);
-    try {
-      const result = await ApiClient.runDatabaseTest();
-      setDbTestResult(result);
-      const now = new Date();
-      const formattedDate = now.toLocaleDateString('en-US', {
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
-      });
-      setLastDbTestDate(formattedDate);
-      safeStorage.setItem('jexa_last_db_test_date', formattedDate);
-      setShowDbDiagnostics(true);
-      await loadDbHealth();
-    } catch (err: any) {
-      console.error('[SettingsDialog] Database test failed:', err);
-      setDbTestError(err.message || 'Database test failed.');
-      setShowDbDiagnostics(true);
-    } finally {
-      setIsRunningDbTest(false);
-    }
-  };
-
-  const handleFetchSchema = async () => {
-    try {
-      const res = await ApiClient.getDatabaseSchema();
-      setSchemaSql(res.sql);
-      setShowSchemaModal(true);
-    } catch (err: any) {
-      console.error('[SettingsDialog] Failed to fetch schema SQL:', err);
-    }
-  };
-
-  const handleCopySchema = () => {
-    if (!schemaSql) return;
-    navigator.clipboard.writeText(schemaSql);
-    setCopiedSql(true);
-    setTimeout(() => setCopiedSql(false), 2000);
-  };
-
   useEffect(() => {
-    if (typeof window !== 'undefined' && 'Notification' in window) {
+    if (typeof window === 'undefined') return;
+    if ('Notification' in window) {
       setNotificationStatus(Notification.permission);
     }
-    if (isOpen) {
-      loadDbHealth();
-    }
+    const handlePrefsUpdated = () => {
+      setAboutMeState(getAboutMe());
+      setBehaviorInstructionsState(getBehaviorInstructions());
+    };
+    window.addEventListener('jexa:preferences-updated', handlePrefsUpdated);
+    return () => {
+      window.removeEventListener('jexa:preferences-updated', handlePrefsUpdated);
+    };
   }, [isOpen]);
 
   const handleToggleNotifications = async () => {
@@ -429,6 +304,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     safeStorage.setItem('jexa_backup_model', effectiveBackupModel);
     safeStorage.setItem('jexa_voice_model', effectiveVoiceModel);
     safeStorage.setItem('jexa_voice_name', voiceName);
+    setAboutMe(aboutMe);
+    setBehaviorInstructions(behaviorInstructions);
 
     try {
       await ApiClient.selectProviders({
@@ -541,33 +418,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     }
   };
 
-  const renderTestStepBadge = (status?: TestStepStatus) => {
-    switch (status) {
-      case 'PASS':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            PASS
-          </span>
-        );
-      case 'FAIL':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-            FAIL
-          </span>
-        );
-      case 'NOT_TESTED':
-      default:
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-500/15 text-slate-400 border border-slate-500/30">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-            NOT TESTED
-          </span>
-        );
-    }
-  };
-
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md pt-safe pb-safe">
@@ -597,47 +447,62 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
           {/* Settings Body */}
           <div className="p-4 sm:p-5 overflow-y-auto space-y-6 flex-1">
-            {/* User Account & Google Profile Header */}
-            {user && (
-              <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/[0.08] flex items-center justify-between">
-                <div className="flex items-center gap-3 min-w-0 pr-3">
-                  {user.avatarUrl ? (
-                    <img
-                      src={user.avatarUrl}
-                      alt={user.fullName || 'User'}
-                      className="w-10 h-10 rounded-full object-cover border border-emerald-500/40 shrink-0"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center justify-center text-sm font-bold shrink-0">
-                      {user.fullName ? user.fullName[0].toUpperCase() : 'U'}
-                    </div>
-                  )}
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-xs font-bold text-white truncate">{user.fullName || 'JEXA User'}</p>
-                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-medium">
-                        {user.isGuest ? 'Sandbox Guest' : 'Google Account'}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 truncate">{user.email || 'Authenticated User'}</p>
-                    <p className="text-[9px] text-slate-500 font-mono truncate">ID: {user.id}</p>
+            {/* ============================================================== */}
+            {/* PERSONALIZATION: ABOUT ME & HOW JEXA SHOULD BEHAVE             */}
+            {/* ============================================================== */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Personalization</span>
+                </label>
+                <span className="text-[10px] text-slate-500">Saved on this device</span>
+              </div>
+
+              <div className="p-3.5 rounded-xl border border-white/[0.08] bg-white/[0.02] space-y-3.5">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="jexa-about-me" className="text-xs font-medium text-white">
+                      About me
+                    </label>
+                    <span className="text-[10px] font-mono text-slate-500">
+                      {aboutMe.length} / {MAX_INSTRUCTION_CHARS.toLocaleString()}
+                    </span>
                   </div>
+                  <textarea
+                    id="jexa-about-me"
+                    value={aboutMe}
+                    onChange={(e) => setAboutMeState(e.target.value.slice(0, MAX_INSTRUCTION_CHARS))}
+                    maxLength={MAX_INSTRUCTION_CHARS}
+                    rows={3}
+                    placeholder="Share your name, background, projects, or context you want Jexa to know..."
+                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/[0.1] text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500/60 resize-y"
+                  />
                 </div>
 
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await signOut();
-                    onClose();
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-300 hover:text-rose-200 text-xs font-semibold transition-colors shrink-0 cursor-pointer"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  <span>Sign out</span>
-                </button>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="jexa-behavior-instructions" className="text-xs font-medium text-white">
+                      How Jexa should behave
+                    </label>
+                    <span className="text-[10px] font-mono text-slate-500">
+                      {behaviorInstructions.length} / {MAX_INSTRUCTION_CHARS.toLocaleString()}
+                    </span>
+                  </div>
+                  <textarea
+                    id="jexa-behavior-instructions"
+                    value={behaviorInstructions}
+                    onChange={(e) =>
+                      setBehaviorInstructionsState(e.target.value.slice(0, MAX_INSTRUCTION_CHARS))
+                    }
+                    maxLength={MAX_INSTRUCTION_CHARS}
+                    rows={3}
+                    placeholder="Describe preferred tone, formatting, or response style..."
+                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/[0.1] text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500/60 resize-y"
+                  />
+                </div>
               </div>
-            )}
+            </div>
 
             {/* ============================================================== */}
             {/* SECTION 1: GEMINI CHAT & BACKUP MODELS                         */}
@@ -1030,7 +895,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
                   <div className="pt-2 border-t border-white/[0.06] flex items-center justify-between">
                     <span className="text-[10px] text-slate-500">
-                      Database: {providerStatus?.database?.type === 'supabase' ? 'Supabase Connected' : 'In-Memory Fallback'}
+                      Storage: On-Device IndexedDB
                     </span>
                     <button
                       type="button"
@@ -1058,305 +923,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
               )}
             </div>
 
-            {/* ============================================================== */}
-            {/* SECTION 4.5: PERSONAL MEMORY PERSISTENCE & CONTROL             */}
-            {/* ============================================================== */}
-            <div className="space-y-3 pt-3 border-t border-white/[0.06]">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Brain className="w-4 h-4 text-purple-400" />
-                  <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                    PERSONAL MEMORY ({memoriesList.length})
-                  </label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={fetchMemories}
-                    disabled={loadingMemories}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-[10px] text-slate-300 transition-colors"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${loadingMemories ? 'animate-spin text-purple-400' : ''}`} />
-                    <span>Refresh</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowMemoriesSection(!showMemoriesSection)}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-[10px] text-purple-300 transition-colors"
-                  >
-                    <span>{showMemoriesSection ? 'Hide' : 'Manage'}</span>
-                    {showMemoriesSection ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-2.5 rounded-xl bg-purple-950/20 border border-purple-500/20 flex items-center justify-between">
-                <div className="min-w-0 pr-2">
-                  <div className="text-xs font-semibold text-purple-200">
-                    {memoriesList.length > 0 ? `${memoriesList.length} Durable Memories Preserved` : 'Zero Noise / Empty Memory Store'}
-                  </div>
-                  <div className="text-[10px] text-purple-300/70 truncate">
-                    Isolated to authenticated user • Recalled automatically across all chats
-                  </div>
-                </div>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 shrink-0">
-                  Supabase RLS
-                </span>
-              </div>
-
-              {showMemoriesSection && (
-                <div className="space-y-2 p-3 rounded-xl bg-[#080c14] border border-white/[0.08] max-h-60 overflow-y-auto">
-                  {memoriesList.length === 0 ? (
-                    <div className="text-center py-4 text-xs text-slate-400">
-                      No memories saved yet. Share meaningful facts, preferences, or goals in chat.
-                    </div>
-                  ) : (
-                    memoriesList.map((mem) => (
-                      <div
-                        key={mem.id}
-                        className="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.05] space-y-1.5"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
-                              {getCategoryLabel(mem.category)}
-                            </span>
-                            <span className={`text-[9px] px-1.5 py-0.5 rounded ${mem.memoryType === 'insight' ? 'bg-indigo-500/20 text-indigo-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
-                              {mem.memoryType === 'insight' ? 'AI Insight' : 'Confirmed Fact'}
-                            </span>
-                            {typeof mem.confidence === 'number' && (
-                              <span className="text-[9px] text-slate-500 font-mono">
-                                {Math.round(mem.confidence * 100)}% conf
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            {editingMemoryId === mem.id ? (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => handleSaveEdit(mem.id)}
-                                  disabled={savingEditId === mem.id || !editingFact.trim()}
-                                  className="px-2 py-0.5 rounded bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 text-[10px] font-medium flex items-center gap-1 transition-colors disabled:opacity-50"
-                                >
-                                  {savingEditId === mem.id ? (
-                                    <RefreshCw className="w-3 h-3 animate-spin" />
-                                  ) : (
-                                    <Check className="w-3 h-3 text-emerald-400" />
-                                  )}
-                                  <span>Save</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={handleCancelEdit}
-                                  disabled={savingEditId === mem.id}
-                                  className="px-2 py-0.5 rounded bg-white/[0.04] hover:bg-white/[0.08] text-slate-400 text-[10px] transition-colors"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => handleStartEdit(mem)}
-                                  className="p-1 rounded text-slate-500 hover:text-purple-300 hover:bg-purple-500/10 transition-colors"
-                                  title="Edit this memory"
-                                >
-                                  <Edit2 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteMemory(mem.id)}
-                                  disabled={deletingMemoryId === mem.id}
-                                  className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-                                  title="Delete this memory"
-                                >
-                                  {deletingMemoryId === mem.id ? (
-                                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
-                                  ) : (
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  )}
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        {editingMemoryId === mem.id ? (
-                          <div className="pt-1">
-                            <input
-                              type="text"
-                              value={editingFact}
-                              onChange={(e) => setEditingFact(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') handleSaveEdit(mem.id);
-                                if (e.key === 'Escape') handleCancelEdit();
-                              }}
-                              className="w-full px-2 py-1 text-xs rounded bg-white/[0.05] border border-purple-500/30 text-white focus:outline-none focus:border-purple-400"
-                              placeholder="Correct or update this memory fact..."
-                              autoFocus
-                            />
-                          </div>
-                        ) : (
-                          <p className="text-xs text-slate-200 break-words leading-relaxed">{mem.fact}</p>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* ============================================================== */}
-            {/* SECTION 5: DATABASE PERSISTENCE & REAL DIAGNOSTICS             */}
-            {/* ============================================================== */}
-            <div className="space-y-3 pt-3 border-t border-white/[0.06]">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Database className="w-4 h-4 text-emerald-400" />
-                  <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                    DATABASE
-                  </label>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleFetchSchema}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-[10px] text-slate-300 transition-colors"
-                >
-                  <FileCode className="w-3 h-3 text-emerald-400" />
-                  <span>Supabase Schema</span>
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <div className="p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06] flex flex-col justify-between">
-                  <span className="text-[10px] text-slate-400">Supabase</span>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        dbHealth?.connected ? 'bg-emerald-400' : 'bg-rose-500'
-                      }`}
-                    />
-                    <span className="text-xs font-semibold text-white">
-                      {dbHealth?.connected ? 'Connected' : 'Not Connected'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06] flex flex-col justify-between">
-                  <span className="text-[10px] text-slate-400">Persistence</span>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        dbHealth?.connected && (dbHealth?.write ?? true)
-                          ? 'bg-emerald-400'
-                          : 'bg-amber-400'
-                      }`}
-                    />
-                    <span className="text-xs font-semibold text-white">
-                      {dbHealth?.connected && (dbHealth?.write ?? true) ? 'Working' : 'In-Memory'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06] flex flex-col justify-between">
-                  <span className="text-[10px] text-slate-400">Last test</span>
-                  <span className="text-xs font-semibold text-slate-200 mt-1 truncate">
-                    {lastDbTestDate || 'Not tested yet'}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleRunDatabaseTest}
-                  disabled={isRunningDbTest}
-                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-semibold text-xs transition-colors disabled:opacity-50"
-                >
-                  {isRunningDbTest ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Executing Database Test Sequence...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Database className="w-3.5 h-3.5" />
-                      <span>RUN DATABASE TEST</span>
-                    </>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowDbDiagnostics(!showDbDiagnostics)}
-                  className="flex items-center gap-1 px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 text-xs transition-colors"
-                >
-                  <span>Diagnostics</span>
-                  {showDbDiagnostics ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-
-              {showDbDiagnostics && (
-                <div className="p-3 rounded-xl bg-[#080c14] border border-white/[0.08] space-y-2.5">
-                  <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300 border-b border-white/[0.06] pb-1.5">
-                    <span>Diagnostic Test Sequence</span>
-                    {dbTestResult?.totalLatencyMs ? (
-                      <span className="text-[10px] text-slate-500">Latency: {dbTestResult.totalLatencyMs}ms</span>
-                    ) : null}
-                  </div>
-
-                  <div className="space-y-1.5 text-xs">
-                    <div className="flex items-center justify-between py-0.5">
-                      <span className="text-slate-300">Database Connection</span>
-                      {renderTestStepBadge(dbTestResult?.connection?.status || (dbHealth?.connected ? 'PASS' : 'FAIL'))}
-                    </div>
-                    <div className="flex items-center justify-between py-0.5">
-                      <span className="text-slate-300">CREATE</span>
-                      {renderTestStepBadge(dbTestResult?.create?.status)}
-                    </div>
-                    <div className="flex items-center justify-between py-0.5">
-                      <span className="text-slate-300">READ</span>
-                      {renderTestStepBadge(dbTestResult?.read?.status)}
-                    </div>
-                    <div className="flex items-center justify-between py-0.5">
-                      <span className="text-slate-300">UPDATE</span>
-                      {renderTestStepBadge(dbTestResult?.update?.status)}
-                    </div>
-                    <div className="flex items-center justify-between py-0.5">
-                      <span className="text-slate-300">DELETE</span>
-                      {renderTestStepBadge(dbTestResult?.delete?.status)}
-                    </div>
-                    <div className="flex items-center justify-between py-0.5">
-                      <span className="text-slate-300">Chat Persistence</span>
-                      {renderTestStepBadge(dbTestResult?.chatPersistence?.status)}
-                    </div>
-                    <div className="flex items-center justify-between py-0.5">
-                      <span className="text-slate-300">Settings Persistence</span>
-                      {renderTestStepBadge(dbTestResult?.settingsPersistence?.status)}
-                    </div>
-                  </div>
-
-                  {(dbTestError || dbTestResult?.create?.error || dbTestResult?.read?.error || dbTestResult?.update?.error || dbTestResult?.delete?.error || dbHealth?.error) && (
-                    <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[11px] space-y-1">
-                      <div className="font-semibold flex items-center gap-1">
-                        <AlertCircle className="w-3.5 h-3.5" />
-                        <span>Developer Diagnostics:</span>
-                      </div>
-                      <p className="font-mono text-[10px] break-words">
-                        {dbTestError ||
-                          dbTestResult?.create?.error ||
-                          dbTestResult?.read?.error ||
-                          dbTestResult?.update?.error ||
-                          dbTestResult?.delete?.error ||
-                          dbHealth?.error}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
 
             {/* ============================================================== */}
             {/* SECTION 6: THEMES & SYSTEM NOTIFICATIONS                       */}
@@ -1558,50 +1124,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Supabase SQL Schema Modal */}
-      {showSchemaModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-2xl bg-[#0e1320] border border-white/[0.08] rounded-2xl shadow-2xl flex flex-col max-h-[85vh]">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-[#090d16]">
-              <div className="flex items-center gap-2">
-                <FileCode className="w-4 h-4 text-emerald-400" />
-                <span className="text-sm font-semibold text-white">Supabase SQL Schema Migration</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowSchemaModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-4 flex-1 overflow-y-auto font-mono text-[11px] text-slate-300 bg-[#070a12]">
-              <pre className="whitespace-pre-wrap">{schemaSql || 'Loading schema...'}</pre>
-            </div>
-            <div className="flex items-center justify-between px-4 py-3 border-t border-white/[0.06] bg-[#090d16]">
-              <span className="text-[11px] text-slate-400">Copy and run in Supabase SQL Editor</span>
-              <button
-                type="button"
-                onClick={handleCopySchema}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors"
-              >
-                {copiedSql ? (
-                  <>
-                    <Check className="w-3.5 h-3.5" />
-                    <span>Copied SQL</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copy SQL</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 };

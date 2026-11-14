@@ -1,9 +1,8 @@
 import crypto from 'node:crypto';
-import { getSupabaseClient } from '../database/supabase';
 
 export interface SystemErrorLogEntry {
   id: string;
-  source: 'chat' | 'ai_provider' | 'memory' | 'web_search' | 'supabase' | 'system' | string;
+  source: 'chat' | 'ai_provider' | 'web_search' | 'system' | string;
   message: string;
   details?: Record<string, any>;
   created_at: string;
@@ -50,8 +49,6 @@ export class ErrorLogService {
       'GEMINI_API_KEY',
       'AI_API_KEY',
       'TAVILY_API_KEY',
-      'SUPABASE_SERVICE_ROLE_KEY',
-      'SUPABASE_ANON_KEY',
     ];
     for (const envKey of sensitiveEnvKeys) {
       const val = process.env[envKey]?.trim();
@@ -86,11 +83,10 @@ export class ErrorLogService {
   }
 
   /**
-   * Captures an error or warning into the in-memory circular buffer and asynchronously
-   * writes it to the Supabase `system_error_logs` table.
+   * Captures an error or warning into the in-memory circular buffer.
    */
   public static log(
-    source: 'chat' | 'ai_provider' | 'memory' | 'web_search' | 'supabase' | 'system' | string,
+    source: 'chat' | 'ai_provider' | 'web_search' | 'system' | string,
     message: string | Error,
     details?: Record<string, any>
   ): SystemErrorLogEntry {
@@ -106,68 +102,20 @@ export class ErrorLogService {
       created_at: new Date().toISOString(),
     };
 
-    // 1. Maintain in-memory buffer capped at MAX_BUFFER_SIZE entries
+    // Maintain in-memory buffer capped at MAX_BUFFER_SIZE entries
     this.buffer.unshift(entry);
     if (this.buffer.length > this.MAX_BUFFER_SIZE) {
       this.buffer.length = this.MAX_BUFFER_SIZE;
-    }
-
-    // 2. Asynchronously save to Supabase system_error_logs table if available
-    const client = getSupabaseClient();
-    if (client) {
-      Promise.resolve(
-        client
-          .from('system_error_logs')
-          .insert({
-            id: entry.id,
-            source: entry.source,
-            message: entry.message,
-            details: entry.details,
-            created_at: entry.created_at,
-          })
-      )
-        .then((result: any) => {
-          if (result?.error) {
-            console.warn('[ErrorLogService] Notice writing to system_error_logs table:', result.error.message);
-          }
-        })
-        .catch(() => {
-          // Silent catch to prevent secondary error storms
-        });
     }
 
     return entry;
   }
 
   /**
-   * Retrieves the latest entries from the memory buffer, with optional fallback/merge from Supabase
+   * Retrieves the latest entries from the in-memory buffer
    */
   public static async getRecentErrors(limit = 20): Promise<SystemErrorLogEntry[]> {
     const safeLimit = Math.min(Math.max(1, limit), 100);
-
-    // If buffer has items, return the requested limit
-    if (this.buffer.length > 0) {
-      return this.buffer.slice(0, safeLimit);
-    }
-
-    // Attempt to query Supabase if buffer is fresh or empty
-    const client = getSupabaseClient();
-    if (client) {
-      try {
-        const { data, error } = await client
-          .from('system_error_logs')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(safeLimit);
-
-        if (!error && data && data.length > 0) {
-          return data as SystemErrorLogEntry[];
-        }
-      } catch {
-        // Fall back to buffer
-      }
-    }
-
     return this.buffer.slice(0, safeLimit);
   }
 

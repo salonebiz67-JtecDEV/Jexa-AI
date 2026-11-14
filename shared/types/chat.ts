@@ -13,32 +13,11 @@ export type AIActivityStatus =
   | 'Reading sources...'
   | 'Reading web pages...'
   | 'Analyzing sources...'
-  | 'Checking relevant memories...'
-  | 'Checking memories...'
-  | 'Identifying useful memory…'
-  | 'Saving memory...'
-  | 'Saving memory…'
-  | 'Memory saved'
-  | 'Memory saved — User Profile'
-  | 'Memory saved — Preferences & Settings'
-  | 'Memory saved — Relationships & Important Dates'
-  | 'Memory saved — Projects & Goals'
-  | 'Memory saved — Conversation Insights'
-  | 'Memory updated'
-  | 'Memory updated — User Profile'
-  | 'Memory updated — Preferences & Settings'
-  | 'Memory updated — Relationships & Important Dates'
-  | 'Memory updated — Projects & Goals'
-  | 'Memory updated — Conversation Insights'
-  | 'Memory unavailable'
-  | 'Memory retrieval failed'
-  | 'Memory storage unavailable'
   | 'Processing information...'
   | 'Preparing answer...'
   | 'Answer complete'
   | 'Search failed — retry available'
   | 'Checking servers…'
-  | 'Checking Supabase…'
   | 'Reading error logs…'
   | 'Reading source code…'
   | 'Searching code…'
@@ -71,9 +50,6 @@ export interface ChatMessageMetadata {
   isDevelopmentMock?: boolean;
   fallbackUsed?: boolean;
   originalProvider?: string;
-  memoriesReferenced?: string[];
-  memoryActionTaken?: 'saved' | 'updated' | 'deleted' | 'already_remembered' | 'none' | 'failed' | 'privacy_skipped';
-  memoryFactSaved?: string;
   // Web search metadata & clickable citations
   sources?: WebSearchResultItem[];
   searchQuery?: string;
@@ -95,6 +71,11 @@ export interface ChatMessage {
   metadata?: ChatMessageMetadata;
 }
 
+export interface ClientHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface StreamChatStatusEvent {
   type: 'status';
   status: AIActivityStatus;
@@ -102,8 +83,6 @@ export interface StreamChatStatusEvent {
     query?: string;
     sourcesCount?: number;
     error?: string;
-    memoryFact?: string;
-    memoryAction?: string;
     sources?: WebSearchResultItem[];
     searchStatus?: 'success' | 'failed' | 'missing_key' | 'unneeded' | 'no_results';
     searchTrigger?: 'manual' | 'automatic' | 'none';
@@ -141,7 +120,6 @@ export type StreamChatEvent =
 
 export interface Conversation {
   id: string;
-  userId?: string;
   title: string;
   createdAt: string;
   updatedAt: string;
@@ -154,15 +132,16 @@ export interface Conversation {
 
 export interface SendMessagePayload {
   conversationId?: string;
-  userId?: string;
   message: string;
+  history?: ClientHistoryMessage[];
+  aboutMe?: string;
+  behaviorInstructions?: string;
   stream?: boolean;
   personaId?: string;
   textProvider?: TextProviderType;
   textModel?: string;
   backupModel?: string;
   isVoiceMode?: boolean;
-  isOwner?: boolean;
   userContext?: {
     userName?: string;
     timezone?: string;
@@ -175,5 +154,4 @@ export interface ChatResponsePayload {
   userMessage?: ChatMessage;
   conversationId: string;
   isNewConversation: boolean;
-  memoriesRetrieved?: string[];
 }

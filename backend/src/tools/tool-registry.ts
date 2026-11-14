@@ -1,8 +1,5 @@
 import { InternalToolDefinition, InternalToolContext, ToolInputSchema } from '../../../shared/types/tools';
 import { webSearchTool } from './definitions/web-search.tool';
-import { memorySearchTool } from './definitions/memory-search.tool';
-import { pastConversationsTool } from './definitions/past-conversations.tool';
-import { researchHistoryTool } from './definitions/research-history.tool';
 import { systemTimeTool } from './definitions/system-time.tool';
 import { systemCheckTool } from './definitions/system-check.tool';
 import { recentErrorsTool } from './definitions/recent-errors.tool';
@@ -77,12 +74,9 @@ export class ToolRegistry {
     const today = this.getTodayDateStr();
     const result: ToolStatusItem[] = [];
 
-    // Ensure our 10 standard tools appear in the specified canonical order
+    // Ensure our 7 standard stateless tools appear in canonical order
     const canonicalOrder = [
       'web_search',
-      'memory_search',
-      'past_conversations_search',
-      'research_history_search',
       'system_time',
       'system_check',
       'recent_errors',
@@ -130,9 +124,6 @@ export class ToolRegistry {
 
   private registerBuiltInTools(): void {
     this.registerTool(webSearchTool);
-    this.registerTool(memorySearchTool);
-    this.registerTool(pastConversationsTool);
-    this.registerTool(researchHistoryTool);
     this.registerTool(systemTimeTool);
     this.registerTool(systemCheckTool);
     this.registerTool(recentErrorsTool);

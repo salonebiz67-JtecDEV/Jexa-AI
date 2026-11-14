@@ -2,14 +2,11 @@ import { Request, Response } from 'express';
 import { ChatService } from '../services/chat.service';
 import { SendMessagePayload, StreamChatEvent } from '../../../shared/types/chat';
 import { formatCleanProviderError } from '../../../shared/types/provider';
-import { getResolvedUserId } from '../middleware/auth.middleware';
 import { ErrorLogService } from '../services/error-log.service';
 
 export class ChatController {
   public static async sendMessage(req: Request, res: Response): Promise<void> {
     const payload: SendMessagePayload = req.body || {};
-    const userId = getResolvedUserId(req);
-    payload.userId = userId;
 
     if (!payload.message || typeof payload.message !== 'string' || !payload.message.trim()) {
       res.status(400).json({ success: false, error: 'A non-empty message string is required.' });
@@ -80,7 +77,6 @@ export class ChatController {
       } catch (error: any) {
         console.error('[ChatController] Stream error processing message:', error);
         ErrorLogService.log('chat', error, {
-          userId,
           conversationId: payload.conversationId,
           stream: true,
         });
@@ -112,7 +108,6 @@ export class ChatController {
     } catch (error: any) {
       console.error('[ChatController] Error processing message:', error);
       ErrorLogService.log('chat', error, {
-        userId,
         conversationId: payload.conversationId,
         stream: false,
       });

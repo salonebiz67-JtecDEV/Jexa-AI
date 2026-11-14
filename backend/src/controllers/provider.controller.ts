@@ -1,18 +1,15 @@
 import { Request, Response } from 'express';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
-import { DatabaseService } from '../database/db-service';
 import { isTtsModel } from '../../../shared/types/provider';
-import { getResolvedUserId } from '../middleware/auth.middleware';
+import { getInMemoryBrainProfile, updateInMemoryBrainProfile } from './brain.controller';
 
 export class ProviderController {
-  public static async getStatus(req: Request, res: Response): Promise<void> {
+  public static async getStatus(_req: Request, res: Response): Promise<void> {
     try {
-      const userId = getResolvedUserId(req);
-      const isDbConnected = await DatabaseService.isConnected();
-      const profile = await DatabaseService.getBrainProfile(userId);
+      const profile = getInMemoryBrainProfile();
       const registry = AIProviderRegistry.getInstance();
       const status = registry.getStatus(
-        isDbConnected,
+        false,
         'gemini',
         'gemini',
         profile.selectedTextModel,
@@ -65,7 +62,6 @@ export class ProviderController {
           ? req.body.voiceModel.trim()
           : undefined;
       const theme: any = req.body?.theme;
-      const userId = getResolvedUserId(req);
 
       if (textModel && isTtsModel(textModel)) {
         res.status(400).json({
@@ -100,14 +96,14 @@ export class ProviderController {
         ...(voiceModel ? { voiceModel } : {}),
       });
 
-      const updated = await DatabaseService.updateBrainProfile({
+      const updated = updateInMemoryBrainProfile({
         selectedTextProvider: 'gemini',
         selectedVoiceProvider: 'gemini',
         ...(textModel ? { selectedTextModel: textModel } : {}),
         ...(backupModel ? { selectedBackupModel: backupModel } : {}),
         ...(voiceModel ? { selectedVoiceModel: voiceModel } : {}),
         ...(theme ? { theme } : {}),
-      }, userId);
+      });
 
       res.status(200).json({
         success: true,
