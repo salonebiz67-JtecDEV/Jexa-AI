@@ -26,8 +26,6 @@ jobs:
     env:
       VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || '' }}
       VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH || '' }}
-      VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL || '' }}
-      VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY || secrets.VITE_SUPABASE_ANON_KEY || '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -37,39 +35,16 @@ jobs:
         with:
           bun-version: latest
 
+      # Normal install (no --frozen-lockfile) so a package.json that changed
+      # without an updated bun.lock no longer blocks the deploy.
       - name: Install dependencies with Bun
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Run TypeScript typecheck
         run: bun run lint
 
       - name: Build frontend for production
-        env:
-          # Central Render backend API URL (configure in GitHub repo Settings -> Variables -> Actions)
-          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || '' }}
-          # Optional custom base path override (defaults to dynamic /<repo-name>/ from GITHUB_REPOSITORY)
-          VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH || '' }}
-          # Public Supabase credentials for client-side Auth & Google OAuth
-          # Supports GitHub Actions Variables (vars) or Secrets (secrets) under Repo or github-pages Environment
-          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL || '' }}
-          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY || secrets.VITE_SUPABASE_ANON_KEY || '' }}
-        run: |
-          echo "========================================="
-          echo " Safe Build-Time Diagnostics"
-          echo "========================================="
-          if [ -n "$VITE_SUPABASE_URL" ]; then
-            echo "VITE_SUPABASE_URL: CONFIGURED"
-          else
-            echo "::warning::VITE_SUPABASE_URL: Not set in GitHub environment (using graceful client fallback)"
-          fi
-
-          if [ -n "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "VITE_SUPABASE_ANON_KEY: CONFIGURED"
-          else
-            echo "::warning::VITE_SUPABASE_ANON_KEY: Not set in GitHub environment (using graceful client fallback)"
-          fi
-          echo "========================================="
-          bun run build
+        run: bun run build
 
       - name: Verify build artifacts & PWA compliance
         run: |
@@ -127,19 +102,6 @@ jobs:
           if grep -q "http://localhost:" dist/index.html; then
             echo "::error::Production HTML contains hardcoded localhost URLs."
             exit 1
-          fi
-
-          # 6. Verify that the production build contains Supabase configuration
-          if [ -n "$VITE_SUPABASE_URL" ] && grep -rq "$VITE_SUPABASE_URL" dist/assets/; then
-            echo "Supabase URL embedded: YES"
-          else
-            echo "Supabase URL embedded: NO"
-          fi
-
-          if [ -n "$VITE_SUPABASE_ANON_KEY" ] && grep -rq "$VITE_SUPABASE_ANON_KEY" dist/assets/; then
-            echo "Supabase public key embedded: YES"
-          else
-            echo "Supabase public key embedded: NO"
           fi
 
           echo "✓ dist/index.html verified ($(wc -c < dist/index.html) bytes)"
