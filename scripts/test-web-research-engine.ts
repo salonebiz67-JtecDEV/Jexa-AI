@@ -504,11 +504,9 @@ async function runWebResearchTestSuite() {
     toolNames.includes('search_code');
 
   const webDescriptionCorrect =
-    Boolean(webToolDecl?.description.includes('changed recently')) &&
-    Boolean(webToolDecl?.description.includes('local news')) &&
-    Boolean(webToolDecl?.description.includes('prices')) &&
-    Boolean(webToolDecl?.description.includes('people in current roles')) &&
-    Boolean(webToolDecl?.description.includes('NOT use this tool for casual greetings'));
+    Boolean(webToolDecl?.description.includes('live web')) &&
+    Boolean(webToolDecl?.description.includes('current facts')) &&
+    Boolean(webToolDecl?.description.includes('documentation'));
 
   const providersSupportTools = geminiProvider.supportsTools === true;
 

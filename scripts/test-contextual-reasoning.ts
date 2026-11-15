@@ -82,7 +82,9 @@ async function runContextualReasoningSuite() {
   const prompt = assembled.systemPrompt;
   const hasAboutMe = prompt.includes('Johnny') && prompt.includes('Mariama');
   const hasBehavior = prompt.includes('practical TypeScript examples');
-  const hasHonesty = prompt.includes('Never pretend') || prompt.includes('Never invent');
+  const hasHonesty =
+    prompt.includes('pretend to recall earlier chats') &&
+    prompt.includes('NEVER make up facts');
 
   console.log('  System prompt check:', {
     hasAboutMe,
