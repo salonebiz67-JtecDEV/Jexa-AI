@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Plus, FolderKanban, MessageSquare, ArrowRight, Trash2, X } from 'lucide-react';
 import { Project, Conversation } from '../../../shared/types';
 
@@ -29,6 +29,22 @@ export const ProjectPanel: React.FC<ProjectPanelProps> = ({
   const [newTitle, setNewTitle] = useState('');
   const [newDesc, setNewDesc] = useState('');
 
+  useEffect(() => {
+    const handleHardwareBack = (e: Event) => {
+      if (isCreating) {
+        e.preventDefault();
+        setIsCreating(false);
+        return;
+      }
+      if (mobileView === 'detail') {
+        e.preventDefault();
+        setMobileView('list');
+      }
+    };
+    window.addEventListener('jexa:hardware-back', handleHardwareBack);
+    return () => window.removeEventListener('jexa:hardware-back', handleHardwareBack);
+  }, [isCreating, mobileView]);
+
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || projects[0] || null;
 
   const handleCreate = (e: React.FormEvent) => {
@@ -55,33 +71,35 @@ export const ProjectPanel: React.FC<ProjectPanelProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full bg-[#07090e] overflow-hidden">
       {/* Top Header with Prominent Back Button */}
-      <div className="flex items-center justify-between h-14 px-4 border-b border-white/[0.06] bg-[#080b12] shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            onClick={handleHeaderBack}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.06] transition-colors shrink-0"
-            aria-label={mobileView === 'detail' ? 'Back to project list' : 'Back to chat'}
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>{mobileView === 'detail' ? 'Projects' : 'Back'}</span>
-          </button>
-          <div className="h-4 w-px bg-white/[0.08] shrink-0" />
-          <h1 className="text-sm font-semibold text-white truncate">
-            {mobileView === 'detail' && selectedProject ? selectedProject.name : 'Projects'}
-          </h1>
-        </div>
+      <header className="shrink-0 border-b border-white/[0.06] bg-[#080b12] pt-safe pl-safe pr-safe">
+        <div className="flex items-center justify-between h-14 px-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              onClick={handleHeaderBack}
+              className="min-h-[44px] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.06] transition-colors shrink-0"
+              aria-label={mobileView === 'detail' ? 'Back to project list' : 'Back to chat'}
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>{mobileView === 'detail' ? 'Projects' : 'Back'}</span>
+            </button>
+            <div className="h-4 w-px bg-white/[0.08] shrink-0" />
+            <h1 className="text-sm font-semibold text-white truncate">
+              {mobileView === 'detail' && selectedProject ? selectedProject.name : 'Projects'}
+            </h1>
+          </div>
 
-        <button
-          onClick={() => setIsCreating(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors shrink-0"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>New Project</span>
-        </button>
-      </div>
+          <button
+            onClick={() => setIsCreating(true)}
+            className="min-h-[38px] flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors shrink-0"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>New Project</span>
+          </button>
+        </div>
+      </header>
 
       {/* Main Grid: Projects List + Project Detail */}
-      <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden pb-safe pl-safe pr-safe">
         {/* Left: Project Cards (Hidden on mobile when viewing detail) */}
         <div className={`w-full md:w-80 border-r border-white/[0.06] p-4 overflow-y-auto space-y-2 shrink-0 ${mobileView === 'detail' ? 'hidden md:block' : 'block'}`}>
           <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider px-2">
@@ -190,7 +208,7 @@ export const ProjectPanel: React.FC<ProjectPanelProps> = ({
 
       {/* Create Project Modal */}
       {isCreating && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm pt-safe pb-safe pl-safe pr-safe">
           <div className="relative w-full max-w-md bg-[#0f1422] border border-white/[0.08] rounded-2xl p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-sm text-white">Create New Project</h3>

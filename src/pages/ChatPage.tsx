@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AlertTriangle, ArrowRight, X } from 'lucide-react';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Sidebar, ActiveNavTab } from '../components/layout/Sidebar';
 import { ChatHeader } from '../components/layout/ChatHeader';
 import { MessageList } from '../components/chat/MessageList';
@@ -16,6 +17,7 @@ import { SearchDialog } from '../components/dialogs/SearchDialog';
 import { ShareDialog } from '../components/dialogs/ShareDialog';
 import { SettingsDialog } from '../components/dialogs/SettingsDialog';
 import { PWAInstallBanner } from '../components/common/PWAInstallBanner';
+import { ServerUnreachableBanner } from '../components/common/ServerUnreachableBanner';
 import { OfflineIndicator } from '../components/common/OfflineIndicator';
 import { ToastContainer } from '../components/common/ToastContainer';
 import { useChat } from '../hooks/useChat';
@@ -24,7 +26,12 @@ import { AudioPlayer, AudioPlayerSnapshot } from '../services/audioPlayer';
 import { safeStorage } from '../services/storage';
 import { localChatDb } from '../services/localChatDb';
 import { showToast } from '../services/toast';
-import { ApiClient } from '../services/api.client';
+import { ApiClient, subscribeServerReachability } from '../services/api.client';
+import {
+  registerNotificationTapListener,
+  syncScheduleReminders,
+} from '../services/notifications';
+import { isNative } from '../utils/platform';
 import {
   Project,
   ImageItem,
@@ -64,6 +71,7 @@ export const ChatPage: React.FC = () => {
   const [settingsOpen, setSettingsOpen] = useState(() => {
     return typeof window !== 'undefined' && window.location.pathname.toLowerCase().endsWith('/settings');
   });
+  const [serverUnreachable, setServerUnreachable] = useState(false);
 
   // Voice engine error & fallback notification banner
   const [voiceNotification, setVoiceNotification] = useState<{
@@ -150,9 +158,11 @@ export const ChatPage: React.FC = () => {
 
   const navigateToTab = useCallback((tab: ActiveNavTab) => {
     if (tab !== activeTab) {
-      const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-      const targetPath = tab === 'chat' ? (base || '/') : `${base}/${tab}`;
-      window.history.pushState({ tab }, '', targetPath);
+      if (!isNative()) {
+        const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+        const targetPath = tab === 'chat' ? (base || '/') : `${base}/${tab}`;
+        window.history.pushState({ tab }, '', targetPath);
+      }
       setActiveTab(tab);
       setCurrentArtifact(null);
     }
@@ -164,15 +174,59 @@ export const ChatPage: React.FC = () => {
       return;
     }
     if (activeTab !== 'chat') {
-      if (window.history.state?.tab) {
+      if (!isNative() && window.history.state?.tab) {
         window.history.back();
       } else {
-        const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-        window.history.pushState({ tab: 'chat' }, '', base || '/');
+        if (!isNative()) {
+          const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+          window.history.pushState({ tab: 'chat' }, '', base || '/');
+        }
         setActiveTab('chat');
       }
     }
   }, [activeTab, currentArtifact]);
+
+  // Monitor backend reachability on startup, resume, and request failures
+  useEffect(() => {
+    const unsub = subscribeServerReachability(setServerUnreachable);
+    void ApiClient.checkServerReachability();
+
+    const handleResumeCheck = (e: Event) => {
+      const detail = (e as CustomEvent<{ isActive?: boolean }>).detail;
+      if (detail?.isActive) {
+        void ApiClient.checkServerReachability();
+      }
+    };
+    window.addEventListener('jexa:app-state-change', handleResumeCheck);
+
+    return () => {
+      unsub();
+      window.removeEventListener('jexa:app-state-change', handleResumeCheck);
+    };
+  }, []);
+
+  const handleRetryServer = useCallback(async () => {
+    const ok = await ApiClient.checkServerReachability();
+    if (ok) {
+      showToast('Connected to server', 'success');
+    } else {
+      showToast('Cannot reach server', 'error');
+    }
+    return ok;
+  }, []);
+
+  // Open the target conversation when user taps a background reply notification
+  useEffect(() => {
+    return registerNotificationTapListener((conversationId) => {
+      selectConversation(conversationId);
+      setActiveTab('chat');
+      setCurrentArtifact(null);
+      setSidebarOpen(false);
+      setSearchOpen(false);
+      setShareOpen(false);
+      setSettingsOpen(false);
+    });
+  }, [selectConversation]);
 
   // Projects State
   const [projects, setProjects] = useState<Project[]>([
@@ -253,25 +307,46 @@ export const ChatPage: React.FC = () => {
     },
   ]);
 
-  // Schedule State
-  const [schedules, setSchedules] = useState<ScheduleItem[]>([
-    {
-      id: 'sch-1',
-      title: 'Morning Intelligence Brief',
-      frequency: 'Daily',
-      time: '08:00 AM',
-      active: true,
-      nextRun: 'Tomorrow at 8:00 AM',
-    },
-    {
-      id: 'sch-2',
-      title: 'Weekly Sprint & Project Recap',
-      frequency: 'Weekly (Monday)',
-      time: '09:00 AM',
-      active: true,
-      nextRun: 'Monday at 9:00 AM',
-    },
-  ]);
+  // Schedule State (persisted locally + synced with native/web reminders)
+  const [schedules, setSchedules] = useState<ScheduleItem[]>(() => {
+    const defaultSchedules: ScheduleItem[] = [
+      {
+        id: 'sch-1',
+        title: 'Morning Intelligence Brief',
+        frequency: 'Daily',
+        time: '08:00 AM',
+        active: true,
+        nextRun: 'Tomorrow at 8:00 AM',
+      },
+      {
+        id: 'sch-2',
+        title: 'Weekly Sprint & Project Recap',
+        frequency: 'Weekly (Monday)',
+        time: '09:00 AM',
+        active: true,
+        nextRun: 'Monday at 9:00 AM',
+      },
+    ];
+    try {
+      const saved = safeStorage.getItem('jexa_schedules_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore parse errors
+    }
+    return defaultSchedules;
+  });
+
+  useEffect(() => {
+    try {
+      safeStorage.setItem('jexa_schedules_v1', JSON.stringify(schedules));
+    } catch {
+      // ignore storage errors
+    }
+    void syncScheduleReminders(schedules);
+  }, [schedules]);
 
   // Plugins State
   const [plugins, setPlugins] = useState<PluginItem[]>([
@@ -327,6 +402,96 @@ export const ChatPage: React.FC = () => {
       refreshMessages();
     },
   });
+
+  // Android Hardware Back Button:
+  // 1) Close any open modal, sheet, dialog, or sidebar drawer
+  // 2) Return from Settings, Tools, or other sub-screens to main chat
+  // 3) Minimize the app on the main chat screen
+  const backStateRef = useRef({
+    liveVoiceOpen: false,
+    closeLiveMode: liveVoice.closeLiveMode,
+    settingsOpen: false,
+    searchOpen: false,
+    shareOpen: false,
+    sidebarOpen: false,
+    hasArtifact: false,
+    activeTab: 'chat' as ActiveNavTab,
+  });
+
+  backStateRef.current = {
+    liveVoiceOpen: liveVoice.isOpen,
+    closeLiveMode: liveVoice.closeLiveMode,
+    settingsOpen,
+    searchOpen,
+    shareOpen,
+    sidebarOpen,
+    hasArtifact: Boolean(currentArtifact),
+    activeTab,
+  };
+
+  useEffect(() => {
+    if (!isNative()) return;
+
+    let disposed = false;
+    let listenerHandle: { remove: () => Promise<void> } | null = null;
+
+    void CapacitorApp.addListener('backButton', () => {
+      const hardwareBackEvent = new CustomEvent('jexa:hardware-back', { cancelable: true });
+      window.dispatchEvent(hardwareBackEvent);
+      if (hardwareBackEvent.defaultPrevented) {
+        return;
+      }
+
+      const st = backStateRef.current;
+      if (st.liveVoiceOpen) {
+        st.closeLiveMode();
+        return;
+      }
+      if (st.settingsOpen) {
+        setSettingsOpen(false);
+        return;
+      }
+      if (st.searchOpen) {
+        setSearchOpen(false);
+        return;
+      }
+      if (st.shareOpen) {
+        setShareOpen(false);
+        return;
+      }
+      if (st.sidebarOpen) {
+        setSidebarOpen(false);
+        return;
+      }
+      if (st.hasArtifact) {
+        setCurrentArtifact(null);
+        return;
+      }
+      if (st.activeTab !== 'chat') {
+        setActiveTab('chat');
+        return;
+      }
+
+      void CapacitorApp.minimizeApp();
+    })
+      .then((handle) => {
+        if (disposed) {
+          void handle.remove();
+        } else {
+          listenerHandle = handle;
+        }
+      })
+      .catch(() => {
+        // Ignore if plugin unavailable
+      });
+
+    return () => {
+      disposed = true;
+      if (listenerHandle) {
+        void listenerHandle.remove();
+      }
+    };
+  }, []);
 
 
   // Add Conversation to Project
@@ -631,8 +796,14 @@ export const ChatPage: React.FC = () => {
               }}
             />
 
-            {/* Subtle PWA In-App Install Banner (Dismissible, only active if installable) */}
+            {/* Subtle PWA In-App Install Banner (Dismissible, automatically hidden in native mode) */}
             <PWAInstallBanner />
+
+            {/* Clear unreachable server banner with Retry button */}
+            <ServerUnreachableBanner
+              visible={serverUnreachable}
+              onRetry={handleRetryServer}
+            />
 
             {/* Main Conversation Feed (only this area scrolls; bottom padding tracks composer height) */}
             <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">

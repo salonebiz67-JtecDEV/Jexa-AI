@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { isNative } from '../utils/platform';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -8,9 +9,11 @@ interface BeforeInstallPromptEvent extends Event {
 const DISMISSED_KEY = 'jexa_pwa_install_dismissed';
 
 export function usePWAInstall() {
+  const native = isNative();
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(native);
   const [isDismissed, setIsDismissed] = useState(() => {
+    if (native) return true;
     try {
       return localStorage.getItem(DISMISSED_KEY) === 'true';
     } catch {
@@ -20,6 +23,12 @@ export function usePWAInstall() {
   const [isIOS, setIsIOS] = useState(false);
 
   useEffect(() => {
+    if (native) {
+      setIsInstalled(true);
+      setIsIOS(false);
+      return;
+    }
+
     // Check if running in standalone PWA mode
     const isStandalone =
       typeof window !== 'undefined' &&
@@ -53,10 +62,10 @@ export function usePWAInstall() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
-  }, []);
+  }, [native]);
 
   const install = useCallback(async () => {
-    if (!deferredPrompt) return false;
+    if (native || !deferredPrompt) return false;
     try {
       await deferredPrompt.prompt();
       const { outcome } = await deferredPrompt.userChoice;
@@ -69,7 +78,7 @@ export function usePWAInstall() {
       console.warn('[usePWAInstall] Install prompt error:', err);
     }
     return false;
-  }, [deferredPrompt]);
+  }, [deferredPrompt, native]);
 
   const dismiss = useCallback(() => {
     setIsDismissed(true);
@@ -81,10 +90,10 @@ export function usePWAInstall() {
   }, []);
 
   return {
-    isInstallable: !!deferredPrompt && !isInstalled && !isDismissed,
-    canPrompt: !!deferredPrompt,
+    isInstallable: !native && !!deferredPrompt && !isInstalled && !isDismissed,
+    canPrompt: !native && !!deferredPrompt,
     isInstalled,
-    isIOS: isIOS && !isInstalled && !isDismissed,
+    isIOS: !native && isIOS && !isInstalled && !isDismissed,
     install,
     dismiss,
   };

@@ -82,6 +82,22 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const isUser = message.role === 'user';
 
   useEffect(() => {
+    const handleHardwareBack = (e: Event) => {
+      if (showTelemetryPopup) {
+        e.preventDefault();
+        setShowTelemetryPopup(false);
+        return;
+      }
+      if (showMoreMenu) {
+        e.preventDefault();
+        setShowMoreMenu(false);
+      }
+    };
+    window.addEventListener('jexa:hardware-back', handleHardwareBack);
+    return () => window.removeEventListener('jexa:hardware-back', handleHardwareBack);
+  }, [showTelemetryPopup, showMoreMenu]);
+
+  useEffect(() => {
     if (!showTelemetryPopup) return;
     const handleOutside = (e: MouseEvent) => {
       if (telemetryRef.current && !telemetryRef.current.contains(e.target as Node)) {

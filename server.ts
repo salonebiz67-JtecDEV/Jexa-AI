@@ -20,13 +20,23 @@ const app = express();
 const PORT = Number(process.env.PORT) || (process.env.NODE_ENV === 'production' ? 10000 : 3000);
 const isProd = process.env.NODE_ENV === 'production';
 
-// Production CORS Configuration: Allows GitHub Pages (*.github.io), custom FRONTEND_URL, and local dev
+// Production CORS Configuration: Allows Capacitor WebView origins, GitHub Pages (*.github.io), custom FRONTEND_URL, and local dev
 const customFrontendUrl = (process.env.FRONTEND_URL || process.env.CORS_ORIGIN || '').replace(/\/+$/, '');
+const CAPACITOR_NATIVE_ORIGINS = new Set([
+  'https://localhost',
+  'http://localhost',
+  'capacitor://localhost',
+]);
 
 app.use(cors({
   origin: (origin, callback) => {
     // Allow non-browser requests (health checks, server-to-server, curl, tools)
     if (!origin) {
+      return callback(null, true);
+    }
+
+    // Explicitly accept Capacitor native Android/iOS WebView origins in all environments
+    if (CAPACITOR_NATIVE_ORIGINS.has(origin)) {
       return callback(null, true);
     }
 

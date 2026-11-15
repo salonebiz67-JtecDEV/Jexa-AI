@@ -116,7 +116,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   if (messages.length === 0) {
     return (
       <div
-        className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-none flex items-center justify-center p-4"
+        className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-none flex items-center justify-center p-4 pl-safe pr-safe"
         style={{ paddingBottom: `${effectiveBottomPadding}px` }}
       >
         <ConversationStarters onSelectPrompt={onSelectPrompt} />
@@ -130,7 +130,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-none pt-3 px-1.5 sm:px-3 space-y-1.5 max-w-3xl lg:max-w-4xl w-full mx-auto"
+        className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-none pt-3 px-1.5 sm:px-3 pl-safe pr-safe space-y-1.5 max-w-3xl lg:max-w-4xl w-full mx-auto"
         style={{ paddingBottom: `${effectiveBottomPadding}px` }}
       >
         {messages.map((message) => {

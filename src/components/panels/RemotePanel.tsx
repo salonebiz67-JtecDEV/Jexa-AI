@@ -11,23 +11,25 @@ export const RemotePanel: React.FC<RemotePanelProps> = ({ onBack, devices }) => 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#07090e] overflow-hidden">
       {/* Top Header with Back Button */}
-      <div className="flex items-center justify-between h-14 px-4 border-b border-white/[0.06] bg-[#080b12] shrink-0">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.06] transition-colors"
-            aria-label="Back to chat"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Back</span>
-          </button>
-          <div className="h-4 w-px bg-white/[0.08]" />
-          <h1 className="text-sm font-semibold text-white">Remote Sync</h1>
+      <header className="shrink-0 border-b border-white/[0.06] bg-[#080b12] pt-safe pl-safe pr-safe">
+        <div className="flex items-center justify-between h-14 px-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="min-h-[44px] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.06] transition-colors"
+              aria-label="Back to chat"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back</span>
+            </button>
+            <div className="h-4 w-px bg-white/[0.08]" />
+            <h1 className="text-sm font-semibold text-white">Remote Sync</h1>
+          </div>
         </div>
-      </div>
+      </header>
 
       {/* Device List */}
-      <div className="flex-1 p-6 overflow-y-auto max-w-2xl space-y-4">
+      <div className="flex-1 p-6 overflow-y-auto max-w-2xl space-y-4 pb-safe pl-safe pr-safe">
         <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider px-1">
           ACTIVE SESSIONS
         </div>

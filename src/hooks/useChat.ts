@@ -15,6 +15,7 @@ import {
 import { deriveConversationTitle, localChatDb } from '../services/localChatDb';
 import { AudioPlayer } from '../services/audioPlayer';
 import { showToast } from '../services/toast';
+import { notifyReplyReceived } from '../services/notifications';
 
 const ACTIVE_CONV_STORAGE_KEY = 'jexa_active_conv_id';
 
@@ -427,6 +428,11 @@ export function useChat() {
             });
         }
 
+        void notifyReplyReceived({
+          conversationId: activeConvId,
+          content: savedAssistantMsg.content,
+        });
+
         setActivityStatus('Answer complete');
         setTimeout(() => {
           setIsSending(false);
@@ -453,7 +459,11 @@ export function useChat() {
         });
 
         let userHelpMessage = err.message || 'Gemini failed to respond. Please try again.';
-        if (err.code === 'MODEL_NOT_FOUND') {
+        if (err.code === 'NETWORK_FAILURE') {
+          userHelpMessage = 'Cannot reach server. Please check your internet connection and tap Retry.';
+        } else if (err.code === 'REQUEST_TIMEOUT') {
+          userHelpMessage = 'Cannot reach server (request timed out). Tap Retry to try again.';
+        } else if (err.code === 'MODEL_NOT_FOUND') {
           userHelpMessage = `The selected Gemini model${err.model ? ` (${err.model})` : ''} was not found (${err.message}). Choose another Gemini model in Settings or try again.`;
         } else if (err.code === 'AUTHENTICATION_ERROR') {
           userHelpMessage = 'Gemini authentication failed. Please verify your GEMINI_API_KEY configuration.';

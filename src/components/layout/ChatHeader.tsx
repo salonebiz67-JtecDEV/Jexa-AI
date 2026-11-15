@@ -28,20 +28,31 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const [titleValue, setTitleValue] = useState(activeConversation?.title || 'JEXA');
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Close menu on click outside
+  // Close menu on click outside or Android hardware back button
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setMenuOpen(false);
       }
     };
+    const handleHardwareBack = (e: Event) => {
+      if (menuOpen) {
+        e.preventDefault();
+        setMenuOpen(false);
+      } else if (isEditingTitle) {
+        e.preventDefault();
+        setIsEditingTitle(false);
+      }
+    };
     if (menuOpen) {
       document.addEventListener('mousedown', handleClickOutside);
     }
+    window.addEventListener('jexa:hardware-back', handleHardwareBack);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('jexa:hardware-back', handleHardwareBack);
     };
-  }, [menuOpen]);
+  }, [menuOpen, isEditingTitle]);
 
   const handleTitleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,7 +65,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const displayTitle = activeConversation?.title || 'JEXA';
 
   return (
-    <header className="relative z-30 shrink-0 w-full bg-[#080b12]/95 backdrop-blur-md border-b border-white/[0.06] pt-[env(safe-area-inset-top,0px)] select-none">
+    <header className="relative z-30 shrink-0 w-full bg-[#080b12]/95 backdrop-blur-md border-b border-white/[0.06] pt-[env(safe-area-inset-top,0px)] pl-safe pr-safe select-none">
       <div className="flex items-center justify-between h-14 px-2 sm:px-4">
         {/* Left: Hamburger Menu Button */}
         <button

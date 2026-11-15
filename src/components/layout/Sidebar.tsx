@@ -86,6 +86,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
     emitToast(msg, type);
   };
 
+  // Close Sidebar modals/sheets on Android hardware back button before closing drawer
+  useEffect(() => {
+    const handleHardwareBack = (e: Event) => {
+      if (deleteConfirmationTarget) {
+        e.preventDefault();
+        setDeleteConfirmationTarget(null);
+        return;
+      }
+      if (renameConversationTarget) {
+        e.preventDefault();
+        setRenameConversationTarget(null);
+        return;
+      }
+      if (menuConversation) {
+        e.preventDefault();
+        setMenuConversation(null);
+      }
+    };
+    window.addEventListener('jexa:hardware-back', handleHardwareBack);
+    return () => window.removeEventListener('jexa:hardware-back', handleHardwareBack);
+  }, [deleteConfirmationTarget, renameConversationTarget, menuConversation]);
+
   // Touch Long-Press handlers
   const handleTouchStart = (conv: Conversation) => {
     isLongPressTriggeredRef.current = false;
@@ -435,11 +457,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* ========================================================================= */}
       {menuConversation && (
         <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/75 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/75 backdrop-blur-sm pt-safe pl-safe pr-safe"
           onClick={() => setMenuConversation(null)}
         >
           <div
-            className="w-full sm:max-w-sm bg-[#0d121f] border border-white/[0.08] rounded-t-2xl sm:rounded-2xl shadow-2xl p-4 space-y-2 pb-safe animate-in fade-in slide-in-from-bottom-4 duration-200"
+            className="w-full sm:max-w-sm bg-[#0d121f] border border-white/[0.08] rounded-t-2xl sm:rounded-2xl shadow-2xl p-4 space-y-2 pb-[max(1rem,env(safe-area-inset-bottom,0px))] animate-in fade-in slide-in-from-bottom-4 duration-200"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header: Conversation Title */}
@@ -516,7 +538,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* ========================================================================= */}
       {renameConversationTarget && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm pt-safe pb-safe pl-safe pr-safe"
           onClick={() => setRenameConversationTarget(null)}
         >
           <div
@@ -569,7 +591,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* ========================================================================= */}
       {deleteConfirmationTarget && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm pt-safe pb-safe pl-safe pr-safe"
           onClick={() => setDeleteConfirmationTarget(null)}
         >
           <div

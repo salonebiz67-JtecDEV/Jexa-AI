@@ -72,8 +72,8 @@ export const SearchDialog: React.FC<SearchDialogProps> = ({
     : images.slice(0, 4);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-16 sm:pt-24 bg-black/75 backdrop-blur-md">
-      <div className="relative w-full max-w-xl bg-[#0e121d] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-safe pb-safe pl-safe pr-safe bg-black/75 backdrop-blur-md">
+      <div className="relative w-full max-w-xl mt-4 sm:mt-16 bg-[#0e121d] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-full">
         {/* Search Input Bar with Back Button */}
         <div className="flex items-center px-3.5 py-3 border-b border-slate-800/80 gap-2.5">
           <button

@@ -41,6 +41,12 @@ import {
 import { ApiClient, ProviderTestResult } from '../../services/api.client';
 import { AudioPlayer } from '../../services/audioPlayer';
 import { LiveVoiceDebugStats } from '../../hooks/useLiveVoice';
+import {
+  getNotificationPermissionState,
+  NotificationPermissionState,
+  requestNotificationPermission,
+} from '../../services/notifications';
+import { isNative } from '../../utils/platform';
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -114,9 +120,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   );
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Real Notification Support
-  const [notificationStatus, setNotificationStatus] = useState<NotificationPermission>('default');
+  // Real Notification Support (Native LocalNotifications + Web Notification API)
+  const [notificationStatus, setNotificationStatus] = useState<NotificationPermissionState>('default');
   const { isInstallable, isInstalled, install } = usePWAInstall();
+  const nativeMode = isNative();
 
   // Effective resolved models (custom input takes precedence when non-empty)
   const effectiveTextModel = customTextModel.trim() || textModel;
@@ -192,23 +199,24 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if ('Notification' in window) {
-      setNotificationStatus(Notification.permission);
-    }
+    let active = true;
+    void getNotificationPermissionState().then((state) => {
+      if (active) setNotificationStatus(state);
+    });
     const handlePrefsUpdated = () => {
       setAboutMeState(getAboutMe());
       setBehaviorInstructionsState(getBehaviorInstructions());
     };
     window.addEventListener('jexa:preferences-updated', handlePrefsUpdated);
     return () => {
+      active = false;
       window.removeEventListener('jexa:preferences-updated', handlePrefsUpdated);
     };
   }, [isOpen]);
 
   const handleToggleNotifications = async () => {
-    if (typeof window === 'undefined' || !('Notification' in window)) return;
     try {
-      const result = await Notification.requestPermission();
+      const result = await requestNotificationPermission();
       setNotificationStatus(result);
     } catch (e) {
       console.warn('[Settings] Notification permission request error:', e);
@@ -420,8 +428,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md pt-safe pb-safe">
-        <div className="relative w-full max-w-lg bg-[#0f1422] border border-white/[0.08] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md pt-safe pb-safe pl-safe pr-safe">
+        <div className="relative w-full max-w-lg bg-[#0f1422] border border-white/[0.08] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-full sm:max-h-[90vh]">
           {/* Header with Back button */}
           <div className="flex items-center justify-between px-3.5 py-3 border-b border-white/[0.06] bg-[#0b0f19]">
             <div className="flex items-center gap-2">
@@ -954,42 +962,44 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
               </div>
             </div>
 
-            {/* Progressive Web App (PWA) Section */}
-            <div className="space-y-2 pt-3 border-t border-white/[0.06]">
-              <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
-                Application & Installation
-              </label>
-              <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
-                    <Smartphone className="w-4 h-4" />
-                  </div>
-                  <div className="truncate">
-                    <div className="text-xs font-medium text-white truncate">PWA Standalone Mode</div>
-                    <div className="text-[10px] text-slate-400 truncate">
-                      {isInstalled ? 'Installed as native application' : 'Install JEXA on home screen'}
+            {/* Progressive Web App (PWA) Section (hidden in native Capacitor app) */}
+            {!nativeMode && (
+              <div className="space-y-2 pt-3 border-t border-white/[0.06]">
+                <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                  Application & Installation
+                </label>
+                <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+                      <Smartphone className="w-4 h-4" />
+                    </div>
+                    <div className="truncate">
+                      <div className="text-xs font-medium text-white truncate">PWA Standalone Mode</div>
+                      <div className="text-[10px] text-slate-400 truncate">
+                        {isInstalled ? 'Installed as native application' : 'Install JEXA on home screen'}
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {isInstalled ? (
-                  <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-medium shrink-0">
-                    Installed
-                  </span>
-                ) : isInstallable ? (
-                  <button
-                    type="button"
-                    onClick={install}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors shrink-0"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Install</span>
-                  </button>
-                ) : (
-                  <span className="text-[10px] text-slate-500 shrink-0">Browser mode</span>
-                )}
+                  {isInstalled ? (
+                    <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-medium shrink-0">
+                      Installed
+                    </span>
+                  ) : isInstallable ? (
+                    <button
+                      type="button"
+                      onClick={install}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors shrink-0"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Install</span>
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-slate-500 shrink-0">Browser mode</span>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* System Notifications */}
             <div className="space-y-2 pt-3 border-t border-white/[0.06]">
@@ -1004,13 +1014,17 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                     <BellOff className="w-4 h-4 text-slate-500 shrink-0" />
                   )}
                   <div>
-                    <div className="text-xs font-medium text-white">Browser Notifications</div>
+                    <div className="text-xs font-medium text-white">
+                      {nativeMode ? 'App Notifications' : 'Browser Notifications'}
+                    </div>
                     <div className="text-[10px] text-slate-400">
                       Status:{' '}
                       {notificationStatus === 'granted'
                         ? 'Allowed'
                         : notificationStatus === 'denied'
                         ? 'Blocked'
+                        : notificationStatus === 'unsupported'
+                        ? 'Unavailable'
                         : 'Not Enabled'}
                     </div>
                   </div>
@@ -1020,7 +1034,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   <button
                     type="button"
                     onClick={handleToggleNotifications}
-                    className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-xs font-medium text-slate-200 transition-colors"
+                    className="min-h-[40px] px-3.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-xs font-semibold text-emerald-300 transition-colors cursor-pointer"
                   >
                     Enable
                   </button>

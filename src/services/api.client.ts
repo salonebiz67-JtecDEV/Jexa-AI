@@ -15,8 +15,10 @@ import {
   WebSearchResultItem,
 } from '../../shared/types';
 
+import { isNative } from '../utils/platform';
+
 // =========================================================================
-// Centralized API Configuration for GitHub Pages & Render Deployment
+// Centralized API Configuration for Native Android, GitHub Pages & Render
 // =========================================================================
 const DEFAULT_PROD_RENDER_URL = 'https://jexa-ai.onrender.com';
 const isGitHubPages =
@@ -24,11 +26,37 @@ const isGitHubPages =
 
 const configuredBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
 const resolvedBackendOrigin =
-  configuredBase || (isGitHubPages ? DEFAULT_PROD_RENDER_URL : '');
+  configuredBase || (isNative() || isGitHubPages ? DEFAULT_PROD_RENDER_URL : '');
 
 export const API_BASE = resolvedBackendOrigin
   ? `${resolvedBackendOrigin.replace(/\/+$/, '')}/api`
   : '/api';
+
+type ReachabilityListener = (unreachable: boolean) => void;
+const reachabilityListeners = new Set<ReachabilityListener>();
+let isServerUnreachable = false;
+
+export function reportServerUnreachable(): void {
+  if (!isServerUnreachable) {
+    isServerUnreachable = true;
+    reachabilityListeners.forEach((fn) => fn(true));
+  }
+}
+
+export function reportServerReachable(): void {
+  if (isServerUnreachable) {
+    isServerUnreachable = false;
+    reachabilityListeners.forEach((fn) => fn(false));
+  }
+}
+
+export function subscribeServerReachability(listener: ReachabilityListener): () => void {
+  reachabilityListeners.add(listener);
+  listener(isServerUnreachable);
+  return () => {
+    reachabilityListeners.delete(listener);
+  };
+}
 
 export interface ProviderTestResult {
   success: boolean;
@@ -143,7 +171,8 @@ async function fetchJson<T>(url: string, options?: RequestInit, allowRetry = tru
     });
   } catch (netErr: any) {
     if (netErr?.name === 'AbortError') {
-      throw new ApiError('Request timed out while waiting for server response.', 408, 'REQUEST_TIMEOUT');
+      reportServerUnreachable();
+      throw new ApiError('Cannot reach server (request timed out).', 408, 'REQUEST_TIMEOUT');
     }
 
     if (allowRetry && (!options?.method || options.method === 'GET')) {
@@ -156,8 +185,9 @@ async function fetchJson<T>(url: string, options?: RequestInit, allowRetry = tru
     }
 
     console.warn(`[ApiClient] Network failure requesting ${url}:`, netErr);
+    reportServerUnreachable();
     throw new ApiError(
-      `Unable to reach backend at ${url}. Please verify internet connectivity or backend status.`,
+      'Cannot reach server. Please check your connection and try again.',
       0,
       'NETWORK_FAILURE'
     );
@@ -173,6 +203,8 @@ async function fetchJson<T>(url: string, options?: RequestInit, allowRetry = tru
       'INVALID_RESPONSE'
     );
   }
+
+  reportServerReachable();
 
   if (!response.ok || body.success === false) {
     const errorMsg = body?.error || body?.message || `HTTP ${response.status}: ${response.statusText}`;
@@ -267,6 +299,8 @@ export const ApiClient = {
         75000
       );
 
+      reportServerReachable();
+
       if (!response.ok) {
         let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
         let errorCode: string | undefined;
@@ -356,8 +390,24 @@ export const ApiClient = {
       options?.onComplete?.(result);
       return result;
     } catch (err: any) {
-      options?.onError?.(err);
-      throw err;
+      let normalizedErr = err;
+      if (!(err instanceof ApiError)) {
+        if (err?.name === 'AbortError') {
+          reportServerUnreachable();
+          normalizedErr = new ApiError('Cannot reach server (request timed out).', 408, 'REQUEST_TIMEOUT');
+        } else if (err instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(err?.message || '')) {
+          reportServerUnreachable();
+          normalizedErr = new ApiError(
+            'Cannot reach server. Please check your connection and try again.',
+            0,
+            'NETWORK_FAILURE'
+          );
+        }
+      } else if (err.status === 0 || err.code === 'NETWORK_FAILURE') {
+        reportServerUnreachable();
+      }
+      options?.onError?.(normalizedErr);
+      throw normalizedErr;
     }
   },
 
@@ -402,8 +452,13 @@ export const ApiClient = {
       if (err.name === 'AbortError') {
         throw new ApiError('Voice synthesis timed out after 25 seconds.', 504, 'VOICE_TIMEOUT');
       }
+      if (err instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(err?.message || '')) {
+        reportServerUnreachable();
+        throw new ApiError('Cannot reach server. Please check your connection and try again.', 0, 'NETWORK_FAILURE');
+      }
       throw err;
     }
+    reportServerReachable();
 
     const contentType = res.headers.get('content-type') || '';
 
@@ -590,7 +645,18 @@ export const ApiClient = {
 
   // Health
   async getHealth(): Promise<HealthCheckResponse> {
-    return fetchJson<HealthCheckResponse>(`${API_BASE}/health`);
+    return fetchJson<HealthCheckResponse>(`${API_BASE}/health`, undefined, false);
+  },
+
+  async checkServerReachability(): Promise<boolean> {
+    try {
+      await fetchJson<HealthCheckResponse>(`${API_BASE}/health`, undefined, false);
+      reportServerReachable();
+      return true;
+    } catch {
+      reportServerUnreachable();
+      return false;
+    }
   },
 
   // Usage Tracker & Tools

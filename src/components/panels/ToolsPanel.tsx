@@ -256,6 +256,22 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
   // User-entered per-model limits only (no defaults)
   const [modelLimits, setModelLimits] = useState<PerModelLimitsMap>(loadSavedModelLimits);
   const [showLimitEditor, setShowLimitEditor] = useState(false);
+
+  useEffect(() => {
+    const handleHardwareBack = (e: Event) => {
+      if (selectedCall) {
+        e.preventDefault();
+        setSelectedCall(null);
+        return;
+      }
+      if (showLimitEditor) {
+        e.preventDefault();
+        setShowLimitEditor(false);
+      }
+    };
+    window.addEventListener('jexa:hardware-back', handleHardwareBack);
+    return () => window.removeEventListener('jexa:hardware-back', handleHardwareBack);
+  }, [selectedCall, showLimitEditor]);
   const [draftModel, setDraftModel] = useState<string>(FREE_GEMINI_CHAT_MODELS[1]?.id || 'gemini-3.8-flash');
   const [draftRpm, setDraftRpm] = useState('');
   const [draftTpm, setDraftTpm] = useState('');
@@ -490,8 +506,9 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
   return (
     <div className="flex-1 flex flex-col h-full bg-[#07090e] overflow-hidden">
       {/* Compact Header */}
-      <header className="flex items-center justify-between h-14 px-3 sm:px-5 border-b border-white/[0.07] bg-[#090d16] shrink-0 gap-2">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+      <header className="shrink-0 border-b border-white/[0.07] bg-[#090d16] pt-safe pl-safe pr-safe">
+        <div className="flex items-center justify-between h-14 px-3 sm:px-5 gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <button
             type="button"
             onClick={onBack}
@@ -539,10 +556,11 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
           </button>
         </div>
+        </div>
       </header>
 
       {/* Two-Tab Bar */}
-      <div className="px-3 sm:px-5 py-2.5 border-b border-white/[0.06] bg-[#080b12] flex items-center justify-between gap-3 shrink-0 flex-wrap">
+      <div className="px-3 sm:px-5 py-2.5 border-b border-white/[0.06] bg-[#080b12] flex items-center justify-between gap-3 shrink-0 flex-wrap pl-safe pr-safe">
         <div
           role="tablist"
           aria-label="Tools views"
@@ -587,7 +605,7 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-5">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-safe pl-safe pr-safe">
         <div className="max-w-5xl mx-auto space-y-4 pb-10">
           {error && (
             <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
@@ -1202,7 +1220,7 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
       {/* Call Detail Modal (Full Error Status + Message + Breakdown) */}
       {selectedCall && (
         <div
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 pt-safe pb-safe pl-safe pr-safe"
           onClick={() => setSelectedCall(null)}
         >
           <div

@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { Download, X, Share, PlusSquare } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
+import { isNative } from '../../utils/platform';
 
 export const PWAInstallBanner: React.FC = () => {
   const { isInstallable, isIOS, install, dismiss } = usePWAInstall();
   const [showIOSModal, setShowIOSModal] = useState(false);
 
-  if (!isInstallable && !isIOS) return null;
+  if (isNative() || (!isInstallable && !isIOS)) return null;
 
   return (
     <>

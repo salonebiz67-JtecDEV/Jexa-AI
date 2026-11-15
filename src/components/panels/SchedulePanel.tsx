@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Plus, CalendarClock, Trash2, X } from 'lucide-react';
 import { ScheduleItem } from '../../../shared/types';
 
@@ -22,6 +22,17 @@ export const SchedulePanel: React.FC<SchedulePanelProps> = ({
   const [newFrequency, setNewFrequency] = useState('Daily');
   const [newTime, setNewTime] = useState('08:00 AM');
 
+  useEffect(() => {
+    const handleHardwareBack = (e: Event) => {
+      if (isAdding) {
+        e.preventDefault();
+        setIsAdding(false);
+      }
+    };
+    window.addEventListener('jexa:hardware-back', handleHardwareBack);
+    return () => window.removeEventListener('jexa:hardware-back', handleHardwareBack);
+  }, [isAdding]);
+
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
@@ -33,31 +44,33 @@ export const SchedulePanel: React.FC<SchedulePanelProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full bg-[#07090e] overflow-hidden">
       {/* Top Header with Back Button */}
-      <div className="flex items-center justify-between h-14 px-4 border-b border-white/[0.06] bg-[#080b12] shrink-0">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.06] transition-colors"
-            aria-label="Back to chat"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Back</span>
-          </button>
-          <div className="h-4 w-px bg-white/[0.08]" />
-          <h1 className="text-sm font-semibold text-white">Scheduled Tasks</h1>
-        </div>
+      <header className="shrink-0 border-b border-white/[0.06] bg-[#080b12] pt-safe pl-safe pr-safe">
+        <div className="flex items-center justify-between h-14 px-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="min-h-[44px] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.06] transition-colors"
+              aria-label="Back to chat"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back</span>
+            </button>
+            <div className="h-4 w-px bg-white/[0.08]" />
+            <h1 className="text-sm font-semibold text-white">Scheduled Tasks</h1>
+          </div>
 
-        <button
-          onClick={() => setIsAdding(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>New Task</span>
-        </button>
-      </div>
+          <button
+            onClick={() => setIsAdding(true)}
+            className="min-h-[38px] flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>New Task</span>
+          </button>
+        </div>
+      </header>
 
       {/* Schedule Items List */}
-      <div className="flex-1 p-6 overflow-y-auto max-w-2xl space-y-3">
+      <div className="flex-1 p-6 overflow-y-auto max-w-2xl space-y-3 pb-safe pl-safe pr-safe">
         <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider px-1">
           AUTOMATED ROUTINES
         </div>
@@ -109,7 +122,7 @@ export const SchedulePanel: React.FC<SchedulePanelProps> = ({
 
       {/* Add Task Modal */}
       {isAdding && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md pt-safe pb-safe pl-safe pr-safe">
           <div className="relative w-full max-w-md bg-[#0f1422] border border-white/[0.08] rounded-2xl p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-sm text-white">Create Scheduled Task</h3>

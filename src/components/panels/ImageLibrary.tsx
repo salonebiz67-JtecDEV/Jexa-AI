@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Download, Share2, Trash2, FolderPlus, X, ZoomIn, Check } from 'lucide-react';
 import { ImageItem, Project } from '../../../shared/types';
 
@@ -21,6 +21,17 @@ export const ImageLibrary: React.FC<ImageLibraryProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(projects[0]?.id || '');
   const [addedSuccess, setAddedSuccess] = useState(false);
+
+  useEffect(() => {
+    const handleHardwareBack = (e: Event) => {
+      if (activeImage) {
+        e.preventDefault();
+        setActiveImage(null);
+      }
+    };
+    window.addEventListener('jexa:hardware-back', handleHardwareBack);
+    return () => window.removeEventListener('jexa:hardware-back', handleHardwareBack);
+  }, [activeImage]);
 
   const handleShare = (img: ImageItem) => {
     navigator.clipboard.writeText(img.url);
@@ -47,27 +58,29 @@ export const ImageLibrary: React.FC<ImageLibraryProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full bg-[#07090e] overflow-hidden">
       {/* Top Header with Back Button */}
-      <div className="flex items-center justify-between h-14 px-4 border-b border-white/[0.06] bg-[#080b12] shrink-0">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.06] transition-colors"
-            aria-label="Back to chat"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Back</span>
-          </button>
-          <div className="h-4 w-px bg-white/[0.08]" />
-          <h1 className="text-sm font-semibold text-white">Image Library</h1>
-        </div>
+      <header className="shrink-0 border-b border-white/[0.06] bg-[#080b12] pt-safe pl-safe pr-safe">
+        <div className="flex items-center justify-between h-14 px-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="min-h-[44px] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/[0.06] transition-colors"
+              aria-label="Back to chat"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back</span>
+            </button>
+            <div className="h-4 w-px bg-white/[0.08]" />
+            <h1 className="text-sm font-semibold text-white">Image Library</h1>
+          </div>
 
-        <div className="text-xs text-slate-500">
-          <span>{images.length} Visuals</span>
+          <div className="text-xs text-slate-500">
+            <span>{images.length} Visuals</span>
+          </div>
         </div>
-      </div>
+      </header>
 
       {/* Grid Content */}
-      <div className="flex-1 p-6 overflow-y-auto">
+      <div className="flex-1 p-6 overflow-y-auto pb-safe pl-safe pr-safe">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
           {images.map((img) => (
             <div
@@ -104,7 +117,7 @@ export const ImageLibrary: React.FC<ImageLibraryProps> = ({
 
       {/* Lightbox Modal */}
       {activeImage && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md pt-safe pb-safe pl-safe pr-safe">
           <div className="relative w-full max-w-2xl bg-[#0f1422] border border-white/[0.08] rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
             {/* Lightbox Header with Back button */}
             <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06] bg-[#0b0f19]">

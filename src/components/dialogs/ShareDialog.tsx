@@ -64,8 +64,8 @@ export const ShareDialog: React.FC<ShareDialogProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
-      <div className="relative w-full max-w-md bg-[#0e121d] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pt-safe pb-safe pl-safe pr-safe bg-black/70 backdrop-blur-md">
+      <div className="relative w-full max-w-md bg-[#0e121d] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-full">
         {/* Header with Back button */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-800/80">
           <div className="flex items-center gap-2">

@@ -100,18 +100,26 @@ export const Composer: React.FC<ComposerProps> = ({
     };
   }, [resizeTextarea]);
 
-  // Click outside to close plus menu
+  // Click outside or hardware back to close plus menu
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
         setShowPlusMenu(false);
       }
     };
+    const handleHardwareBack = (e: Event) => {
+      if (showPlusMenu) {
+        e.preventDefault();
+        setShowPlusMenu(false);
+      }
+    };
     if (showPlusMenu) {
       document.addEventListener('mousedown', handleClickOutside);
     }
+    window.addEventListener('jexa:hardware-back', handleHardwareBack);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('jexa:hardware-back', handleHardwareBack);
     };
   }, [showPlusMenu]);
 
@@ -188,7 +196,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const canSend = hasContent && !disabled;
 
   return (
-    <div className="w-full max-w-3xl lg:max-w-4xl mx-auto min-w-0 px-0 sm:px-4 overscroll-none">
+    <div className="w-full max-w-3xl lg:max-w-4xl mx-auto min-w-0 px-0 sm:px-4 pl-safe pr-safe overscroll-none">
       {/* Hidden File Inputs for functional Plus button */}
       <input
         ref={fileInputRef}
