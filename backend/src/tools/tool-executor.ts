@@ -142,7 +142,9 @@ export class ToolExecutor {
 
     // 4. Status update: Inform UI of tool execution
     if (tool.name === 'web_search') {
-      options.onStatusUpdate?.('Using web research...', { query: (args as any)?.query });
+      options.onStatusUpdate?.('Searching the web…', { query: (args as any)?.query });
+    } else if (tool.name === 'open_link') {
+      options.onStatusUpdate?.('Opening page…', { query: (args as any)?.url });
     } else if (tool.name === 'system_check') {
       options.onStatusUpdate?.('Checking servers…');
     } else if (tool.name === 'recent_errors') {

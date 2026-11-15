@@ -1,5 +1,5 @@
-import { GoogleGenAI } from '@google/genai';
-import { ITextAIProvider, TextGenerationRequest, TextGenerationResponse } from './text-provider.interface';
+import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai';
+import { ITextAIProvider, TextGenerationRequest, TextGenerationResponse, ToolCallRequest } from './text-provider.interface';
 import {
   TextProviderType,
   ProviderError,
@@ -9,6 +9,108 @@ import {
 } from '../../shared/types/provider';
 import { ErrorLogService } from '../../backend/src/services/error-log.service';
 import { UsageTracker } from '../../backend/src/services/usage-tracker.service';
+
+function sanitizeGeminiSchemaProperty(prop: any): Record<string, any> {
+  if (!prop || typeof prop !== 'object') {
+    return { type: 'string' };
+  }
+
+  const rawType = typeof prop.type === 'string' ? prop.type.toLowerCase() : 'string';
+  const clean: Record<string, any> = {
+    type: rawType,
+  };
+
+  if (typeof prop.description === 'string' && prop.description.trim()) {
+    clean.description = prop.description.trim();
+  }
+
+  if (Array.isArray(prop.enum) && prop.enum.length > 0) {
+    clean.enum = prop.enum.map((v: any) => String(v));
+  }
+
+  if (rawType === 'array') {
+    clean.items = prop.items
+      ? sanitizeGeminiSchemaProperty(prop.items)
+      : { type: 'string' };
+  } else if (rawType === 'object' && prop.properties && typeof prop.properties === 'object') {
+    const nestedProps: Record<string, any> = {};
+    for (const [k, v] of Object.entries(prop.properties)) {
+      nestedProps[k] = sanitizeGeminiSchemaProperty(v);
+    }
+    clean.properties = nestedProps;
+    if (Array.isArray(prop.required) && prop.required.length > 0) {
+      clean.required = prop.required;
+    }
+  }
+
+  return clean;
+}
+
+function sanitizeToolParametersForGemini(params: any): Record<string, any> {
+  const props: Record<string, any> = {};
+  if (params?.properties && typeof params.properties === 'object') {
+    for (const [key, val] of Object.entries(params.properties)) {
+      props[key] = sanitizeGeminiSchemaProperty(val);
+    }
+  }
+  const result: Record<string, any> = {
+    type: 'object',
+    properties: props,
+  };
+  if (Array.isArray(params?.required) && params.required.length > 0) {
+    result.required = params.required.filter((r: any) => typeof r === 'string' && r in props);
+  }
+  return result;
+}
+
+function extractDetectedCalls(response: any): {
+  detectedCalls: ToolCallRequest[];
+  candidateParts: any[] | undefined;
+} {
+  const candidateParts = response?.candidates?.[0]?.content?.parts;
+  let detectedCalls: ToolCallRequest[] = [];
+
+  if (Array.isArray(response?.functionCalls) && response.functionCalls.length > 0) {
+    detectedCalls = response.functionCalls.map((fc: any, idx: number) => ({
+      id: `call_${Date.now()}_${idx}`,
+      name: fc.name,
+      args: fc.args || {},
+    }));
+  } else if (Array.isArray(candidateParts)) {
+    const functionCallParts = candidateParts.filter((p: any) => Boolean(p?.functionCall));
+    if (functionCallParts.length > 0) {
+      detectedCalls = functionCallParts.map((p: any, idx: number) => ({
+        id: `call_${Date.now()}_${idx}`,
+        name: p.functionCall.name,
+        args: p.functionCall.args || {},
+      }));
+    }
+  }
+
+  return { detectedCalls, candidateParts };
+}
+
+function extractRawErrorDetail(err: any): string {
+  if (!err) return 'Unknown error';
+  if (typeof err === 'string') return err;
+  const parts: string[] = [];
+  if (err.status || err.statusCode) {
+    parts.push(`HTTP ${err.status || err.statusCode}`);
+  }
+  if (err.code) {
+    parts.push(`Code: ${err.code}`);
+  }
+  if (err.message) {
+    parts.push(String(err.message));
+  }
+  return parts.join(' | ') || String(err);
+}
+
+function estimatePromptTokens(request: TextGenerationRequest): number {
+  const sysLen = request.systemPrompt?.length || 0;
+  const msgLen = (request.messages || []).reduce((acc, m) => acc + (m.content?.length || 0), 0);
+  return Math.max(1, Math.ceil((sysLen + msgLen) / 4));
+}
 
 export class GeminiTextAIProvider implements ITextAIProvider {
   public readonly providerType: TextProviderType = 'gemini';
@@ -69,6 +171,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
   private formatGeminiContents(messages: TextGenerationRequest['messages']): any[] {
     const contents: any[] = [];
+
     for (const m of messages) {
       if (m.role === 'tool') {
         let outputObj: any;
@@ -80,17 +183,29 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         if (!outputObj || typeof outputObj !== 'object' || Array.isArray(outputObj)) {
           outputObj = { output: outputObj };
         }
-        contents.push({
-          role: 'user',
-          parts: [
-            {
-              functionResponse: {
-                name: m.name || 'tool',
-                response: outputObj,
-              },
-            },
-          ],
-        });
+
+        const fnPart = {
+          functionResponse: {
+            name: m.name || 'tool',
+            response: outputObj,
+          },
+        };
+
+        // Merge consecutive tool responses into one user turn so multi-tool calls match Gemini's contract
+        const prev = contents[contents.length - 1];
+        if (
+          prev &&
+          prev.role === 'user' &&
+          Array.isArray(prev.parts) &&
+          prev.parts.some((p: any) => Boolean(p?.functionResponse))
+        ) {
+          prev.parts.push(fnPart);
+        } else {
+          contents.push({
+            role: 'user',
+            parts: [fnPart],
+          });
+        }
       } else if (m.role === 'assistant') {
         if (m.rawModelParts && Array.isArray(m.rawModelParts) && m.rawModelParts.length > 0) {
           contents.push({
@@ -99,6 +214,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           });
           continue;
         }
+
         const parts: any[] = [];
         if (m.toolCalls && m.toolCalls.length > 0) {
           for (const tc of m.toolCalls) {
@@ -121,14 +237,25 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           parts,
         });
       } else {
-        contents.push({
-          role: 'user',
-          parts: [{ text: m.content }],
-        });
+        const textPart = { text: m.content || '' };
+        const prev = contents[contents.length - 1];
+        if (
+          prev &&
+          prev.role === 'user' &&
+          Array.isArray(prev.parts) &&
+          prev.parts.every((p: any) => typeof p?.text === 'string')
+        ) {
+          prev.parts.push(textPart);
+        } else {
+          contents.push({
+            role: 'user',
+            parts: [textPart],
+          });
+        }
       }
     }
 
-    // Drop any leading model turns so conversation always starts with user turn
+    // Drop any leading model turns so conversation always starts with a user turn
     while (contents.length > 0 && contents[0].role === 'model') {
       contents.shift();
     }
@@ -138,13 +265,28 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
   public async generateResponse(request: TextGenerationRequest): Promise<TextGenerationResponse> {
     if (!this.ai || !this.isConfigured) {
-      throw new ProviderError(
+      const missingErr = new ProviderError(
         'Gemini AI service is unconfigured. Set GEMINI_API_KEY on the server.',
         'gemini',
         'MISSING_CREDENTIALS',
         400,
         this.modelName
       );
+      UsageTracker.recordAICall({
+        provider: 'gemini',
+        model: this.resolveRequestModel(request.model),
+        purpose: request.purpose || 'chat',
+        promptTokens: estimatePromptTokens(request),
+        completionTokens: 0,
+        isEstimated: true,
+        durationMs: 0,
+        status: 'error',
+        messageId: request.messageId,
+        errorStatusCode: 400,
+        errorCode: 'MISSING_CREDENTIALS',
+        errorMessage: missingErr.message,
+      });
+      throw missingErr;
     }
 
     const targetModel = this.resolveRequestModel(request.model);
@@ -157,27 +299,30 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       maxOutputTokens: maxTokens,
     };
 
-    // Small thinking budget if supported so thinking can never use up the whole answer
+    // Small thinking budget if supported so thinking never consumes the whole output budget
     if (GeminiTextAIProvider.supportsThinkingConfig && maxTokens > 300) {
       config.thinkingConfig = {
         thinkingBudget: 256,
       };
     }
 
-    if (request.tools && request.tools.length > 0) {
+    if (request.tools && request.tools.length > 0 && request.toolChoice !== 'none') {
       config.tools = [
         {
           functionDeclarations: request.tools.map((t) => ({
             name: t.name,
             description: t.description,
-            parameters: {
-              type: 'object',
-              properties: t.parameters.properties || {},
-              required: t.parameters.required || [],
-            },
+            parameters: sanitizeToolParametersForGemini(t.parameters),
           })),
         },
       ];
+      if (request.toolChoice === 'required') {
+        config.toolConfig = {
+          functionCallingConfig: {
+            mode: FunctionCallingConfigMode.ANY,
+          },
+        };
+      }
     }
 
     // 30 second timeout controller for this call
@@ -189,6 +334,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
     const callStartTime = Date.now();
     let lastError: any = null;
+    const estimatedPrompt = estimatePromptTokens(request);
 
     try {
       for (let attempt = 1; attempt <= 2; attempt++) {
@@ -202,31 +348,17 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           const responseText = response.text || '';
           this.lastError = undefined;
 
-          const candidateParts = response.candidates?.[0]?.content?.parts;
-
-          // Extract native function calls
-          let detectedCalls: any[] = [];
-          if (response.functionCalls && response.functionCalls.length > 0) {
-            detectedCalls = response.functionCalls.map((fc: any, idx: number) => ({
-              id: `call_${Date.now()}_${idx}`,
-              name: fc.name,
-              args: fc.args || {},
-            }));
-          } else {
-            const parts = candidateParts || [];
-            const functionCallParts = parts.filter((p: any) => Boolean(p.functionCall));
-            if (functionCallParts.length > 0) {
-              detectedCalls = functionCallParts.map((p: any, idx: number) => ({
-                id: `call_${Date.now()}_${idx}`,
-                name: p.functionCall.name,
-                args: p.functionCall.args || {},
-              }));
-            }
-          }
-
+          const { detectedCalls, candidateParts } = extractDetectedCalls(response);
           const hasToolCalls = detectedCalls.length > 0;
+          const rawFinishReason = response.candidates?.[0]?.finishReason;
+          const finishReason: TextGenerationResponse['finishReason'] = hasToolCalls
+            ? 'tool_call'
+            : rawFinishReason === 'MAX_TOKENS'
+            ? 'length'
+            : 'stop';
+
           const usageMeta = (response as any).usageMetadata;
-          const promptTokens = usageMeta?.promptTokenCount ?? Math.ceil(request.systemPrompt.length / 4);
+          const promptTokens = usageMeta?.promptTokenCount ?? estimatedPrompt;
           const completionTokens = usageMeta?.candidatesTokenCount ?? Math.ceil((responseText.length || 20) / 4);
           const totalTokens = usageMeta?.totalTokenCount ?? (promptTokens + completionTokens);
           const isEstimated = !usageMeta?.promptTokenCount;
@@ -254,7 +386,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
               total: totalTokens,
             },
             isMock: false,
-            finishReason: hasToolCalls ? 'tool_call' : 'stop',
+            finishReason,
             toolCalls: hasToolCalls ? detectedCalls : undefined,
             rawModelParts: candidateParts,
           };
@@ -262,13 +394,15 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           lastError = error;
 
           if (controller.signal.aborted) {
-            throw new ProviderError(
+            const timeoutErr = new ProviderError(
               'Gemini request timed out after 30 seconds.',
               'gemini',
               'PROVIDER_TIMEOUT',
               504,
               targetModel
             );
+            lastError = timeoutErr;
+            break;
           }
 
           const msg = String(error?.message || '');
@@ -289,17 +423,28 @@ export class GeminiTextAIProvider implements ITextAIProvider {
                 config,
               });
               const retryText = retryResponse.text || '';
+              this.lastError = undefined;
+              const { detectedCalls: retryCalls, candidateParts: retryParts } = extractDetectedCalls(retryResponse);
+              const retryHasTools = retryCalls.length > 0;
+              const retryRawFinish = retryResponse.candidates?.[0]?.finishReason;
+              const retryFinish: TextGenerationResponse['finishReason'] = retryHasTools
+                ? 'tool_call'
+                : retryRawFinish === 'MAX_TOKENS'
+                ? 'length'
+                : 'stop';
+
               const retryUsage = (retryResponse as any).usageMetadata;
-              const promptTok = retryUsage?.promptTokenCount ?? Math.ceil(request.systemPrompt.length / 4);
+              const promptTok = retryUsage?.promptTokenCount ?? estimatedPrompt;
               const compTok = retryUsage?.candidatesTokenCount ?? Math.ceil((retryText.length || 20) / 4);
+              const totalTok = retryUsage?.totalTokenCount ?? (promptTok + compTok);
 
               UsageTracker.recordAICall({
                 provider: 'gemini',
                 model: targetModel,
-                purpose: request.purpose || 'chat',
+                purpose: request.purpose || (retryHasTools ? 'tool_round' : 'chat'),
                 promptTokens: promptTok,
                 completionTokens: compTok,
-                totalTokens: retryUsage?.totalTokenCount ?? (promptTok + compTok),
+                totalTokens: totalTok,
                 isEstimated: !retryUsage?.promptTokenCount,
                 durationMs: Date.now() - callStartTime,
                 status: 'ok',
@@ -313,10 +458,12 @@ export class GeminiTextAIProvider implements ITextAIProvider {
                 tokensUsed: {
                   prompt: promptTok,
                   completion: compTok,
-                  total: retryUsage?.totalTokenCount ?? (promptTok + compTok),
+                  total: totalTok,
                 },
                 isMock: false,
-                finishReason: 'stop',
+                finishReason: retryFinish,
+                toolCalls: retryHasTools ? retryCalls : undefined,
+                rawModelParts: retryParts,
               };
             } catch (retryErr: any) {
               lastError = retryErr;
@@ -340,6 +487,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       }
       ErrorLogService.log('ai_provider', lastError, { provider: 'gemini', model: targetModel });
       const formatted = formatCleanProviderError(lastError);
+      const rawDetail = extractRawErrorDetail(lastError);
       this.lastError = formatted.cleanMessage;
 
       const isRateLimited = formatted.code === 'QUOTA_EXHAUSTED' || formatted.statusCode === 429;
@@ -347,14 +495,18 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         provider: 'gemini',
         model: targetModel,
         purpose: request.purpose || 'chat',
-        promptTokens: Math.ceil(request.systemPrompt.length / 4),
+        promptTokens: estimatedPrompt,
         completionTokens: 0,
-        totalTokens: Math.ceil(request.systemPrompt.length / 4),
+        totalTokens: estimatedPrompt,
         isEstimated: true,
         durationMs: Date.now() - callStartTime,
         status: isRateLimited ? 'rate_limited' : 'error',
         messageId: request.messageId,
-        metadata: { error: formatted.cleanMessage, code: formatted.code },
+        errorStatusCode: formatted.statusCode,
+        errorCode: formatted.code,
+        errorMessage: formatted.cleanMessage,
+        errorDetails: rawDetail,
+        metadata: { error: formatted.cleanMessage, code: formatted.code, statusCode: formatted.statusCode },
       });
 
       throw new ProviderError(
@@ -375,16 +527,32 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     onChunk: (chunk: string, isLast: boolean) => void
   ): Promise<TextGenerationResponse> {
     if (!this.ai || !this.isConfigured) {
-      throw new ProviderError(
+      const missingErr = new ProviderError(
         'Gemini AI service is unconfigured. Set GEMINI_API_KEY.',
         'gemini',
         'MISSING_CREDENTIALS',
         400,
         this.modelName
       );
+      UsageTracker.recordAICall({
+        provider: 'gemini',
+        model: this.resolveRequestModel(request.model),
+        purpose: request.purpose || 'chat',
+        promptTokens: estimatePromptTokens(request),
+        completionTokens: 0,
+        isEstimated: true,
+        durationMs: 0,
+        status: 'error',
+        messageId: request.messageId,
+        errorStatusCode: 400,
+        errorCode: 'MISSING_CREDENTIALS',
+        errorMessage: missingErr.message,
+      });
+      throw missingErr;
     }
 
     const targetModel = this.resolveRequestModel(request.model);
+    const estimatedPrompt = estimatePromptTokens(request);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
@@ -447,6 +615,9 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       }
 
       let fullText = '';
+      let usageMeta: any = null;
+      let rawFinishReason: string | undefined;
+
       for await (const chunk of responseStream) {
         if (controller.signal.aborted) {
           throw new ProviderError(
@@ -457,6 +628,12 @@ export class GeminiTextAIProvider implements ITextAIProvider {
             targetModel
           );
         }
+        if ((chunk as any)?.usageMetadata) {
+          usageMeta = (chunk as any).usageMetadata;
+        }
+        if ((chunk as any)?.candidates?.[0]?.finishReason) {
+          rawFinishReason = (chunk as any).candidates[0].finishReason;
+        }
         const piece = chunk.text || '';
         fullText += piece;
         onChunk(piece, false);
@@ -465,9 +642,10 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       onChunk('', true);
       this.lastError = undefined;
 
-      const promptTokens = Math.ceil(request.systemPrompt.length / 4);
-      const completionTokens = Math.ceil(fullText.length / 4);
-      const totalTokens = promptTokens + completionTokens;
+      const promptTokens = usageMeta?.promptTokenCount ?? estimatedPrompt;
+      const completionTokens = usageMeta?.candidatesTokenCount ?? Math.ceil(fullText.length / 4);
+      const totalTokens = usageMeta?.totalTokenCount ?? (promptTokens + completionTokens);
+      const isEstimated = !usageMeta?.promptTokenCount;
 
       UsageTracker.recordAICall({
         provider: 'gemini',
@@ -476,7 +654,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         promptTokens,
         completionTokens,
         totalTokens,
-        isEstimated: true,
+        isEstimated,
         durationMs: Date.now() - streamStartTime,
         status: 'ok',
         messageId: request.messageId,
@@ -492,7 +670,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           total: totalTokens,
         },
         isMock: false,
-        finishReason: 'stop',
+        finishReason: rawFinishReason === 'MAX_TOKENS' ? 'length' : 'stop',
       };
     } catch (error: any) {
       if (controller.signal.aborted || error?.code === 'PROVIDER_TIMEOUT') {
@@ -509,17 +687,22 @@ export class GeminiTextAIProvider implements ITextAIProvider {
           provider: 'gemini',
           model: targetModel,
           purpose: request.purpose || 'chat',
-          promptTokens: Math.ceil(request.systemPrompt.length / 4),
+          promptTokens: estimatedPrompt,
           completionTokens: 0,
-          totalTokens: Math.ceil(request.systemPrompt.length / 4),
+          totalTokens: estimatedPrompt,
           isEstimated: true,
           durationMs: Date.now() - streamStartTime,
           status: 'error',
           messageId: request.messageId,
+          errorStatusCode: 504,
+          errorCode: 'PROVIDER_TIMEOUT',
+          errorMessage: timeoutErr.message,
+          errorDetails: timeoutErr.message,
           metadata: { timeout: true },
         });
         throw timeoutErr;
       }
+
       console.error('[GeminiTextAIProvider] Streaming failed:', error);
       if (error && typeof error === 'object') {
         (error as any).provider = 'gemini';
@@ -527,6 +710,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       }
       ErrorLogService.log('ai_provider', error, { provider: 'gemini', model: targetModel, stream: true });
       const formatted = formatCleanProviderError(error);
+      const rawDetail = extractRawErrorDetail(error);
       this.lastError = formatted.cleanMessage;
 
       const isRateLimited = formatted.code === 'QUOTA_EXHAUSTED' || formatted.statusCode === 429;
@@ -534,14 +718,18 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         provider: 'gemini',
         model: targetModel,
         purpose: request.purpose || 'chat',
-        promptTokens: Math.ceil(request.systemPrompt.length / 4),
+        promptTokens: estimatedPrompt,
         completionTokens: 0,
-        totalTokens: Math.ceil(request.systemPrompt.length / 4),
+        totalTokens: estimatedPrompt,
         isEstimated: true,
         durationMs: Date.now() - streamStartTime,
         status: isRateLimited ? 'rate_limited' : 'error',
         messageId: request.messageId,
-        metadata: { error: formatted.cleanMessage, code: formatted.code },
+        errorStatusCode: formatted.statusCode,
+        errorCode: formatted.code,
+        errorMessage: formatted.cleanMessage,
+        errorDetails: rawDetail,
+        metadata: { error: formatted.cleanMessage, code: formatted.code, statusCode: formatted.statusCode },
       });
 
       throw new ProviderError(

@@ -3,6 +3,11 @@ import { PERSONALITY_PRESETS } from './personality';
 import { PersonalityStyle } from '../../shared/types/brain';
 import { ChatMessage, ClientHistoryMessage } from '../../shared/types/chat';
 
+export interface AvailableToolSummary {
+  name: string;
+  description?: string;
+}
+
 export interface AssembleContextOptions {
   personality?: PersonalityStyle;
   aboutMe?: string;
@@ -16,6 +21,7 @@ export interface AssembleContextOptions {
     location?: string;
   };
   isVoiceMode?: boolean;
+  availableTools?: AvailableToolSummary[];
 }
 
 export interface PreparedContext {
@@ -25,6 +31,17 @@ export interface PreparedContext {
 }
 
 const MAX_INSTRUCTION_CHARS = 1500;
+
+const DEFAULT_TOOL_GUIDE: Record<string, string> = {
+  web_search: 'Search the live web for news, today\'s events, current facts, live prices/weather, recent releases, and documentation.',
+  open_link: 'Fetch and read the title and readable text from a specific http or https URL.',
+  system_time: 'Get the current date, time, day of week, and timezone.',
+  system_check: 'Check server health, AI provider configuration, and environment variable presence.',
+  recent_errors: 'Read recent backend operational errors.',
+  list_source_files: 'List allowed repository files on disk.',
+  read_source_file: 'Read source code files on disk with secret redaction.',
+  search_code: 'Search text across allowed repository source files.',
+};
 
 export function assembleConversationContext(options: AssembleContextOptions): PreparedContext {
   const personalityKey = options.personality || 'empathetic_companion';
@@ -37,6 +54,15 @@ export function assembleConversationContext(options: AssembleContextOptions): Pr
     ? options.behaviorInstructions.trim().slice(0, MAX_INSTRUCTION_CHARS)
     : '';
 
+  const toolEntries =
+    Array.isArray(options.availableTools) && options.availableTools.length > 0
+      ? options.availableTools
+      : Object.entries(DEFAULT_TOOL_GUIDE).map(([name, description]) => ({ name, description }));
+
+  const toolLines = toolEntries
+    .map((t) => `- ${t.name}: ${DEFAULT_TOOL_GUIDE[t.name] || t.description || 'Available tool.'}`)
+    .join('\n');
+
   const promptSections: string[] = [];
 
   // Core Merged Instruction Block
@@ -47,40 +73,40 @@ You are ${JEXA_IDENTITY.name}, ${JEXA_IDENTITY.tagline}. Created and powered by 
 - You are a sharp, warm, and tech-savvy AI companion.
 - Speak naturally and mirror the user's tone, formality, pacing, and style.
 - Active tone nuance: ${personality.tone}. ${personality.systemPromptModifier.slice(0, 160).trim()}
-- Use humor or emojis only when they genuinely fit the moment; never force emojis into every sentence.
-- Never use scripted catchphrases or repeat the same opener or closing question twice in a row.
+- Use humor or emojis only when they fit the moment; never force emojis.
+- Never repeat the same opener or closing question twice in a row.
 
 2. CONVERSATION FLOW & ANTI-GREETING:
-- Answer the user's question directly in the very first sentence.
-- NEVER begin continuing responses with greetings like "Hey John", "Hi John", or robotic introductions like "I'm JEXA, your AI companion."
-- Introduce yourself only if the user explicitly asks who you are.
+- Answer directly in the very first sentence.
+- NEVER begin continuing replies with greetings like "Hey John" or robotic introductions. Introduce yourself only if asked who you are.
 
 3. UNDERSTANDING & REFERENCE RESOLUTION:
-- Interpret intended meaning naturally despite spelling mistakes, typos, phonetic words, slang, or Sierra Leone Krio colloquialisms (e.g. "wetin", "salone", "na so", "light don cam").
-- Never lecture the user on grammar or get tripped up by typos.
-- Seamlessly resolve references like "it", "that", "earlier project", or previous decisions using the current chat history and the "About me" notes below.
+- Understand intended meaning despite typos, phonetic spelling, slang, or Sierra Leone Krio colloquialisms (e.g. "wetin", "salone", "na so", "light don cam").
+- Resolve references like "it" or "that" from the current chat history and "About me" notes.
 
 4. HONESTY, KNOWLEDGE & BOUNDARIES:
-- The user's "About me" notes (provided below when set) are your main knowledge about the user.
-- You do NOT have background memory saving or access to separate past conversations outside the current chat history. Never claim to save memories automatically or pretend to recall earlier chats not shown here.
-- Ground all facts strictly in verified context, retrieved tool results, and the user's "About me" notes.
-- NEVER make up facts, external actions, non-existent files, fake URLs, or citations.
-- State uncertainty truthfully: when essential information is missing, ask a single concise clarifying question or acknowledge what remains unknown.
+- The "About me" notes (when set) are your main personal knowledge about the user.
+- Ground facts in verified context, retrieved tool results, and "About me" notes.
+- NEVER invent facts, fake URLs, non-existent files, or citations.
+- Keep all secret keys, API tokens, and credentials strictly private.
 
-5. CONFIDENTIALITY & SECURITY:
-- Strictly keep all secret keys, API tokens, passwords, and credentials private (never reveal secret values).
-
-6. TOOL DISCIPLINE:
-- Use native tools dynamically when current facts, breaking news (e.g. Sierra Leone or EDSA electricity updates), recent events, live prices, documentation, or current date/time are needed.
-- Do not call web search for basic greetings, casual chat, creative writing, or basic math.`);
+5. AVAILABLE TOOLS & REAL-TIME ACCESS:
+You currently have these tools enabled:
+${toolLines || '- None currently enabled.'}
+- ALWAYS call web_search when the user asks about news, today's updates, current events, live prices/weather, sports scores, current leaders, recent software releases, or any changeable real-world fact.
+- NEVER claim you lack internet access, real-time information, or access to today's news when web_search is in the list above.
+- Call open_link when the user gives a specific http/https URL to open, read, or summarize.
+- Call system_check or recent_errors immediately for server health or error checks.
+- For code checks or finding bugs, read key files (chat.service, gemini.provider, tools, api.client, localChatDb) using code tools, report file and line, what is wrong, why, confidence level, and suggested fix, list reviewed files, and offer a fix prompt.
+- HONEST TOOL FAILURES: If any tool fails, times out, or is unconfigured/disabled, state the exact real reason returned by the tool—never fake results or hide the error.`);
 
   // Formatting & Modality
   if (options.isVoiceMode) {
     promptSections.push(`[MODALITY: VOICE]
-Keep sentences concise, fluid, and natural for text-to-speech (under 25 words per sentence). No markdown syntax, code blocks, or asterisks.`);
+Keep sentences concise and natural for speech (under 25 words per sentence). No markdown syntax, code blocks, or asterisks.`);
   } else {
     promptSections.push(`[FORMATTING]
-Default to clean Markdown paragraphs and prose. Use lists for sequential steps. Use Markdown tables ONLY for structured tabular comparisons. Never output raw HTML tags (e.g. <br>, &nbsp;) or JSON envelopes (e.g. {"response": "..."}).`);
+Default to clean Markdown paragraphs and prose. Use lists for sequential steps and Markdown tables only for structured comparisons. Never output raw HTML tags or JSON envelopes.`);
   }
 
   // User Context
@@ -93,17 +119,14 @@ Default to clean Markdown paragraphs and prose. Use lists for sequential steps. 
     }
   }
 
-  // User-configured "About me" (main knowledge about the user)
   if (cleanAboutMe) {
     promptSections.push(`[ABOUT ME — USER KNOWLEDGE]\n${cleanAboutMe}`);
   }
 
-  // User-configured "How Jexa should behave"
   if (cleanBehavior) {
     promptSections.push(`[HOW JEXA SHOULD BEHAVE]\n${cleanBehavior}`);
   }
 
-  // Emoji Preference check in About me or Behavior instructions
   const combinedPrefs = `${cleanAboutMe}\n${cleanBehavior}`;
   const hasNoEmojiPreference = /(?:no[-_\s]?emojis?|don'?t\s+use\s+emojis?|avoid\s+emojis?|dislikes?\s+emojis?|stop\s+using\s+emojis?|without\s+emojis?)/i.test(
     combinedPrefs
@@ -111,12 +134,6 @@ Default to clean Markdown paragraphs and prose. Use lists for sequential steps. 
   if (hasNoEmojiPreference) {
     promptSections.push(`[EMOJI PREFERENCE]\nThe user requested no emojis. Do not output any emojis.`);
   }
-
-  // Diagnostics & Code Inspection
-  promptSections.push(`[SYSTEM DIAGNOSTICS & CODE INSPECTION]
-Tools available: system_check, recent_errors, list_source_files, read_source_file, search_code.
-- For system health, servers, or errors, run system_check or recent_errors immediately and report component status (OK, Warning, Problem), likely cause, and suggested fix without revealing secret values.
-- For code checks or finding bugs, read the key files (chat.service, providers, tools, api.client, localChatDb), report exact file and line, what is wrong, why, confidence level, and suggested fix. List which files were reviewed. Never claim there are no bugs after reading only a few files. Proactively offer to write a fix prompt for Google AI Studio.`);
 
   const systemPrompt = promptSections.join('\n\n');
 
@@ -149,7 +166,6 @@ Tools available: system_check, recent_errors, list_source_files, read_source_fil
     }
   }
 
-  // Keep up to 8 historical turns plus current turn cleanly, starting with a user message
   const windowed = sourceMessages.slice(-9);
   const firstUserIndex = windowed.findIndex((m) => m.role === 'user');
   const validSlice = firstUserIndex !== -1 ? windowed.slice(firstUserIndex) : windowed;

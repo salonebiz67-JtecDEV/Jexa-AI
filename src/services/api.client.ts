@@ -43,6 +43,15 @@ export interface ProviderTestResult {
   audioUrl?: string;
 }
 
+export interface ToolTestResult {
+  success: boolean;
+  toolName: string;
+  durationMs: number;
+  message: string;
+  error?: string;
+  preview?: string;
+}
+
 export interface ProviderStatusSummary {
   text: {
     provider: string;
@@ -598,5 +607,53 @@ export const ApiClient = {
       method: 'POST',
       body: JSON.stringify({ toolName, enabled }),
     });
+  },
+
+  async testTool(toolName: string): Promise<ToolTestResult> {
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(`${API_BASE}/tools/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolName }),
+      }, 20000);
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        throw new ApiError('Tool test timed out after 20 seconds.', 408, 'REQUEST_TIMEOUT');
+      }
+      throw new ApiError(
+        err?.message || 'Unable to reach backend to run tool test.',
+        0,
+        'NETWORK_FAILURE'
+      );
+    }
+
+    let body: any;
+    try {
+      body = await response.json();
+    } catch {
+      throw new ApiError(
+        `Server returned an unparseable response (${response.status} ${response.statusText}).`,
+        response.status,
+        'INVALID_RESPONSE'
+      );
+    }
+
+    if (!response.ok) {
+      throw new ApiError(
+        body?.error || body?.message || `HTTP ${response.status}: ${response.statusText}`,
+        response.status,
+        body?.code
+      );
+    }
+
+    return {
+      success: Boolean(body?.success),
+      toolName: body?.toolName || toolName,
+      durationMs: typeof body?.durationMs === 'number' ? body.durationMs : 0,
+      message: body?.message || body?.error || (body?.success ? 'Tool test passed.' : 'Tool test failed.'),
+      error: body?.error,
+      preview: body?.preview,
+    };
   },
 };

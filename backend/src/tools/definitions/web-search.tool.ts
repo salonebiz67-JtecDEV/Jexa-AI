@@ -48,6 +48,10 @@ export const webSearchTool: InternalToolDefinition<WebSearchToolArgs, WebSearchT
       },
       urlsToInspect: {
         type: 'array',
+        items: {
+          type: 'string',
+          description: 'External webpage URL to inspect.',
+        },
         description: 'Optional list of specific external webpage URLs to inspect or verify.',
       },
     },

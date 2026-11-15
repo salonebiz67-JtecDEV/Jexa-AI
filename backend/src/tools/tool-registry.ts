@@ -1,5 +1,6 @@
 import { InternalToolDefinition, InternalToolContext, ToolInputSchema } from '../../../shared/types/tools';
 import { webSearchTool } from './definitions/web-search.tool';
+import { openLinkTool } from './definitions/open-link.tool';
 import { systemTimeTool } from './definitions/system-time.tool';
 import { systemCheckTool } from './definitions/system-check.tool';
 import { recentErrorsTool } from './definitions/recent-errors.tool';
@@ -11,19 +12,37 @@ export interface ToolStatusItem {
   name: string;
   displayName: string;
   description: string;
+  category: string;
   enabled: boolean;
   isAvailable: boolean;
-  isOwnerOnly: boolean;
+  available: boolean;
   callsToday: number;
+  totalCalls: number;
+  successCount: number;
+  failureCount: number;
+  successRate: number | null;
+  avgDurationMs: number;
   averageDurationMs: number;
-  lastError?: string;
+  lastUsedAt: string | null;
+  lastError: string | null;
+}
+
+interface InternalToolRuntimeStats {
+  callsToday: number;
+  totalCalls: number;
+  successCount: number;
+  failureCount: number;
+  totalDurationMs: number;
+  lastUsedAt: string | null;
+  lastError: string | null;
+  lastDate: string;
 }
 
 export class ToolRegistry {
   private static instance: ToolRegistry;
   private tools: Map<string, InternalToolDefinition> = new Map();
   private disabledTools: Set<string> = new Set();
-  private toolStats: Map<string, { callsToday: number; totalDurationMs: number; lastError?: string; lastDate: string }> = new Map();
+  private toolStats: Map<string, InternalToolRuntimeStats> = new Map();
 
   private constructor() {
     this.registerBuiltInTools();
@@ -42,15 +61,39 @@ export class ToolRegistry {
 
   public recordToolRun(name: string, durationMs: number, success: boolean, error?: string): void {
     const today = this.getTodayDateStr();
+    const nowIso = new Date().toISOString();
     let stat = this.toolStats.get(name);
-    if (!stat || stat.lastDate !== today) {
-      stat = { callsToday: 0, totalDurationMs: 0, lastError: undefined, lastDate: today };
+    if (!stat) {
+      stat = {
+        callsToday: 0,
+        totalCalls: 0,
+        successCount: 0,
+        failureCount: 0,
+        totalDurationMs: 0,
+        lastUsedAt: null,
+        lastError: null,
+        lastDate: today,
+      };
       this.toolStats.set(name, stat);
     }
+
+    if (stat.lastDate !== today) {
+      stat.callsToday = 0;
+      stat.lastDate = today;
+    }
+
     stat.callsToday += 1;
-    stat.totalDurationMs += Math.max(0, durationMs);
+    stat.totalCalls += 1;
+    if (success) {
+      stat.successCount += 1;
+    } else {
+      stat.failureCount += 1;
+    }
+    stat.totalDurationMs += Math.max(0, Math.round(durationMs || 0));
+    stat.lastUsedAt = nowIso;
+
     if (!success && error) {
-      stat.lastError = String(error).slice(0, 200);
+      stat.lastError = String(error).slice(0, 500);
     }
   }
 
@@ -70,13 +113,13 @@ export class ToolRegistry {
     return !this.disabledTools.has(name);
   }
 
-  public async getToolStatusList(isOwner = true): Promise<ToolStatusItem[]> {
+  public async getToolStatusList(): Promise<ToolStatusItem[]> {
     const today = this.getTodayDateStr();
     const result: ToolStatusItem[] = [];
 
-    // Ensure our 7 standard stateless tools appear in canonical order
     const canonicalOrder = [
       'web_search',
+      'open_link',
       'system_time',
       'system_check',
       'recent_errors',
@@ -90,32 +133,49 @@ export class ToolRegistry {
       allToolsMap.set(t.name, t);
     }
 
-    for (const toolName of canonicalOrder) {
+    // Add any extra registered tools at the end if not in canonicalOrder
+    const orderedNames = [
+      ...canonicalOrder,
+      ...Array.from(allToolsMap.keys()).filter((n) => !canonicalOrder.includes(n)),
+    ];
+
+    for (const toolName of orderedNames) {
       const tool = allToolsMap.get(toolName);
       if (!tool) continue;
 
       let isAvailable = false;
       try {
-        isAvailable = await tool.isAvailable({ isOwner: true });
+        isAvailable = await tool.isAvailable({});
       } catch {
         isAvailable = false;
       }
 
       const stat = this.toolStats.get(tool.name);
       const callsToday = stat && stat.lastDate === today ? stat.callsToday : 0;
-      const totalDuration = stat && stat.lastDate === today ? stat.totalDurationMs : 0;
-      const avgDuration = callsToday > 0 ? Math.round(totalDuration / callsToday) : 0;
+      const totalCalls = stat ? stat.totalCalls : 0;
+      const successCount = stat ? stat.successCount : 0;
+      const failureCount = stat ? stat.failureCount : 0;
+      const totalDuration = stat ? stat.totalDurationMs : 0;
+      const avgDuration = totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0;
+      const successRate = totalCalls > 0 ? Math.round((successCount / totalCalls) * 100) : null;
 
       result.push({
         name: tool.name,
         displayName: tool.displayName || tool.name,
         description: tool.description,
+        category: tool.category,
         enabled: !this.disabledTools.has(tool.name),
         isAvailable,
-        isOwnerOnly: false,
+        available: isAvailable,
         callsToday,
+        totalCalls,
+        successCount,
+        failureCount,
+        successRate,
+        avgDurationMs: avgDuration,
         averageDurationMs: avgDuration,
-        lastError: stat?.lastError,
+        lastUsedAt: stat?.lastUsedAt || null,
+        lastError: stat?.lastError || null,
       });
     }
 
@@ -124,6 +184,7 @@ export class ToolRegistry {
 
   private registerBuiltInTools(): void {
     this.registerTool(webSearchTool);
+    this.registerTool(openLinkTool);
     this.registerTool(systemTimeTool);
     this.registerTool(systemCheckTool);
     this.registerTool(recentErrorsTool);
@@ -146,7 +207,7 @@ export class ToolRegistry {
   }
 
   /**
-   * Unregister a tool by name (e.g. for testing or feature deprecation)
+   * Unregister a tool by name
    */
   public unregisterTool(name: string): boolean {
     return this.tools.delete(name);
@@ -212,7 +273,7 @@ export class ToolRegistry {
   }
 
   /**
-   * Reset registry back to built-ins (useful for test isolation)
+   * Reset registry back to built-ins
    */
   public resetToDefaults(): void {
     this.tools.clear();

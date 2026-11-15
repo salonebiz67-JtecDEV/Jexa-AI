@@ -440,13 +440,18 @@ Respond ONLY with a valid JSON object in this exact schema:
       'latest news', 'breaking news', 'current events', 'recent news',
       'headlines today', 'what happened today', 'what happened with',
       'current situation', 'latest updates on', 'latest update on',
-      'what is going on with', 'news today'
+      'what is going on with', 'news today', "today's news", 'todays news',
+      'ai news', 'tech news', 'world news', 'news update', 'news updates'
     ];
 
-    const hasNews = newsKeywords.some((kw) => lower.includes(kw));
-    const hasTemporal = /(today|this\s+week|this\s+month|2025|2026|recently|currently|right\s+now|yesterday)/i.test(lower);
+    const hasNews = newsKeywords.some((kw) => lower.includes(kw)) || /\bnews\b/i.test(lower);
+    const hasTemporal = /(today|this\s+week|this\s+month|2025|2026|2027|recently|currently|right\s+now|yesterday|latest|recent|happening)/i.test(lower);
 
-    if (hasNews || (hasTemporal && /(news|election|summit|earthquake|war|treaty|announcement|launch|scandal|protest|policy|crisis)/i.test(lower))) {
+    if (hasNews && (newsKeywords.some((kw) => lower.includes(kw)) || hasTemporal)) {
+      return { matches: true, query: this.cleanQuery(raw) };
+    }
+
+    if (hasTemporal && /(news|election|summit|earthquake|war|treaty|announcement|launch|scandal|protest|policy|crisis)/i.test(lower)) {
       return { matches: true, query: this.cleanQuery(raw) };
     }
     return { matches: false, query: '' };

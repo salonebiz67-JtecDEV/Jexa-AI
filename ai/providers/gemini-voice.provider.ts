@@ -9,6 +9,7 @@ import {
   DEFAULT_VOICE_MODEL,
   isTtsModel,
 } from '../../shared/types/provider';
+import { UsageTracker } from '../../backend/src/services/usage-tracker.service';
 
 function addWavHeader(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16): Buffer {
   const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
@@ -209,6 +210,17 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       this.lastErrorCode = undefined;
       this.lastError = undefined;
 
+      UsageTracker.recordAICall({
+        provider: 'gemini',
+        model: targetModel,
+        purpose: 'voice_tts',
+        promptChars: cleanText.length,
+        completionChars: Math.round(durationSeconds * 20),
+        isEstimated: true,
+        durationMs: latencyMs,
+        status: 'ok',
+      });
+
       return {
         audioBuffer: wavBuffer,
         contentType: 'audio/wav',
@@ -222,8 +234,24 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       };
     } catch (error: any) {
       console.error('[GeminiVoiceAIProvider] Speech synthesis failed:', error);
+      const latencyMs = Date.now() - startTime;
+      const promptChars = (request.text || '').length;
 
       if (error instanceof ProviderError) {
+        UsageTracker.recordAICall({
+          provider: 'gemini',
+          model: targetModel,
+          purpose: 'voice_tts',
+          promptChars,
+          completionTokens: 0,
+          isEstimated: true,
+          durationMs: latencyMs,
+          status: error.statusCode === 429 ? 'rate_limited' : 'error',
+          errorStatusCode: error.statusCode,
+          errorCode: error.code,
+          errorMessage: error.message,
+          errorDetails: error.message,
+        });
         throw error;
       }
 
@@ -246,6 +274,20 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         this.quotaExhaustedByModel.set(targetModel, Date.now() + cooldownMs);
         this.lastErrorCode = 'QUOTA_EXHAUSTED';
         this.lastError = `Gemini Voice (${targetModel}) quota exhausted. Try again later or pick another voice model in Settings.`;
+        UsageTracker.recordAICall({
+          provider: 'gemini',
+          model: targetModel,
+          purpose: 'voice_tts',
+          promptChars,
+          completionTokens: 0,
+          isEstimated: true,
+          durationMs: latencyMs,
+          status: 'rate_limited',
+          errorStatusCode: 429,
+          errorCode: 'QUOTA_EXHAUSTED',
+          errorMessage: this.lastError,
+          errorDetails: error.message || this.lastError,
+        });
         throw new ProviderError(
           this.lastError,
           'gemini',
@@ -258,6 +300,20 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       if (error.status === 401 || error.status === 403 || errStr.includes('401') || errStr.includes('API_KEY_INVALID')) {
         this.lastErrorCode = 'AUTHENTICATION_ERROR';
         this.lastError = 'Gemini authentication failed. Verify GEMINI_API_KEY.';
+        UsageTracker.recordAICall({
+          provider: 'gemini',
+          model: targetModel,
+          purpose: 'voice_tts',
+          promptChars,
+          completionTokens: 0,
+          isEstimated: true,
+          durationMs: latencyMs,
+          status: 'error',
+          errorStatusCode: 401,
+          errorCode: 'AUTHENTICATION_ERROR',
+          errorMessage: this.lastError,
+          errorDetails: error.message || this.lastError,
+        });
         throw new ProviderError(
           this.lastError,
           'gemini',
@@ -270,6 +326,20 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       if (error.status === 404 || errStr.includes('404') || errStr.includes('not found')) {
         this.lastErrorCode = 'MODEL_NOT_FOUND';
         this.lastError = `The selected voice model '${targetModel}' was not found.`;
+        UsageTracker.recordAICall({
+          provider: 'gemini',
+          model: targetModel,
+          purpose: 'voice_tts',
+          promptChars,
+          completionTokens: 0,
+          isEstimated: true,
+          durationMs: latencyMs,
+          status: 'error',
+          errorStatusCode: 404,
+          errorCode: 'MODEL_NOT_FOUND',
+          errorMessage: this.lastError,
+          errorDetails: error.message || this.lastError,
+        });
         throw new ProviderError(
           this.lastError,
           'gemini',
@@ -282,6 +352,20 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       if (error.status === 503 || errStr.includes('503') || errStr.includes('UNAVAILABLE')) {
         this.lastErrorCode = 'UNAVAILABLE';
         this.lastError = 'Gemini Voice is temporarily unavailable.';
+        UsageTracker.recordAICall({
+          provider: 'gemini',
+          model: targetModel,
+          purpose: 'voice_tts',
+          promptChars,
+          completionTokens: 0,
+          isEstimated: true,
+          durationMs: latencyMs,
+          status: 'error',
+          errorStatusCode: 503,
+          errorCode: 'UNAVAILABLE',
+          errorMessage: this.lastError,
+          errorDetails: error.message || this.lastError,
+        });
         throw new ProviderError(
           this.lastError,
           'gemini',
@@ -293,11 +377,26 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
 
       this.lastErrorCode = 'UNAVAILABLE';
       this.lastError = error.message || 'Gemini Voice is temporarily unavailable.';
+      const statusNum = Number(error.status || error.statusCode) || 500;
+      UsageTracker.recordAICall({
+        provider: 'gemini',
+        model: targetModel,
+        purpose: 'voice_tts',
+        promptChars,
+        completionTokens: 0,
+        isEstimated: true,
+        durationMs: latencyMs,
+        status: 'error',
+        errorStatusCode: statusNum,
+        errorCode: error.code || 'UNAVAILABLE',
+        errorMessage: this.lastError,
+        errorDetails: error.message || this.lastError,
+      });
       throw new ProviderError(
         this.lastError || 'Gemini Voice is temporarily unavailable.',
         'gemini',
         'UNAVAILABLE',
-        500,
+        statusNum,
         targetModel
       );
     }

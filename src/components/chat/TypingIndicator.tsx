@@ -12,12 +12,11 @@ import {
   RotateCcw,
   Compass,
   Brain,
-  BookmarkCheck,
   Server,
-  Database,
   ClipboardList,
   FileCode,
   Search,
+  ExternalLink,
 } from 'lucide-react';
 import { AIActivityStatus } from '../../../shared/types';
 
@@ -109,17 +108,6 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           glow: 'shadow-[0_0_12px_rgba(6,182,212,0.25)]',
           pulseIcon: true,
         };
-      case 'Checking Supabase…':
-      case 'Checking Supabase...':
-        return {
-          icon: Database,
-          color: 'text-emerald-400',
-          bg: 'bg-emerald-500/10',
-          border: 'border-emerald-500/30',
-          dotColor: 'bg-emerald-400',
-          glow: 'shadow-[0_0_12px_rgba(16,185,129,0.25)]',
-          pulseIcon: true,
-        };
       case 'Reading error logs…':
       case 'Reading error logs...':
         return {
@@ -205,6 +193,7 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           glow: 'shadow-[0_0_12px_rgba(45,212,191,0.25)]',
           pulseIcon: true,
         };
+      case 'Searching the web…':
       case 'Searching the web...':
         return {
           icon: Globe,
@@ -214,6 +203,17 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           dotColor: 'bg-cyan-400',
           glow: 'shadow-[0_0_12px_rgba(6,182,212,0.25)]',
           spinIcon: true,
+        };
+      case 'Opening page…':
+      case 'Opening page...':
+        return {
+          icon: ExternalLink,
+          color: 'text-sky-400',
+          bg: 'bg-sky-500/10',
+          border: 'border-sky-500/30',
+          dotColor: 'bg-sky-400',
+          glow: 'shadow-[0_0_12px_rgba(56,189,248,0.25)]',
+          pulseIcon: true,
         };
       case 'Reading sources...':
       case 'Reading web pages...':
@@ -423,17 +423,25 @@ export const TypingIndicator: React.FC<TypingIndicatorProps> = ({
           )}
         </div>
 
-        {/* Detailed Search Query Chip if searching */}
-        {details?.query && (currentStatus === 'Searching the web...' || currentStatus === 'Reading web pages...' || currentStatus === 'Analyzing sources...') && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            className="mt-1.5 pt-1.5 border-t border-white/[0.05] flex items-center gap-1.5 text-[11px] font-mono text-cyan-300/80 truncate"
-          >
-            <span className="text-slate-500 uppercase text-[9px] tracking-wider shrink-0 font-sans">Query:</span>
-            <span className="truncate max-w-[260px] sm:max-w-xs text-cyan-300">"{details.query}"</span>
-          </motion.div>
-        )}
+        {/* Detailed Search Query or Page URL Chip */}
+        {details?.query &&
+          (currentStatus === 'Searching the web…' ||
+            currentStatus === 'Searching the web...' ||
+            currentStatus === 'Opening page…' ||
+            currentStatus === 'Opening page...' ||
+            currentStatus === 'Reading web pages...' ||
+            currentStatus === 'Analyzing sources...') && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              className="mt-1.5 pt-1.5 border-t border-white/[0.05] flex items-center gap-1.5 text-[11px] font-mono text-cyan-300/80 truncate"
+            >
+              <span className="text-slate-500 uppercase text-[9px] tracking-wider shrink-0 font-sans">
+                {currentStatus.startsWith('Opening page') ? 'URL:' : 'Query:'}
+              </span>
+              <span className="truncate max-w-[260px] sm:max-w-xs text-cyan-300">"{details.query}"</span>
+            </motion.div>
+          )}
 
         {/* Detailed Memory Fact Chip */}
         {details?.memoryFact && (currentStatus === 'Saving memory...' || currentStatus === 'Memory saved' || currentStatus === 'Memory updated') && (

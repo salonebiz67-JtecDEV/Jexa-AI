@@ -26,6 +26,7 @@ router.post('/providers/test-voice', ProviderController.testVoice);
 router.get('/usage/summary', UsageController.getSummary);
 router.get('/tools/status', UsageController.getToolsStatus);
 router.post('/tools/toggle', UsageController.toggleTool);
+router.post('/tools/test', UsageController.testTool);
 
 // AI Brain & Profile
 router.get('/ai/brain-profile', BrainController.getProfile);
