@@ -352,6 +352,86 @@ export const ApiClient = {
     }
   },
 
+  async generateConversationTitle(userMessage: string, assistantMessage?: string): Promise<string> {
+    const res = await fetchJson<{ title: string }>(`${API_BASE}/chat/title`, {
+      method: 'POST',
+      body: JSON.stringify({ userMessage, assistantMessage }),
+    });
+    return (res?.title || '').trim();
+  },
+
+  async synthesizeVoiceBlob(payload: VoiceSynthesisRequest): Promise<{
+    blob: Blob;
+    mimeType: string;
+    model?: string;
+    provider?: string;
+  }> {
+    const cleanPayload: VoiceSynthesisRequest = {
+      text: typeof payload?.text === 'string' ? payload.text : '',
+      voiceId: payload?.voiceId,
+      provider: 'gemini',
+      model: typeof payload?.model === 'string' ? payload.model : undefined,
+      speed: payload?.speed,
+      pitch: payload?.pitch,
+    };
+
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(
+        `${API_BASE}/voice`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'audio/*, application/json',
+          },
+          body: JSON.stringify(cleanPayload),
+        },
+        25000
+      );
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        throw new ApiError('Voice synthesis timed out after 25 seconds.', 504, 'VOICE_TIMEOUT');
+      }
+      throw err;
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+
+    if (contentType.includes('audio/') || contentType.includes('application/octet-stream')) {
+      if (!res.ok) {
+        throw new ApiError(`Voice provider failed with status ${res.status}.`, res.status);
+      }
+      const blob = await res.blob();
+      return {
+        blob,
+        mimeType: contentType.split(';')[0] || blob.type || 'audio/wav',
+        model: cleanPayload.model,
+        provider: 'gemini',
+      };
+    }
+
+    const body: any = await res.json();
+    if (!res.ok || body.success === false) {
+      const errorMsg = body?.message || body?.error || `Voice synthesis failed (${res.status})`;
+      throw new ApiError(errorMsg, res.status, body?.code, body?.provider);
+    }
+
+    const data = (body.data !== undefined ? body.data : body) as VoiceSynthesisResponse;
+    if (!data?.audioUrl) {
+      throw new ApiError(data?.message || 'Voice provider returned no audio.', 502, undefined, 'gemini');
+    }
+
+    const audioResp = await fetch(data.audioUrl);
+    const blob = await audioResp.blob();
+    return {
+      blob,
+      mimeType: data.contentType || data.format || blob.type || 'audio/wav',
+      model: data.model || cleanPayload.model,
+      provider: data.provider || 'gemini',
+    };
+  },
+
   // Voice Synthesis (Gemini TTS — handles binary audio Blob and JSON data URLs safely)
   async requestVoiceSynthesis(payload: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
     const cleanPayload: VoiceSynthesisRequest = {

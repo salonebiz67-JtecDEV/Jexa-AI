@@ -11,6 +11,7 @@ import {
   FileText,
   Image as ImageIcon,
   Check,
+  Loader2,
 } from 'lucide-react';
 import { useSpeechRecognition } from '../../hooks/useSpeechRecognition';
 import { LiveVoiceStatus } from '../../hooks/useLiveVoice';
@@ -49,8 +50,10 @@ export const Composer: React.FC<ComposerProps> = ({
 
   // Web Speech API Voice-to-text hook (distinct from LIVE voice)
   const {
+    status: micStatus,
     isListening,
-    isSupported,
+    isProcessing,
+    interimTranscript,
     startListening,
     stopListening,
     resetTranscript,
@@ -140,12 +143,20 @@ export const Composer: React.FC<ComposerProps> = ({
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
+  const handleMicToggle = () => {
+    if (micStatus === 'listening') {
+      stopListening();
+    } else if (micStatus === 'idle') {
+      startListening();
+    }
+  };
+
   // Has typed text or attached files
   const hasContent = inputText.trim().length > 0 || attachments.length > 0;
   const canSend = hasContent && !disabled;
 
   return (
-    <div className="p-2.5 sm:p-4 max-w-3xl lg:max-w-4xl mx-auto w-full pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+    <div className="p-2.5 sm:p-4 max-w-3xl lg:max-w-4xl mx-auto w-full min-w-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       {/* Hidden File Inputs for functional Plus button */}
       <input
         ref={fileInputRef}
@@ -164,7 +175,40 @@ export const Composer: React.FC<ComposerProps> = ({
       />
 
       {/* Modern ChatGPT-style rounded capsule composer */}
-      <div className="relative rounded-[24px] sm:rounded-[28px] bg-[#0c101d] border border-white/[0.09] shadow-[0_8px_30px_rgb(0,0,0,0.5)] focus-within:border-cyan-500/40 focus-within:shadow-[0_0_24px_rgba(6,182,212,0.15)] transition-all duration-200">
+      <div className="relative rounded-[24px] sm:rounded-[28px] bg-[#0c101d] border border-white/[0.09] shadow-[0_8px_30px_rgb(0,0,0,0.5)] focus-within:border-cyan-500/40 focus-within:shadow-[0_0_24px_rgba(6,182,212,0.15)] transition-all duration-200 max-w-full">
+        {/* Live Voice Dictation Status Strip */}
+        {(isListening || isProcessing) && (
+          <div className="flex items-center justify-between gap-2 px-4 pt-2.5 pb-1.5 border-b border-white/[0.05] text-xs min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              {isListening ? (
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-400" />
+                </span>
+              ) : (
+                <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin shrink-0" />
+              )}
+              <span className="font-medium text-rose-300 shrink-0">
+                {isListening ? 'Listening…' : 'Processing…'}
+              </span>
+              {interimTranscript && (
+                <span className="text-slate-300 truncate italic">
+                  “{interimTranscript}”
+                </span>
+              )}
+            </div>
+            {isListening && (
+              <button
+                type="button"
+                onClick={stopListening}
+                className="text-[11px] font-medium text-slate-300 hover:text-white px-2 py-0.5 rounded-md bg-white/[0.06] hover:bg-white/[0.12] active:scale-95 transition-all cursor-pointer shrink-0"
+              >
+                Stop
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Active attachment & tool chips */}
         {(attachments.length > 0 || webSearchActive || deepThinkActive) && (
           <div className="flex flex-wrap items-center gap-1.5 px-3.5 pt-3 pb-1 border-b border-white/[0.04]">
@@ -172,7 +216,7 @@ export const Composer: React.FC<ComposerProps> = ({
             {attachments.map((att) => (
               <div
                 key={att.id}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.06] border border-white/[0.08] text-xs text-slate-200 animate-fadeIn"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.06] border border-white/[0.08] text-xs text-slate-200 animate-fadeIn max-w-full"
               >
                 {att.type === 'image' ? (
                   <ImageIcon className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -180,11 +224,11 @@ export const Composer: React.FC<ComposerProps> = ({
                   <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                 )}
                 <span className="truncate max-w-[120px] sm:max-w-[180px] font-medium">{att.name}</span>
-                {att.size && <span className="text-[10px] text-slate-400 font-mono">({att.size})</span>}
+                {att.size && <span className="text-[10px] text-slate-400 font-mono shrink-0">({att.size})</span>}
                 <button
                   type="button"
                   onClick={() => removeAttachment(att.id)}
-                  className="p-0.5 text-slate-400 hover:text-white transition-colors cursor-pointer ml-0.5"
+                  className="p-0.5 text-slate-400 hover:text-white active:scale-95 transition-all cursor-pointer ml-0.5"
                   aria-label="Remove attachment"
                 >
                   <X className="w-3 h-3" />
@@ -200,7 +244,7 @@ export const Composer: React.FC<ComposerProps> = ({
                 <button
                   type="button"
                   onClick={() => setWebSearchActive(false)}
-                  className="p-0.5 text-cyan-400 hover:text-white transition-colors cursor-pointer"
+                  className="p-0.5 text-cyan-400 hover:text-white active:scale-95 transition-all cursor-pointer"
                   title="Disable Web Search"
                 >
                   <X className="w-3 h-3" />
@@ -216,7 +260,7 @@ export const Composer: React.FC<ComposerProps> = ({
                 <button
                   type="button"
                   onClick={() => setDeepThinkActive(false)}
-                  className="p-0.5 text-emerald-400 hover:text-white transition-colors cursor-pointer"
+                  className="p-0.5 text-emerald-400 hover:text-white active:scale-95 transition-all cursor-pointer"
                   title="Disable Deep Think"
                 >
                   <X className="w-3 h-3" />
@@ -227,13 +271,13 @@ export const Composer: React.FC<ComposerProps> = ({
         )}
 
         {/* Main Input Row: [Plus] [Textarea] [Dynamic Action Buttons] */}
-        <div className="flex items-end gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2">
+        <div className="flex items-end gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 min-w-0">
           {/* Functional Plus (+) Button on the Left */}
-          <div className="relative shrink-0 mb-0.5" ref={plusMenuRef}>
+          <div className="relative shrink-0" ref={plusMenuRef}>
             <button
               type="button"
               onClick={() => setShowPlusMenu(!showPlusMenu)}
-              className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer ${
+              className={`min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer active:scale-95 ${
                 showPlusMenu
                   ? 'bg-white/[0.15] text-white rotate-45'
                   : 'bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 hover:text-white'
@@ -257,7 +301,7 @@ export const Composer: React.FC<ComposerProps> = ({
                   onClick={() => {
                     imageInputRef.current?.click();
                   }}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-white/[0.06] text-left transition-colors cursor-pointer text-slate-200 hover:text-white"
+                  className="w-full min-h-[44px] flex items-center gap-3 px-3 py-2 hover:bg-white/[0.06] text-left transition-colors cursor-pointer text-slate-200 hover:text-white active:scale-[0.99]"
                 >
                   <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
                     <ImageIcon className="w-4 h-4" />
@@ -273,7 +317,7 @@ export const Composer: React.FC<ComposerProps> = ({
                   onClick={() => {
                     fileInputRef.current?.click();
                   }}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-white/[0.06] text-left transition-colors cursor-pointer text-slate-200 hover:text-white"
+                  className="w-full min-h-[44px] flex items-center gap-3 px-3 py-2 hover:bg-white/[0.06] text-left transition-colors cursor-pointer text-slate-200 hover:text-white active:scale-[0.99]"
                 >
                   <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0">
                     <FileText className="w-4 h-4" />
@@ -292,7 +336,7 @@ export const Composer: React.FC<ComposerProps> = ({
                     setWebSearchActive(!webSearchActive);
                     setShowPlusMenu(false);
                   }}
-                  className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/[0.06] text-left transition-colors cursor-pointer"
+                  className="w-full min-h-[44px] flex items-center justify-between px-3 py-2 hover:bg-white/[0.06] text-left transition-colors cursor-pointer active:scale-[0.99]"
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 shrink-0">
@@ -318,7 +362,7 @@ export const Composer: React.FC<ComposerProps> = ({
                     setDeepThinkActive(!deepThinkActive);
                     setShowPlusMenu(false);
                   }}
-                  className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/[0.06] text-left transition-colors cursor-pointer"
+                  className="w-full min-h-[44px] flex items-center justify-between px-3 py-2 hover:bg-white/[0.06] text-left transition-colors cursor-pointer active:scale-[0.99]"
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-7 h-7 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 shrink-0">
@@ -342,29 +386,29 @@ export const Composer: React.FC<ComposerProps> = ({
           </div>
 
           {/* Text Input in Center */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 flex items-center">
             <textarea
               ref={textareaRef}
               rows={1}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Message JEXA..."
-              className="w-full bg-transparent px-2 py-2 text-[15px] sm:text-base text-slate-100 placeholder-slate-500 focus:outline-none resize-none leading-relaxed min-h-[40px] max-h-[140px] block"
+              placeholder={isListening ? 'Listening… speak now' : 'Message JEXA...'}
+              className="w-full bg-transparent px-1.5 sm:px-2 py-2.5 text-[15px] sm:text-base text-slate-100 placeholder-slate-500 focus:outline-none resize-none leading-relaxed min-h-[44px] max-h-[140px] block"
             />
           </div>
 
           {/* Dynamic Right Actions: Switch between [Mic + LIVE] and [Send] */}
-          <div className="flex items-center gap-1.5 shrink-0 mb-0.5">
+          <div className="flex items-center gap-1 shrink-0">
             {hasContent ? (
               /* As soon as text is typed: Show Circular Send Button */
               <button
                 type="button"
                 onClick={() => handleSubmit()}
                 disabled={!canSend}
-                className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-150 cursor-pointer ${
+                className={`min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 ${
                   canSend
-                    ? 'bg-white text-slate-950 hover:bg-slate-200 active:scale-95 shadow-[0_0_15px_rgba(255,255,255,0.3)]'
+                    ? 'bg-white text-slate-950 hover:bg-slate-200 shadow-[0_0_15px_rgba(255,255,255,0.3)]'
                     : 'bg-white/[0.08] text-slate-500 cursor-not-allowed'
                 }`}
                 title="Send message"
@@ -378,17 +422,37 @@ export const Composer: React.FC<ComposerProps> = ({
                 {/* Voice Dictation (Speech-to-text recording) */}
                 <button
                   type="button"
-                  onClick={isListening ? stopListening : startListening}
-                  disabled={!isSupported && !isListening}
-                  className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-150 cursor-pointer ${
+                  onClick={handleMicToggle}
+                  disabled={isProcessing}
+                  className={`min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 ${
                     isListening
-                      ? 'bg-rose-500/25 text-rose-400 border border-rose-500/40 animate-pulse'
+                      ? 'bg-rose-500/25 text-rose-300 border border-rose-500/50 animate-pulse shadow-[0_0_14px_rgba(244,63,94,0.28)]'
+                      : isProcessing
+                      ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 cursor-wait'
                       : 'text-slate-400 hover:text-white hover:bg-white/[0.08]'
                   }`}
-                  title={isListening ? 'Stop recording' : 'Voice dictation (speech-to-text)'}
-                  aria-label="Voice dictation"
+                  title={
+                    isListening
+                      ? 'Tap to stop listening'
+                      : isProcessing
+                      ? 'Processing speech…'
+                      : 'Voice dictation (speech-to-text)'
+                  }
+                  aria-label={
+                    isListening
+                      ? 'Stop voice dictation'
+                      : isProcessing
+                      ? 'Processing speech'
+                      : 'Start voice dictation'
+                  }
                 >
-                  {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  {isProcessing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : isListening ? (
+                    <MicOff className="w-4 h-4" />
+                  ) : (
+                    <Mic className="w-4 h-4" />
+                  )}
                 </button>
 
                 {/* Prominent LIVE Voice Conversation Button (Gemini Live API) */}
@@ -397,7 +461,7 @@ export const Composer: React.FC<ComposerProps> = ({
                   onClick={onOpenLive}
                   title="Start LIVE Voice conversation with JEXA"
                   aria-label="Start LIVE Voice conversation with JEXA"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border transition-all duration-200 cursor-pointer active:scale-95 ${
+                  className={`min-h-[44px] flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-full border transition-all duration-200 cursor-pointer active:scale-95 shrink-0 ${
                     liveStatus === 'connecting'
                       ? 'bg-cyan-500/20 border-cyan-400/50 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.3)]'
                       : liveStatus === 'speaking' || liveStatus === 'listening' || liveStatus === 'processing'
@@ -434,7 +498,7 @@ export const Composer: React.FC<ComposerProps> = ({
                   </span>
 
                   <Radio className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                  <span className="text-xs font-semibold tracking-wider font-['Syne',sans-serif]">
+                  <span className="text-xs font-semibold tracking-wider font-['Syne',sans-serif] whitespace-nowrap">
                     {liveStatus === 'connecting'
                       ? 'CONNECTING'
                       : liveStatus === 'speaking' || liveStatus === 'listening' || liveStatus === 'processing'

@@ -16,11 +16,11 @@ import {
   MoreVertical,
   Edit2,
   Share2,
-  Check,
   AlertTriangle,
   Wrench,
 } from 'lucide-react';
 import { Conversation } from '../../../shared/types';
+import { showToast as emitToast } from '../../services/toast';
 
 export type ActiveNavTab = 'chat' | 'projects' | 'images' | 'remote' | 'schedule' | 'plugins' | 'tools';
 
@@ -69,9 +69,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Delete Confirmation State
   const [deleteConfirmationTarget, setDeleteConfirmationTarget] = useState<Conversation | null>(null);
 
-  // Toast Feedback State
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
   // Long-press detection timer ref
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isLongPressTriggeredRef = useRef(false);
@@ -85,9 +82,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const pinnedConversations = conversations.filter(isConvPinned);
   const recentConversations = conversations.filter((c) => !isConvPinned(c));
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 2200);
+  const showToast = (msg: string, type: 'success' | 'error' | 'info' = 'success') => {
+    emitToast(msg, type);
   };
 
   // Touch Long-Press handlers
@@ -150,14 +146,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         });
         showToast('Shared successfully');
       } catch (err: any) {
-        if (err.name !== 'AbortError') {
-          navigator.clipboard.writeText(shareUrl);
-          showToast('Link copied to clipboard');
+        if (err?.name !== 'AbortError') {
+          try {
+            await navigator.clipboard.writeText(shareUrl);
+            showToast('Link copied');
+          } catch {
+            showToast('Could not share or copy link.', 'error');
+          }
         }
       }
     } else {
-      navigator.clipboard.writeText(shareUrl);
-      showToast('Link copied to clipboard');
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        showToast('Link copied');
+      } catch {
+        showToast('Could not copy link to clipboard.', 'error');
+      }
     }
   };
 
@@ -217,7 +221,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar Drawer */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-50 w-72 sm:w-80 lg:w-72 xl:w-80 bg-[#090d16] border-r border-white/[0.06] flex flex-col transition-transform duration-300 ease-in-out lg:static lg:translate-x-0 pt-safe pb-safe pl-safe ${
+        className={`fixed top-0 bottom-0 left-0 z-50 w-72 sm:w-80 lg:w-72 xl:w-80 bg-[#090d16] border-r border-white/[0.06] flex flex-col overflow-x-hidden transition-transform duration-300 ease-in-out lg:static lg:translate-x-0 pt-safe pb-safe pl-safe ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -275,7 +279,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Middle Scrollable Section: Conversations */}
-        <div className="flex-1 overflow-y-auto px-2 py-3 space-y-4">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-none px-2 py-3 space-y-4">
           {/* Pinned Section */}
           {pinnedConversations.length > 0 && (
             <div className="space-y-0.5">
@@ -605,14 +609,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Toast Feedback */}
-      {toastMessage && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#0f1422] border border-emerald-500/40 text-emerald-300 text-xs shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2">
-          <Check className="w-3.5 h-3.5" />
-          <span>{toastMessage}</span>
         </div>
       )}
     </>

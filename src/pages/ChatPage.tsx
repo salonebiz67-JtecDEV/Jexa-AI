@@ -17,12 +17,23 @@ import { ShareDialog } from '../components/dialogs/ShareDialog';
 import { SettingsDialog } from '../components/dialogs/SettingsDialog';
 import { PWAInstallBanner } from '../components/common/PWAInstallBanner';
 import { OfflineIndicator } from '../components/common/OfflineIndicator';
+import { ToastContainer } from '../components/common/ToastContainer';
 import { useChat } from '../hooks/useChat';
 import { useLiveVoice } from '../hooks/useLiveVoice';
-import { AudioPlayer } from '../services/audioPlayer';
+import { AudioPlayer, AudioPlayerSnapshot } from '../services/audioPlayer';
 import { safeStorage } from '../services/storage';
+import { localChatDb } from '../services/localChatDb';
+import { showToast } from '../services/toast';
 import { ApiClient } from '../services/api.client';
-import { Project, ImageItem, ScheduleItem, PluginItem, RemoteDevice } from '../../shared/types';
+import {
+  Project,
+  ImageItem,
+  ScheduleItem,
+  PluginItem,
+  RemoteDevice,
+  ChatMessage,
+  DEFAULT_VOICE_MODEL,
+} from '../../shared/types';
 import cyberLandscapeImg from '../assets/images/image_cyber_landscape_1790783143139.jpg';
 import abstractNeuralImg from '../assets/images/image_abstract_neural_1790783155459.jpg';
 import creativeWorkspaceImg from '../assets/images/image_creative_workspace_1790783168148.jpg';
@@ -60,16 +71,24 @@ export const ChatPage: React.FC = () => {
     onAction?: () => void;
   } | null>(null);
 
+  // Per-message audio playback state
+  const [audioState, setAudioState] = useState<AudioPlayerSnapshot>(() => AudioPlayer.getSnapshot());
+
+  useEffect(() => {
+    return AudioPlayer.subscribe(setAudioState);
+  }, []);
+
   // Chat State
   const {
     conversations,
     currentConversationId,
     messages,
-    isLoading,
     isSending,
+    regeneratingMessageId,
     activityStatus,
     activityDetails,
     retrySearch,
+    regenerateMessage,
     selectConversation,
     startNewChat,
     deleteConversation,
@@ -360,78 +379,155 @@ export const ChatPage: React.FC = () => {
     );
   };
 
-  // Real AI Voice synthesis using Gemini Neural TTS
-  const handleSpeak = async (text: string) => {
-    if (AudioPlayer.isPlaying) {
-      AudioPlayer.stop();
-      return;
-    }
-
-    const activeVoiceModel = safeStorage.getItem('jexa_voice_model') || undefined;
-    const activeVoiceName = safeStorage.getItem('jexa_voice_name') || 'aura';
-
-    const cleanText = text
-      .replace(/[*#`_\[\]()]/g, '')
-      .replace(/https?:\/\/\S+/g, '')
-      .trim();
-
-    if (!cleanText) return;
-
-    try {
-      const voiceRes = await ApiClient.requestVoiceSynthesis({
-        text: cleanText,
-        voiceId: activeVoiceName,
-        provider: 'gemini',
-        model: activeVoiceModel,
-      });
-
-      if (voiceRes?.audioUrl) {
-        await AudioPlayer.playUrl(voiceRes.audioUrl);
+  // Real AI Voice synthesis using Gemini Neural TTS + IndexedDB audio cache
+  const handleSpeak = useCallback(
+    async (message: ChatMessage) => {
+      const currentSnap = AudioPlayer.getSnapshot();
+      if (currentSnap.activeMessageId === message.id) {
+        if (currentSnap.status === 'playing') {
+          AudioPlayer.pause();
+          return;
+        }
+        if (currentSnap.status === 'paused') {
+          try {
+            await AudioPlayer.resume();
+          } catch (err: any) {
+            showToast(err?.message || 'Could not resume audio.', 'error');
+          }
+          return;
+        }
+        if (currentSnap.status === 'loading') {
+          return;
+        }
       }
-    } catch (err: any) {
-      console.warn('[ChatPage] Gemini voice playback error:', err.message);
-      const errMsg = err.message || '';
-      const is429 =
-        err.status === 429 ||
-        err.statusCode === 429 ||
-        err.code === 'QUOTA_EXHAUSTED' ||
-        errMsg.includes('429') ||
-        errMsg.includes('quota') ||
-        errMsg.includes('RESOURCE_EXHAUSTED');
 
-      const cleanMessage = is429
-        ? 'Gemini Voice quota reached. Try switching the voice model in Settings or try again shortly.'
-        : err.status === 401 || err.status === 403
-        ? 'Gemini authentication failed. Check GEMINI_API_KEY.'
-        : err.status === 404
-        ? 'The selected Gemini voice model was not found.'
-        : err.status === 503
-        ? 'Gemini Voice is temporarily unavailable.'
-        : errMsg || 'Voice synthesis failed.';
+      const activeVoiceModel = safeStorage.getItem('jexa_voice_model') || DEFAULT_VOICE_MODEL;
+      const activeVoiceName = safeStorage.getItem('jexa_voice_name') || 'aura';
 
-      setVoiceNotification({
-        message: cleanMessage,
-        type: is429 ? 'warning' : 'error',
-        actionLabel: 'Settings',
-        onAction: () => setSettingsOpen(true),
-      });
-    }
-  };
+      const cleanText = (message.content || '')
+        .replace(/[*#`_\[\]()]/g, '')
+        .replace(/https?:\/\/\S+/g, '')
+        .trim();
 
-  const handleRegenerate = () => {
-    const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
-    if (lastUserMessage) {
-      sendMessage(lastUserMessage.content);
-    }
-  };
+      if (!cleanText) {
+        showToast('No readable text in this message.', 'info');
+        return;
+      }
 
-  const handleShareMessage = () => {
-    setShareOpen(true);
-  };
+      AudioPlayer.clearError(message.id);
+      setVoiceNotification(null);
+
+      try {
+        // 1. Check IndexedDB audio cache keyed by messageId, voice, model, and text
+        const cached = await localChatDb.getCachedAudio(
+          message.id,
+          activeVoiceName,
+          activeVoiceModel,
+          cleanText
+        );
+
+        if (cached?.blob && cached.blob.size > 0) {
+          await AudioPlayer.playBlob(cached.blob, message.id);
+          return;
+        }
+
+        // 2. Fetch fresh audio from Gemini TTS and save in IndexedDB
+        AudioPlayer.setLoading(message.id);
+
+        const synth = await ApiClient.synthesizeVoiceBlob({
+          text: cleanText,
+          voiceId: activeVoiceName,
+          provider: 'gemini',
+          model: activeVoiceModel,
+        });
+
+        await localChatDb.saveCachedAudio({
+          messageId: message.id,
+          conversationId: message.conversationId || currentConversationId || '',
+          voiceId: activeVoiceName,
+          model: synth.model || activeVoiceModel,
+          text: cleanText,
+          blob: synth.blob,
+          mimeType: synth.mimeType,
+        });
+
+        // Only start playing if user hasn't cancelled or switched to another message while loading
+        const latestSnap = AudioPlayer.getSnapshot();
+        if (latestSnap.activeMessageId !== message.id || latestSnap.status !== 'loading') {
+          return;
+        }
+
+        await AudioPlayer.playBlob(synth.blob, message.id);
+      } catch (err: any) {
+        console.warn('[ChatPage] Gemini voice playback error:', err?.message || err);
+        const errMsg = err?.message || '';
+        const is429 =
+          err?.status === 429 ||
+          err?.statusCode === 429 ||
+          err?.code === 'QUOTA_EXHAUSTED' ||
+          errMsg.includes('429') ||
+          errMsg.includes('quota') ||
+          errMsg.includes('RESOURCE_EXHAUSTED');
+
+        const cleanMessage = is429
+          ? 'Gemini Voice quota reached. Try switching the voice model in Settings or try again shortly.'
+          : err?.status === 401 || err?.status === 403
+          ? 'Gemini authentication failed. Check GEMINI_API_KEY.'
+          : err?.status === 404
+          ? 'The selected Gemini voice model was not found.'
+          : err?.status === 503
+          ? 'Gemini Voice is temporarily unavailable.'
+          : errMsg || 'Voice synthesis failed.';
+
+        AudioPlayer.setError(message.id, cleanMessage);
+        showToast(cleanMessage, 'error');
+      }
+    },
+    [currentConversationId]
+  );
+
+  const handleRegenerate = useCallback(
+    (messageId?: string) => {
+      void regenerateMessage(messageId);
+    },
+    [regenerateMessage]
+  );
+
+  const handleShareMessage = useCallback(
+    async (text: string) => {
+      const shareUrl =
+        typeof window !== 'undefined'
+          ? `${window.location.origin}/chat/${currentConversationId || 'share'}`
+          : 'https://jexa.ai';
+
+      if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+        try {
+          await navigator.share({
+            title: activeConversation?.title || 'JEXA Response',
+            text: text.slice(0, 600),
+            url: shareUrl,
+          });
+          return;
+        } catch (err: any) {
+          if (err?.name === 'AbortError') return;
+        }
+      }
+
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        showToast('Link copied', 'success');
+      } catch {
+        setShareOpen(true);
+        showToast('Could not copy link automatically.', 'error');
+      }
+    },
+    [activeConversation?.title, currentConversationId]
+  );
 
   const handleClearHistory = async () => {
     await clearAllConversations();
     setSettingsOpen(false);
+    showToast('Chat history cleared', 'info');
   };
 
   const handleTogglePin = useCallback(
@@ -519,6 +615,8 @@ export const ChatPage: React.FC = () => {
               <MessageList
                 messages={messages}
                 isSending={isSending}
+                regeneratingMessageId={regeneratingMessageId}
+                audioState={audioState}
                 activityStatus={activityStatus}
                 activityDetails={activityDetails}
                 projects={projects}
@@ -671,6 +769,9 @@ export const ChatPage: React.FC = () => {
         onRetry={liveVoice.retryConnection}
         debugStats={liveVoice.debugStats}
       />
+
+      {/* Global Toast Notifications */}
+      <ToastContainer />
 
       {/* Real-time Network Connectivity Indicator */}
       <OfflineIndicator />

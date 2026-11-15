@@ -13,6 +13,8 @@ import {
   safeStorage,
 } from '../services/storage';
 import { deriveConversationTitle, localChatDb } from '../services/localChatDb';
+import { AudioPlayer } from '../services/audioPlayer';
+import { showToast } from '../services/toast';
 
 const ACTIVE_CONV_STORAGE_KEY = 'jexa_active_conv_id';
 
@@ -22,6 +24,7 @@ export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSending, setIsSending] = useState<boolean>(false);
+  const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
   const [activityStatus, setActivityStatus] = useState<AIActivityStatus | null>(null);
   const [activityDetails, setActivityDetails] = useState<{
     query?: string;
@@ -53,7 +56,9 @@ export function useChat() {
       }
     } catch (err: any) {
       console.error('[useChat] Failed to load conversations from IndexedDB:', err);
-      setError('Unable to load local chats from device storage.');
+      const msg = 'Unable to load local chats from device storage.';
+      setError(msg);
+      showToast(msg, 'error');
     }
   }, []);
 
@@ -83,6 +88,7 @@ export function useChat() {
         if (isMounted) {
           console.error('[useChat] Error loading local messages:', err);
           setIsLoading(false);
+          showToast('Unable to load messages for this chat.', 'error');
         }
       });
 
@@ -103,6 +109,7 @@ export function useChat() {
 
   const selectConversation = useCallback((id: string) => {
     if (typeof id === 'string') {
+      AudioPlayer.stop();
       setCurrentConversationId(id);
       safeStorage.setItem(ACTIVE_CONV_STORAGE_KEY, id);
     }
@@ -110,6 +117,7 @@ export function useChat() {
 
   const startNewChat = useCallback(async (personaId?: string) => {
     try {
+      AudioPlayer.stop();
       const cleanPersona = typeof personaId === 'string' ? personaId : undefined;
       const newConv = await localChatDb.createConversation('New Conversation', cleanPersona);
       setConversations((prev) => [newConv, ...prev]);
@@ -119,7 +127,9 @@ export function useChat() {
       return newConv.id;
     } catch (err: any) {
       console.error('[useChat] Failed to create new conversation:', err);
-      setError("Couldn't save. Please try again.");
+      const msg = "Couldn't create chat. Please try again.";
+      setError(msg);
+      showToast(msg, 'error');
       return null;
     }
   }, []);
@@ -133,20 +143,24 @@ export function useChat() {
       setConversations(list);
     } catch (err: any) {
       console.error('[useChat] Failed to toggle pin:', err);
-      setError("Couldn't save. Please try again.");
+      const msg = "Couldn't save pin state. Please try again.";
+      setError(msg);
+      showToast(msg, 'error');
     }
   }, []);
 
   const renameConversation = useCallback(async (id: string, newTitle: string) => {
     if (typeof id !== 'string' || !newTitle.trim()) return;
     try {
-      const updated = await localChatDb.renameConversation(id, newTitle.trim());
+      const updated = await localChatDb.renameConversation(id, newTitle.trim(), true);
       if (!updated) return;
       const list = await localChatDb.listConversations();
       setConversations(list);
     } catch (err: any) {
       console.error('[useChat] Failed to rename conversation:', err);
-      setError("Couldn't save. Please try again.");
+      const msg = "Couldn't rename chat. Please try again.";
+      setError(msg);
+      showToast(msg, 'error');
     }
   }, []);
 
@@ -154,6 +168,9 @@ export function useChat() {
     async (id: string) => {
       if (typeof id !== 'string') return;
       try {
+        if (currentConversationId === id) {
+          AudioPlayer.stop();
+        }
         await localChatDb.deleteConversation(id);
         const remaining = await localChatDb.listConversations();
         setConversations(remaining);
@@ -169,7 +186,9 @@ export function useChat() {
         }
       } catch (err: any) {
         console.error('[useChat] Failed to delete conversation:', err);
-        setError("Couldn't save. Please try again.");
+        const msg = "Couldn't delete chat. Please try again.";
+        setError(msg);
+        showToast(msg, 'error');
       }
     },
     [currentConversationId]
@@ -177,6 +196,7 @@ export function useChat() {
 
   const clearAllConversations = useCallback(async () => {
     try {
+      AudioPlayer.stop();
       await localChatDb.clearAllConversations();
       setConversations([]);
       setCurrentConversationId(null);
@@ -184,38 +204,37 @@ export function useChat() {
       safeStorage.removeItem(ACTIVE_CONV_STORAGE_KEY);
     } catch (err: any) {
       console.error('[useChat] Failed to clear conversations:', err);
-      setError("Couldn't clear local chat history.");
+      const msg = "Couldn't clear local chat history.";
+      setError(msg);
+      showToast(msg, 'error');
     }
   }, []);
 
-  const sendMessage = useCallback(
+  const executeSend = useCallback(
     async (
-      text: string,
-      personaId?: string,
-      attachments?: { id: string; name: string; type: 'image' | 'file'; size?: string; url?: string }[]
-    ) => {
-      let finalMessage = (typeof text === 'string' ? text : '').trim();
-      if (attachments && attachments.length > 0) {
-        const attachList = attachments
-          .map((a) => `📎 ${a.type === 'image' ? 'Image' : 'File'}: ${a.name}${a.size ? ` (${a.size})` : ''}`)
-          .join('\n');
-        finalMessage = finalMessage
-          ? `${finalMessage}\n\n${attachList}`
-          : `[Attached ${attachments.length > 1 ? 'Files' : 'File'}]\n${attachList}`;
+      finalMessage: string,
+      options?: {
+        personaId?: string;
+        skipUserSave?: boolean;
+        baseMessages?: ChatMessage[];
+        regenerateTargetId?: string;
       }
-
+    ) => {
       if (!finalMessage || isSending) return;
 
-      const cleanPersona = typeof personaId === 'string' ? personaId : undefined;
+      const cleanPersona = typeof options?.personaId === 'string' ? options.personaId : undefined;
+      const sourceMessages = options?.baseMessages ?? messages;
 
-      // Capture last 8 valid messages BEFORE appending the new turn
-      const historyPayload: ClientHistoryMessage[] = messages
+      // Capture last 8 valid messages BEFORE sending the current turn
+      const historyPayload: ClientHistoryMessage[] = sourceMessages
         .filter((m) => m.status !== 'error' && (m.role === 'user' || m.role === 'assistant') && m.content.trim())
         .slice(-8)
         .map((m) => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
         }));
+
+      const isFirstExchange = !options?.skipUserSave && historyPayload.length === 0;
 
       // Ensure a local IndexedDB conversation exists before streaming
       let activeConvId = currentConversationId;
@@ -229,18 +248,22 @@ export function useChat() {
         safeStorage.setItem(ACTIVE_CONV_STORAGE_KEY, activeConvId);
       }
 
-      // Persist user message to local IndexedDB immediately
-      const savedUserMsg = await localChatDb.addMessage(activeConvId, {
-        role: 'user',
-        content: finalMessage,
-        status: 'complete',
-      });
+      if (!options?.skipUserSave) {
+        const savedUserMsg = await localChatDb.addMessage(activeConvId, {
+          role: 'user',
+          content: finalMessage,
+          status: 'complete',
+        });
 
-      setMessages((prev) => [...prev.filter((m) => m.id !== savedUserMsg.id), savedUserMsg]);
-      const updatedConvsAfterSend = await localChatDb.listConversations();
-      setConversations(updatedConvsAfterSend);
+        setMessages((prev) => [...prev.filter((m) => m.id !== savedUserMsg.id), savedUserMsg]);
+        const updatedConvsAfterSend = await localChatDb.listConversations();
+        setConversations(updatedConvsAfterSend);
+      }
 
       setIsSending(true);
+      if (options?.regenerateTargetId) {
+        setRegeneratingMessageId(options.regenerateTargetId);
+      }
       setActivityStatus('Thinking...');
       setActivityDetails(null);
       setError(null);
@@ -253,7 +276,9 @@ export function useChat() {
         silenceTimeout = setTimeout(() => {
           hasTimedOut = true;
           setIsSending(false);
+          setRegeneratingMessageId(null);
           setActivityStatus('This is taking too long');
+          showToast('Response is taking too long. Tap Retry to try again.', 'error');
         }, 40000);
       };
 
@@ -360,6 +385,7 @@ export function useChat() {
         if (silenceTimeout) clearTimeout(silenceTimeout);
         if (hasTimedOut) {
           setIsSending(false);
+          setRegeneratingMessageId(null);
           setActivityStatus('This is taking too long');
           return;
         }
@@ -384,16 +410,35 @@ export function useChat() {
         const latestConvs = await localChatDb.listConversations();
         setConversations(latestConvs);
 
+        // Non-blocking background AI chat title after first reply (never delays chat)
+        if (isFirstExchange) {
+          const targetConvId = activeConvId;
+          void ApiClient.generateConversationTitle(finalMessage, savedAssistantMsg.content)
+            .then(async (generatedTitle) => {
+              if (!generatedTitle) return;
+              const currentConv = await localChatDb.getConversation(targetConvId);
+              if (!currentConv || currentConv.metadata?.customTitle) return;
+              await localChatDb.renameConversation(targetConvId, generatedTitle, false);
+              const refreshed = await localChatDb.listConversations();
+              setConversations(refreshed);
+            })
+            .catch(() => {
+              // Silent fallback to the 40-char title already saved in IndexedDB
+            });
+        }
+
         setActivityStatus('Answer complete');
         setTimeout(() => {
           setIsSending(false);
+          setRegeneratingMessageId(null);
           setActivityStatus(null);
           setActivityDetails(null);
-        }, 600);
+        }, 500);
       } catch (err: any) {
         if (silenceTimeout) clearTimeout(silenceTimeout);
         if (hasTimedOut) {
           setIsSending(false);
+          setRegeneratingMessageId(null);
           setActivityStatus('This is taking too long');
           return;
         }
@@ -416,6 +461,8 @@ export function useChat() {
           userHelpMessage = 'Gemini API key (GEMINI_API_KEY) is not configured on the server.';
         }
 
+        showToast(userHelpMessage, 'error');
+
         setMessages((prev) => [
           ...prev.filter((m) => !m.id.startsWith('streaming-assistant-')),
           {
@@ -433,17 +480,92 @@ export function useChat() {
           },
         ]);
         setIsSending(false);
+        setRegeneratingMessageId(null);
       }
     },
     [currentConversationId, isSending, messages]
   );
 
+  const sendMessage = useCallback(
+    async (
+      text: string,
+      personaId?: string,
+      attachments?: { id: string; name: string; type: 'image' | 'file'; size?: string; url?: string }[]
+    ) => {
+      let finalMessage = (typeof text === 'string' ? text : '').trim();
+      if (attachments && attachments.length > 0) {
+        const attachList = attachments
+          .map((a) => `📎 ${a.type === 'image' ? 'Image' : 'File'}: ${a.name}${a.size ? ` (${a.size})` : ''}`)
+          .join('\n');
+        finalMessage = finalMessage
+          ? `${finalMessage}\n\n${attachList}`
+          : `[Attached ${attachments.length > 1 ? 'Files' : 'File'}]\n${attachList}`;
+      }
+
+      if (!finalMessage || isSending) return;
+      await executeSend(finalMessage, { personaId });
+    },
+    [executeSend, isSending]
+  );
+
+  const regenerateMessage = useCallback(
+    async (targetAssistantId?: string) => {
+      if (isSending) return;
+
+      let targetIdx = -1;
+      if (targetAssistantId) {
+        targetIdx = messages.findIndex((m) => m.id === targetAssistantId);
+      } else {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant') {
+            targetIdx = i;
+            break;
+          }
+        }
+      }
+
+      const precedingUserMsg =
+        targetIdx >= 0
+          ? [...messages.slice(0, targetIdx)].reverse().find((m) => m.role === 'user')
+          : [...messages].reverse().find((m) => m.role === 'user');
+
+      if (!precedingUserMsg) {
+        showToast('Nothing to regenerate yet.', 'info');
+        return;
+      }
+
+      const targetMsg = targetIdx >= 0 ? messages[targetIdx] : null;
+      const isLastAssistantMsg = targetMsg && targetIdx === messages.length - 1;
+
+      if (targetMsg && isLastAssistantMsg) {
+        if (AudioPlayer.getSnapshot().activeMessageId === targetMsg.id) {
+          AudioPlayer.stop();
+        }
+        if (targetMsg.status !== 'error') {
+          await localChatDb.deleteMessage(targetMsg.id, currentConversationId || undefined);
+        } else {
+          await localChatDb.deleteAudioForMessage(targetMsg.id);
+        }
+        const trimmed = messages.slice(0, targetIdx);
+        const historyBeforeUser = trimmed.slice(0, trimmed.lastIndexOf(precedingUserMsg));
+        setMessages(trimmed);
+        await executeSend(precedingUserMsg.content, {
+          skipUserSave: true,
+          baseMessages: historyBeforeUser,
+          regenerateTargetId: targetMsg.id,
+        });
+      } else {
+        await executeSend(precedingUserMsg.content, {
+          regenerateTargetId: targetAssistantId,
+        });
+      }
+    },
+    [currentConversationId, executeSend, isSending, messages]
+  );
+
   const retrySearch = useCallback(() => {
-    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-    if (lastUserMsg) {
-      sendMessage(lastUserMsg.content);
-    }
-  }, [messages, sendMessage]);
+    void regenerateMessage();
+  }, [regenerateMessage]);
 
   return {
     conversations,
@@ -451,9 +573,11 @@ export function useChat() {
     messages,
     isLoading,
     isSending,
+    regeneratingMessageId,
     activityStatus,
     activityDetails,
     retrySearch,
+    regenerateMessage,
     error,
     selectConversation,
     startNewChat,

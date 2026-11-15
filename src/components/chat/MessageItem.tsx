@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Copy,
   Check,
   Share2,
   RefreshCw,
   Volume2,
+  Pause,
+  Play,
+  Loader2,
   MoreHorizontal,
   ExternalLink,
   AlertCircle,
@@ -12,18 +15,25 @@ import {
   ThumbsUp,
   ThumbsDown,
   BookmarkPlus,
+  X,
 } from 'lucide-react';
 import { ChatMessage, Project } from '../../../shared/types';
 import { cleanAndNormalizeResponseContent, repairUnclosedMarkdown } from '../../../ai/brain/response-cleaner';
 import { appendToAboutMe } from '../../services/storage';
+import { showToast } from '../../services/toast';
+import { AudioPlaybackStatus } from '../../services/audioPlayer';
 import { MessageSources } from './MessageSources';
 
 interface MessageItemProps {
   message: ChatMessage;
   projects?: Project[];
-  onRegenerate?: () => void;
-  onSpeak?: (text: string) => void;
-  onShare?: (text: string) => void;
+  isSending?: boolean;
+  isRegenerating?: boolean;
+  audioStatus?: AudioPlaybackStatus;
+  voiceError?: string | null;
+  onRegenerate?: (messageId?: string) => void;
+  onSpeak?: (message: ChatMessage) => void;
+  onShare?: (text: string, message?: ChatMessage) => void;
   onPinMessage?: (id: string) => void;
   onAddToProject?: (text: string, projectId: string) => void;
   onOpenArtifact?: (artifact: {
@@ -34,9 +44,27 @@ interface MessageItemProps {
   }) => void;
 }
 
+function formatShortModelName(model?: string): string {
+  const raw = (model || '').trim();
+  if (!raw) return 'gemini';
+  const cleaned = raw.replace(/^models\//i, '').trim();
+  if (/hydrogen/i.test(cleaned)) return 'hydrogen';
+  return cleaned.replace(/^gemini-/i, '') || cleaned;
+}
+
+function formatLatency(ms?: number): string {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return '—';
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
 export const MessageItem: React.FC<MessageItemProps> = ({
   message,
   projects = [],
+  isSending = false,
+  isRegenerating = false,
+  audioStatus = 'idle',
+  voiceError = null,
   onRegenerate,
   onSpeak,
   onShare,
@@ -46,10 +74,30 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const [copied, setCopied] = useState(false);
   const [copiedCodeIndex, setCopiedCodeIndex] = useState<number | null>(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showTelemetryPopup, setShowTelemetryPopup] = useState(false);
   const [feedback, setFeedback] = useState<'liked' | 'disliked' | null>(null);
   const [savedInfoState, setSavedInfoState] = useState<'idle' | 'saved' | 'duplicate' | 'full'>('idle');
+  const telemetryRef = useRef<HTMLDivElement>(null);
 
   const isUser = message.role === 'user';
+
+  useEffect(() => {
+    if (!showTelemetryPopup) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (telemetryRef.current && !telemetryRef.current.contains(e.target as Node)) {
+        setShowTelemetryPopup(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowTelemetryPopup(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [showTelemetryPopup]);
 
   const handleSaveToMyInfo = () => {
     const cleanText = message.content
@@ -58,10 +106,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     const res = appendToAboutMe(cleanText);
     if (res.alreadyFull) {
       setSavedInfoState('full');
+      showToast('About me is full (1,500 chars)', 'info');
     } else if (res.duplicate) {
       setSavedInfoState('duplicate');
+      showToast('Already saved in About me', 'info');
     } else {
       setSavedInfoState('saved');
+      showToast('Saved to About me', 'success');
     }
     setTimeout(() => setSavedInfoState('idle'), 2500);
   };
@@ -74,16 +125,26 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     setFeedback((prev) => (prev === 'disliked' ? null : 'disliked'));
   };
 
-  const handleCopyMessage = () => {
-    navigator.clipboard.writeText(message.content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopyMessage = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      showToast('Copied', 'success');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      showToast('Failed to copy response.', 'error');
+    }
   };
 
-  const handleCopyCode = (code: string, idx: number) => {
-    navigator.clipboard.writeText(code);
-    setCopiedCodeIndex(idx);
-    setTimeout(() => setCopiedCodeIndex(null), 2000);
+  const handleCopyCode = async (code: string, idx: number) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedCodeIndex(idx);
+      showToast('Copied', 'success');
+      setTimeout(() => setCopiedCodeIndex(null), 2000);
+    } catch {
+      showToast('Failed to copy code.', 'error');
+    }
   };
 
   // Helper to parse inline markdown: [label](url), citations [1], raw URLs, bold, inline code, strikethrough, and italics
@@ -233,13 +294,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         return (
           <div
             key={segIdx}
-            className="my-3 w-full max-w-full rounded-2xl overflow-hidden border border-white/[0.08] bg-[#06080e] shadow-md"
+            className="my-3 w-full max-w-full min-w-0 rounded-2xl overflow-hidden border border-white/[0.08] bg-[#06080e] shadow-md"
           >
-            <div className="flex items-center justify-between px-3.5 py-2 bg-[#0b0f1a] border-b border-white/[0.06] text-[11px] text-slate-400 font-mono">
-              <span className="uppercase tracking-wider font-semibold text-slate-300">
+            <div className="flex items-center justify-between px-3.5 py-1.5 bg-[#0b0f1a] border-b border-white/[0.06] text-[11px] text-slate-400 font-mono">
+              <span className="uppercase tracking-wider font-semibold text-slate-300 truncate">
                 {language}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 shrink-0">
                 {canPreview && onOpenArtifact && (
                   <button
                     onClick={() =>
@@ -255,7 +316,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                         code: codeContent,
                       })
                     }
-                    className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer text-xs"
+                    className="min-h-[44px] px-2 flex items-center gap-1 text-emerald-400 hover:text-emerald-300 active:scale-95 transition-all cursor-pointer text-xs"
                     title="Open in contextual workspace"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
@@ -264,7 +325,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 )}
                 <button
                   onClick={() => handleCopyCode(codeContent, segIdx)}
-                  className="flex items-center gap-1 hover:text-slate-200 transition-colors cursor-pointer text-xs"
+                  className="min-h-[44px] px-2 flex items-center gap-1 hover:text-slate-200 active:scale-95 transition-all cursor-pointer text-xs"
                   title="Copy code"
                 >
                   {copiedCodeIndex === segIdx ? (
@@ -282,7 +343,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               </div>
             </div>
 
-            <pre className="p-3.5 text-xs font-mono text-slate-200 overflow-x-auto max-w-full leading-relaxed select-text scrollbar-thin">
+            <pre className="p-3.5 text-xs font-mono text-slate-200 overflow-x-auto max-w-full leading-relaxed select-text scrollbar-none">
               <code>{codeContent}</code>
             </pre>
           </div>
@@ -412,7 +473,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               blocks.push(
                 <div
                   key={`tbl-${segIdx}-${blockCounter++}`}
-                  className="my-3 w-full max-w-full overflow-x-auto rounded-xl border border-white/[0.08] bg-[#070b14]/90 shadow-sm scrollbar-thin"
+                  className="my-3 w-full max-w-full min-w-0 overflow-x-auto rounded-xl border border-white/[0.08] bg-[#070b14]/90 shadow-sm scrollbar-none"
                 >
                   <table className="w-full min-w-full border-collapse divide-y divide-white/[0.08] text-xs sm:text-[13.5px]">
                     <thead className="bg-white/[0.04]">
@@ -621,13 +682,33 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     });
   };
 
+  const shortModel = formatShortModelName(message.metadata?.model);
+  const totalTokens =
+    typeof message.metadata?.tokens === 'number' && message.metadata.tokens > 0
+      ? message.metadata.tokens
+      : typeof message.metadata?.inputTokens === 'number' || typeof message.metadata?.outputTokens === 'number'
+      ? (message.metadata.inputTokens || 0) + (message.metadata.outputTokens || 0)
+      : message.content
+      ? Math.ceil(message.content.length / 4)
+      : 0;
+  const isEstimatedTokens = !(typeof message.metadata?.tokens === 'number' && message.metadata.tokens > 0);
+  const fullModelName = message.metadata?.model || message.metadata?.provider || 'Gemini';
+
   return (
-    <div className={`py-2 px-2.5 sm:px-4 group ${isUser ? 'flex justify-end' : 'flex justify-start'}`}>
-      <div className={`max-w-[94%] sm:max-w-[85%] space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
+    <div
+      className={`py-2 px-2 sm:px-4 w-full max-w-full min-w-0 overflow-x-hidden group ${
+        isUser ? 'flex justify-end' : 'flex justify-start'
+      }`}
+    >
+      <div
+        className={`min-w-0 max-w-[94%] sm:max-w-[85%] space-y-1 ${
+          isUser ? 'items-end' : 'w-full sm:w-auto items-start'
+        }`}
+      >
         {/* User Message Bubble */}
         {isUser ? (
-          <div className="flex flex-col items-end gap-1">
-            <div className="bg-[#172133] text-slate-100 px-4 py-2.5 rounded-2xl rounded-tr-md border border-white/[0.09] shadow-sm text-[14.5px] sm:text-[15px]">
+          <div className="flex flex-col items-end gap-1 min-w-0 max-w-full">
+            <div className="bg-[#172133] text-slate-100 px-4 py-2.5 rounded-2xl rounded-tr-md border border-white/[0.09] shadow-sm text-[14.5px] sm:text-[15px] max-w-full min-w-0">
               {/\[web\s+search\s+requested\]/i.test(message.content) && (
                 <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-[11px] font-medium text-cyan-300 mb-1.5">
                   <Globe className="w-3 h-3 text-cyan-400" />
@@ -642,7 +723,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               type="button"
               onClick={handleSaveToMyInfo}
               title="Append this message to About me in Settings"
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] transition-all cursor-pointer ${
+              className={`min-h-[44px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] active:scale-95 transition-all cursor-pointer ${
                 savedInfoState === 'saved'
                   ? 'text-emerald-300 bg-emerald-500/15 opacity-100'
                   : savedInfoState === 'full'
@@ -670,7 +751,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             </button>
           </div>
         ) : message.status === 'error' ? (
-          <div className="p-3.5 rounded-2xl bg-rose-950/30 border border-rose-500/30 text-rose-200 text-xs flex items-start justify-between gap-3 shadow-sm max-w-lg">
+          <div className="p-3.5 rounded-2xl bg-rose-950/30 border border-rose-500/30 text-rose-200 text-xs flex items-start justify-between gap-3 shadow-sm max-w-lg min-w-0">
             <div className="flex items-start gap-2.5 min-w-0">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
               <div className="space-y-1 min-w-0">
@@ -681,21 +762,22 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             {onRegenerate && (
               <button
                 type="button"
-                onClick={() => onRegenerate()}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-semibold transition-colors cursor-pointer shrink-0 border border-rose-500/30"
+                disabled={isSending}
+                onClick={() => onRegenerate(message.id)}
+                className="min-h-[44px] flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 disabled:opacity-50 disabled:cursor-not-allowed text-rose-100 text-xs font-semibold active:scale-95 transition-all cursor-pointer shrink-0 border border-rose-500/30"
               >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Retry</span>
+                <RefreshCw className={`w-3.5 h-3.5 ${isRegenerating ? 'animate-spin' : ''}`} />
+                <span>{isRegenerating ? 'Retrying…' : 'Retry'}</span>
               </button>
             )}
           </div>
         ) : (
           /* Assistant Message Content */
-          <div className="space-y-1 text-slate-200 text-[14.5px] sm:text-[15px]">
+          <div className="space-y-1 text-slate-200 text-[14.5px] sm:text-[15px] min-w-0 max-w-full">
             {/* Live Web Search indicator chip */}
             {message.metadata?.searchQuery && (
               <div
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium mb-1.5 ${
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium mb-1.5 max-w-full ${
                   message.metadata.searchStatus === 'failed'
                     ? 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
                     : message.metadata.searchStatus === 'missing_key'
@@ -706,7 +788,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 }`}
               >
                 <Globe
-                  className={`w-3 h-3 ${
+                  className={`w-3 h-3 shrink-0 ${
                     message.metadata.searchStatus === 'failed'
                       ? 'text-rose-400'
                       : message.metadata.searchStatus === 'missing_key' || message.metadata.searchStatus === 'no_results'
@@ -714,7 +796,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                       : 'text-cyan-400'
                   }`}
                 />
-                <span>
+                <span className="shrink-0">
                   {message.metadata.searchStatus === 'failed'
                     ? 'Search Failed:'
                     : message.metadata.searchStatus === 'missing_key'
@@ -725,7 +807,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     ? 'Manual Search:'
                     : 'Live Research:'}
                 </span>
-                <span className="text-white font-mono truncate max-w-[220px]">
+                <span className="text-white font-mono truncate max-w-[180px] sm:max-w-[220px]">
                   "{message.metadata.searchQuery}"
                 </span>
               </div>
@@ -735,192 +817,342 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             {!isUser &&
               (message.content?.includes("I couldn't generate a complete response") ||
                 message.content?.includes("I completed gathering the necessary information")) && (
-                <div className="my-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 text-xs text-amber-300">
+                <div className="my-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 max-w-full">
+                  <div className="flex items-center gap-2 text-xs text-amber-300 min-w-0">
                     <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
-                    <span>I couldn't generate a complete response. Please try again.</span>
+                    <span className="break-words">I couldn't generate a complete response. Please try again.</span>
                   </div>
                   {onRegenerate && (
                     <button
-                      onClick={() => onRegenerate()}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-medium transition-colors cursor-pointer shrink-0 border border-amber-500/30"
+                      type="button"
+                      disabled={isSending}
+                      onClick={() => onRegenerate(message.id)}
+                      className="min-h-[44px] flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed text-amber-200 text-xs font-medium active:scale-95 transition-all cursor-pointer shrink-0 border border-amber-500/30"
                     >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      <span>Retry</span>
+                      <RefreshCw className={`w-3.5 h-3.5 ${isRegenerating ? 'animate-spin' : ''}`} />
+                      <span>{isRegenerating ? 'Regenerating…' : 'Retry'}</span>
                     </button>
                   )}
                 </div>
               )}
 
             {/* Rendered Markdown Body */}
-            {renderFormattedContent(
-              message.content?.replace(
-                'I completed gathering the necessary information for your request. Please try asking again.',
-                "I couldn't generate a complete response. Please try again."
-              )
+            <div className="min-w-0 max-w-full">
+              {renderFormattedContent(
+                message.content?.replace(
+                  'I completed gathering the necessary information for your request. Please try asking again.',
+                  "I couldn't generate a complete response. Please try again."
+                )
+              )}
+            </div>
+
+            {/* Voice Failure Inline Notice with Retry */}
+            {voiceError && onSpeak && (
+              <div className="mt-2 p-2.5 rounded-xl bg-rose-950/30 border border-rose-500/30 flex items-center justify-between gap-2 text-xs text-rose-200 max-w-full">
+                <div className="flex items-center gap-2 min-w-0">
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                  <span className="break-words leading-snug">{voiceError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onSpeak(message)}
+                  className="min-h-[44px] px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 font-semibold text-xs flex items-center gap-1.5 shrink-0 border border-rose-500/30 active:scale-95 transition-all cursor-pointer"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Retry</span>
+                </button>
+              </div>
             )}
 
-            {/* Action Buttons Bar */}
-            <div className="flex items-center gap-1 pt-1.5 opacity-80 group-hover:opacity-100 transition-opacity text-slate-400 text-xs">
-              {/* Copy */}
-              <button
-                onClick={handleCopyMessage}
-                title="Copy response"
-                className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
-                aria-label="Copy response"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-
-              {/* Text-to-Speech */}
-              {onSpeak && (
-                <button
-                  onClick={() => onSpeak(message.content)}
-                  title="Read aloud"
-                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
-                  aria-label="Read response aloud"
-                >
-                  <Volume2 className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              {/* Share */}
-              {onShare && (
-                <button
-                  onClick={() => onShare(message.content)}
-                  title="Share response"
-                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
-                  aria-label="Share response"
-                >
-                  <Share2 className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              {/* Like */}
-              <button
-                onClick={handleLike}
-                title={feedback === 'liked' ? 'Liked' : 'Good response'}
-                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                  feedback === 'liked'
-                    ? 'text-emerald-400 bg-emerald-500/15'
-                    : 'hover:text-white hover:bg-white/[0.06]'
-                }`}
-                aria-label="Like response"
-              >
-                <ThumbsUp className="w-3.5 h-3.5" />
-              </button>
-
-              {/* Dislike */}
-              <button
-                onClick={handleDislike}
-                title={feedback === 'disliked' ? 'Disliked' : 'Poor response'}
-                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                  feedback === 'disliked'
-                    ? 'text-rose-400 bg-rose-500/15'
-                    : 'hover:text-white hover:bg-white/[0.06]'
-                }`}
-                aria-label="Dislike response"
-              >
-                <ThumbsDown className="w-3.5 h-3.5" />
-              </button>
-
-              {/* Regenerate */}
-              {onRegenerate && (
-                <button
-                  onClick={() => onRegenerate()}
-                  title="Regenerate response"
-                  className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
-                  aria-label="Regenerate response"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              {/* Save to my info */}
-              <button
-                type="button"
-                onClick={handleSaveToMyInfo}
-                title="Save this text to About me"
-                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg transition-colors cursor-pointer ${
-                  savedInfoState === 'saved'
-                    ? 'text-emerald-300 bg-emerald-500/15'
-                    : savedInfoState === 'full'
-                    ? 'text-amber-300 bg-amber-500/15'
-                    : savedInfoState === 'duplicate'
-                    ? 'text-cyan-300 bg-cyan-500/15'
-                    : 'hover:text-white hover:bg-white/[0.06]'
-                }`}
-                aria-label="Save to my info"
-              >
-                {savedInfoState === 'saved' ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-[11px] font-medium">Saved to my info</span>
-                  </>
-                ) : savedInfoState === 'full' ? (
-                  <span className="text-[11px] font-medium">About me full</span>
-                ) : savedInfoState === 'duplicate' ? (
-                  <span className="text-[11px] font-medium">Already saved</span>
-                ) : (
-                  <>
-                    <BookmarkPlus className="w-3.5 h-3.5" />
-                    <span className="text-[11px]">Save to my info</span>
-                  </>
-                )}
-              </button>
-
-              {/* Add to Project */}
-              {projects.length > 0 && onAddToProject && (
-                <div className="relative">
+            {/* Action Buttons Bar + Compact Model & Token Readout */}
+            {message.status !== 'streaming' && (
+              <div className="relative flex flex-wrap items-center justify-between gap-1 pt-1 text-slate-400 text-xs min-w-0 max-w-full">
+                <div className="flex flex-wrap items-center gap-0.5 min-w-0">
+                  {/* Copy */}
                   <button
-                    onClick={() => setShowMoreMenu(!showMoreMenu)}
-                    title="More actions"
-                    className="p-1.5 hover:text-white rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
-                    aria-label="More actions"
+                    type="button"
+                    onClick={handleCopyMessage}
+                    title={copied ? 'Copied' : 'Copy response'}
+                    className={`min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl active:scale-95 transition-all cursor-pointer ${
+                      copied
+                        ? 'text-emerald-400 bg-emerald-500/15'
+                        : 'hover:text-white hover:bg-white/[0.06]'
+                    }`}
+                    aria-label="Copy response"
                   >
-                    <MoreHorizontal className="w-3.5 h-3.5" />
+                    {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                   </button>
 
-                  {showMoreMenu && (
-                    <div className="absolute left-0 bottom-full mb-1 w-44 rounded-xl bg-[#0f1422] border border-white/[0.08] shadow-xl py-1 z-20 text-xs">
-                      <div className="px-3 py-1 text-[10px] text-slate-500 font-semibold uppercase">
-                        Add to Project
-                      </div>
-                      {projects.map((proj) => (
-                        <button
-                          key={proj.id}
-                          onClick={() => {
-                            onAddToProject(message.content, proj.id);
-                            setShowMoreMenu(false);
-                          }}
-                          className="w-full text-left px-3 py-1.5 hover:bg-white/[0.06] text-slate-300 hover:text-white truncate cursor-pointer"
-                        >
-                          {proj.name}
-                        </button>
-                      ))}
+                  {/* Text-to-Speech Speaker (idle / loading / playing / paused) */}
+                  {onSpeak && (
+                    <button
+                      type="button"
+                      onClick={() => onSpeak(message)}
+                      title={
+                        audioStatus === 'loading'
+                          ? 'Preparing voice…'
+                          : audioStatus === 'playing'
+                          ? 'Pause voice'
+                          : audioStatus === 'paused'
+                          ? 'Resume voice'
+                          : 'Read aloud'
+                      }
+                      className={`min-h-[44px] ${
+                        audioStatus === 'playing' ? 'min-w-[52px] px-2.5 gap-1.5' : 'min-w-[44px]'
+                      } flex items-center justify-center rounded-xl active:scale-95 transition-all cursor-pointer ${
+                        audioStatus === 'playing'
+                          ? 'text-cyan-300 bg-cyan-500/15 border border-cyan-500/30'
+                          : audioStatus === 'paused'
+                          ? 'text-emerald-300 bg-emerald-500/15 border border-emerald-500/30'
+                          : audioStatus === 'loading'
+                          ? 'text-cyan-300 bg-white/[0.06]'
+                          : 'hover:text-white hover:bg-white/[0.06]'
+                      }`}
+                      aria-label={
+                        audioStatus === 'loading'
+                          ? 'Preparing voice'
+                          : audioStatus === 'playing'
+                          ? 'Pause voice'
+                          : audioStatus === 'paused'
+                          ? 'Resume voice'
+                          : 'Read response aloud'
+                      }
+                    >
+                      {audioStatus === 'loading' ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+                      ) : audioStatus === 'playing' ? (
+                        <>
+                          <Pause className="w-3.5 h-3.5 fill-current" />
+                          <span className="flex items-end gap-[2px] h-3" aria-hidden="true">
+                            <span className="w-[2px] h-3 bg-cyan-400 rounded-full animate-wave-bar [animation-delay:0ms] origin-bottom" />
+                            <span className="w-[2px] h-3 bg-cyan-400 rounded-full animate-wave-bar [animation-delay:220ms] origin-bottom" />
+                            <span className="w-[2px] h-3 bg-cyan-400 rounded-full animate-wave-bar [animation-delay:420ms] origin-bottom" />
+                          </span>
+                        </>
+                      ) : audioStatus === 'paused' ? (
+                        <Play className="w-4 h-4 fill-current" />
+                      ) : (
+                        <Volume2 className="w-4 h-4" />
+                      )}
+                    </button>
+                  )}
+
+                  {/* Share */}
+                  {onShare && (
+                    <button
+                      type="button"
+                      onClick={() => onShare(message.content, message)}
+                      title="Share response"
+                      className="min-h-[44px] min-w-[44px] flex items-center justify-center hover:text-white rounded-xl hover:bg-white/[0.06] active:scale-95 transition-all cursor-pointer"
+                      aria-label="Share response"
+                    >
+                      <Share2 className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {/* Like */}
+                  <button
+                    type="button"
+                    onClick={handleLike}
+                    title={feedback === 'liked' ? 'Liked' : 'Good response'}
+                    aria-pressed={feedback === 'liked'}
+                    className={`min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl active:scale-95 transition-all cursor-pointer ${
+                      feedback === 'liked'
+                        ? 'text-emerald-400 bg-emerald-500/15'
+                        : 'hover:text-white hover:bg-white/[0.06]'
+                    }`}
+                    aria-label="Like response"
+                  >
+                    <ThumbsUp className={`w-4 h-4 ${feedback === 'liked' ? 'fill-current' : ''}`} />
+                  </button>
+
+                  {/* Dislike */}
+                  <button
+                    type="button"
+                    onClick={handleDislike}
+                    title={feedback === 'disliked' ? 'Disliked' : 'Poor response'}
+                    aria-pressed={feedback === 'disliked'}
+                    className={`min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl active:scale-95 transition-all cursor-pointer ${
+                      feedback === 'disliked'
+                        ? 'text-rose-400 bg-rose-500/15'
+                        : 'hover:text-white hover:bg-white/[0.06]'
+                    }`}
+                    aria-label="Dislike response"
+                  >
+                    <ThumbsDown className={`w-4 h-4 ${feedback === 'disliked' ? 'fill-current' : ''}`} />
+                  </button>
+
+                  {/* Regenerate */}
+                  {onRegenerate && (
+                    <button
+                      type="button"
+                      disabled={isSending}
+                      onClick={() => onRegenerate(message.id)}
+                      title={isRegenerating ? 'Regenerating…' : 'Regenerate response'}
+                      className={`min-h-[44px] ${
+                        isRegenerating ? 'px-2.5 gap-1.5' : 'min-w-[44px]'
+                      } flex items-center justify-center rounded-xl transition-all ${
+                        isSending
+                          ? 'opacity-60 cursor-not-allowed text-slate-300 bg-white/[0.04]'
+                          : 'hover:text-white hover:bg-white/[0.06] active:scale-95 cursor-pointer'
+                      }`}
+                      aria-label={isRegenerating ? 'Regenerating response' : 'Regenerate response'}
+                    >
+                      <RefreshCw className={`w-4 h-4 ${isRegenerating ? 'animate-spin text-cyan-400' : ''}`} />
+                      {isRegenerating && (
+                        <span className="text-[11px] font-medium text-cyan-300 whitespace-nowrap">
+                          Regenerating…
+                        </span>
+                      )}
+                    </button>
+                  )}
+
+                  {/* Save to my info */}
+                  <button
+                    type="button"
+                    onClick={handleSaveToMyInfo}
+                    title="Save this text to About me"
+                    className={`min-h-[44px] inline-flex items-center gap-1 px-2.5 rounded-xl active:scale-95 transition-all cursor-pointer ${
+                      savedInfoState === 'saved'
+                        ? 'text-emerald-300 bg-emerald-500/15'
+                        : savedInfoState === 'full'
+                        ? 'text-amber-300 bg-amber-500/15'
+                        : savedInfoState === 'duplicate'
+                        ? 'text-cyan-300 bg-cyan-500/15'
+                        : 'hover:text-white hover:bg-white/[0.06]'
+                    }`}
+                    aria-label="Save to my info"
+                  >
+                    {savedInfoState === 'saved' ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-[11px] font-medium whitespace-nowrap">Saved</span>
+                      </>
+                    ) : savedInfoState === 'full' ? (
+                      <span className="text-[11px] font-medium whitespace-nowrap">Full</span>
+                    ) : savedInfoState === 'duplicate' ? (
+                      <span className="text-[11px] font-medium whitespace-nowrap">Saved</span>
+                    ) : (
+                      <BookmarkPlus className="w-4 h-4" />
+                    )}
+                  </button>
+
+                  {/* Add to Project */}
+                  {projects.length > 0 && onAddToProject && (
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowMoreMenu(!showMoreMenu)}
+                        title="More actions"
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center hover:text-white rounded-xl hover:bg-white/[0.06] active:scale-95 transition-all cursor-pointer"
+                        aria-label="More actions"
+                      >
+                        <MoreHorizontal className="w-4 h-4" />
+                      </button>
+
+                      {showMoreMenu && (
+                        <div className="absolute left-0 bottom-full mb-1 w-44 rounded-xl bg-[#0f1422] border border-white/[0.08] shadow-xl py-1 z-20 text-xs">
+                          <div className="px-3 py-1 text-[10px] text-slate-500 font-semibold uppercase">
+                            Add to Project
+                          </div>
+                          {projects.map((proj) => (
+                            <button
+                              key={proj.id}
+                              type="button"
+                              onClick={() => {
+                                onAddToProject(message.content, proj.id);
+                                setShowMoreMenu(false);
+                              }}
+                              className="w-full min-h-[40px] text-left px-3 py-1.5 hover:bg-white/[0.06] text-slate-300 hover:text-white truncate cursor-pointer"
+                            >
+                              {proj.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
 
-              {/* Provider & Model metadata tag with token count */}
-              {message.metadata?.provider && (
-                <div className="ml-auto flex items-center gap-1.5 text-[10px] font-mono text-slate-500 select-none">
-                  <span className="capitalize">{message.metadata.provider}</span>
-                  {message.metadata.model && <span>({message.metadata.model})</span>}
-                  {typeof message.metadata.tokens === 'number' && message.metadata.tokens > 0 ? (
-                    <span className="text-slate-400">· {message.metadata.tokens.toLocaleString()} tokens</span>
-                  ) : message.content ? (
-                    <span className="text-slate-400">· ~{Math.ceil(message.content.length / 4).toLocaleString()} tokens</span>
-                  ) : null}
-                  {message.metadata.fallbackUsed && (
-                    <span className="text-amber-400 font-sans text-[9px] font-semibold bg-amber-500/15 px-1 rounded border border-amber-500/30">
-                      Fallback
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
+                {/* Compact single-line model & token readout + Popup */}
+                {(message.metadata?.provider || message.metadata?.model || totalTokens > 0) && (
+                  <div className="relative ml-auto shrink-0" ref={telemetryRef}>
+                    <button
+                      type="button"
+                      onClick={() => setShowTelemetryPopup((prev) => !prev)}
+                      className="min-h-[44px] px-2 inline-flex items-center text-[11px] font-mono text-slate-500 hover:text-slate-300 rounded-lg hover:bg-white/[0.04] active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0 max-w-[175px]"
+                      title="View model and token details"
+                      aria-expanded={showTelemetryPopup}
+                    >
+                      <span className="truncate">
+                        {shortModel}
+                        {totalTokens > 0 ? ` · ${isEstimatedTokens ? '~' : ''}${totalTokens.toLocaleString()} tok` : ''}
+                      </span>
+                    </button>
+
+                    {showTelemetryPopup && (
+                      <div
+                        role="dialog"
+                        aria-label="Reply details"
+                        className="absolute right-0 bottom-full mb-1.5 w-64 max-w-[calc(100vw-2rem)] rounded-2xl bg-[#0f1422] border border-white/[0.1] shadow-2xl p-3.5 z-30 text-xs space-y-2 backdrop-blur-xl"
+                      >
+                        <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-white/[0.06]">
+                          <span className="font-semibold text-white text-[11px] uppercase tracking-wider">
+                            Reply Details
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setShowTelemetryPopup(false)}
+                            className="p-1 rounded-md text-slate-400 hover:text-white active:scale-95 transition-all cursor-pointer"
+                            aria-label="Close details"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="space-y-1.5 text-[11px]">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="text-slate-400 shrink-0">Model</span>
+                            <span className="text-slate-100 font-mono text-right break-all">
+                              {fullModelName}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-slate-400">Input tokens</span>
+                            <span className="text-slate-200 font-mono">
+                              {typeof message.metadata?.inputTokens === 'number'
+                                ? message.metadata.inputTokens.toLocaleString()
+                                : '—'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-slate-400">Output tokens</span>
+                            <span className="text-slate-200 font-mono">
+                              {typeof message.metadata?.outputTokens === 'number'
+                                ? message.metadata.outputTokens.toLocaleString()
+                                : totalTokens > 0
+                                ? `~${totalTokens.toLocaleString()}`
+                                : '—'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-slate-400">Response time</span>
+                            <span className="text-slate-200 font-mono">
+                              {formatLatency(message.metadata?.latencyMs)}
+                            </span>
+                          </div>
+                          {message.metadata?.fallbackUsed && (
+                            <div className="pt-1 text-[10px] text-amber-300">
+                              Answered via backup model
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Collapsible ChatGPT-style Sources section directly underneath answer and action buttons */}
             <MessageSources

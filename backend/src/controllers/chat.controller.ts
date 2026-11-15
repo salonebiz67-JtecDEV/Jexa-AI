@@ -125,4 +125,23 @@ export class ChatController {
       });
     }
   }
+
+  public static async generateTitle(req: Request, res: Response): Promise<void> {
+    const { userMessage, assistantMessage } = req.body || {};
+    if (!userMessage || typeof userMessage !== 'string' || !userMessage.trim()) {
+      res.status(400).json({ success: false, error: 'userMessage is required.' });
+      return;
+    }
+
+    const title = await ChatService.generateConversationTitle(
+      userMessage,
+      typeof assistantMessage === 'string' ? assistantMessage : undefined
+    );
+
+    res.status(200).json({
+      success: true,
+      data: { title },
+      timestamp: new Date().toISOString(),
+    });
+  }
 }

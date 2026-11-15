@@ -52,12 +52,12 @@ export const MessageSources: React.FC<MessageSourcesProps> = ({ sources, searchQ
   }, [deduplicatedSources]);
 
   return (
-    <div className="mt-3 pt-2.5 border-t border-white/[0.08] select-none">
+    <div className="mt-3 pt-2.5 border-t border-white/[0.08] select-none w-full max-w-full min-w-0 overflow-hidden">
       {/* Clickable Collapsible Bar Header (ChatGPT style) */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between p-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] hover:border-cyan-500/25 transition-all duration-150 cursor-pointer text-left group"
+        className="w-full min-h-[44px] flex items-center justify-between p-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] hover:border-cyan-500/25 active:scale-[0.99] transition-all duration-150 cursor-pointer text-left group min-w-0"
         aria-expanded={isOpen}
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -105,15 +105,15 @@ export const MessageSources: React.FC<MessageSourcesProps> = ({ sources, searchQ
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="pt-2 space-y-2">
+            <div className="pt-2 space-y-2 min-w-0 max-w-full">
               {searchQuery && (
-                <div className="text-[10px] text-slate-500 font-mono px-1">
+                <div className="text-[10px] text-slate-500 font-mono px-1 truncate">
                   Verified query: "{searchQuery}"
                 </div>
               )}
 
               {/* Grid: 1 col on mobile, 2 cols on tablet/desktop */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
                 {deduplicatedSources.map((src, idx) => (
                   <SourceCard key={`${src.url}-${idx}`} source={src} index={idx} />
                 ))}
@@ -153,7 +153,7 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, index }) => {
       href={source.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="group/card relative flex flex-col p-2.5 sm:p-3 rounded-xl bg-[#090d16]/95 hover:bg-[#0f172a] border border-white/[0.07] hover:border-cyan-500/40 hover:shadow-[0_0_16px_rgba(6,182,212,0.14)] transition-all duration-150 text-xs shadow-sm cursor-pointer select-none"
+      className="group/card relative flex flex-col min-w-0 max-w-full overflow-hidden p-2.5 sm:p-3 rounded-xl bg-[#090d16]/95 hover:bg-[#0f172a] border border-white/[0.07] hover:border-cyan-500/40 hover:shadow-[0_0_16px_rgba(6,182,212,0.14)] active:scale-[0.99] transition-all duration-150 text-xs shadow-sm cursor-pointer select-none"
       title={source.title}
     >
       {/* Top row: Favicon + Domain pill + Badges + Date + ExternalLink */}

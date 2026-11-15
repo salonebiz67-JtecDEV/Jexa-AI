@@ -1298,6 +1298,15 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
     }
 
     // 13. Build stateless assistant message payload (stored locally on client device via IndexedDB)
+    const inputTokens = providerResponse.tokensUsed?.prompt;
+    const outputTokens = providerResponse.tokensUsed?.completion;
+    const totalTokens =
+      providerResponse.tokensUsed?.total ??
+      (typeof inputTokens === 'number' || typeof outputTokens === 'number'
+        ? (inputTokens || 0) + (outputTokens || 0)
+        : undefined);
+    const latencyMs = Math.max(0, Date.now() - messageStartTime);
+
     const assistantMessage: ChatMessage = {
       id: crypto.randomUUID(),
       conversationId: convId,
@@ -1308,7 +1317,10 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
       metadata: {
         model: providerResponse.model,
         provider: providerResponse.provider,
-        tokens: providerResponse.tokensUsed?.total,
+        tokens: totalTokens,
+        inputTokens,
+        outputTokens,
+        latencyMs,
         isDevelopmentMock: false,
         fallbackUsed,
         originalProvider: primaryProviderType,
@@ -1332,5 +1344,62 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
       conversationId: convId,
       isNewConversation,
     };
+  }
+
+  /**
+   * Generates a concise 3-5 word conversation title using the background AI model.
+   * Never blocks or throws to callers; falls back to the first 40 characters if unavailable.
+   */
+  public static async generateConversationTitle(
+    userMessage: string,
+    assistantMessage?: string
+  ): Promise<string> {
+    const cleanUser = (userMessage || '')
+      .replace(/^\[web\s+search\s+requested\]\s*/i, '')
+      .replace(/^\[deep\s+think\s+reasoning\]\s*/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const fallbackTitle = cleanUser.slice(0, 40).trim() || 'New Conversation';
+    if (!cleanUser) return fallbackTitle;
+
+    try {
+      const registry = AIProviderRegistry.getInstance();
+      const backgroundProvider = registry.getBackgroundTextProvider();
+      if (!backgroundProvider || !backgroundProvider.isConfigured) {
+        return fallbackTitle;
+      }
+
+      const contextSnippet = assistantMessage
+        ? `User: ${cleanUser.slice(0, 300)}\nAssistant: ${assistantMessage.replace(/\s+/g, ' ').trim().slice(0, 300)}`
+        : `User: ${cleanUser.slice(0, 400)}`;
+
+      const res = await backgroundProvider.generateResponse({
+        model: backgroundProvider.modelName,
+        systemPrompt:
+          'Generate a concise 3 to 5 word title summarizing the topic of this conversation. Return ONLY the title words. No quotes, no punctuation at the end, no markdown, no emojis.',
+        messages: [{ role: 'user', content: contextSnippet }],
+        temperature: 0.2,
+        maxTokens: 24,
+        toolChoice: 'none',
+        purpose: 'search_decision',
+      });
+
+      const rawTitle = (res?.content || '')
+        .replace(/[\r\n]+/g, ' ')
+        .replace(/^["'`*#\-:\s]+|["'`*#\-:.\s!?]+$/g, '')
+        .replace(/^title\s*:\s*/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!rawTitle) return fallbackTitle;
+
+      const words = rawTitle.split(' ').filter(Boolean);
+      const clamped = words.slice(0, 5).join(' ').slice(0, 50).trim();
+      return clamped.length >= 2 ? clamped : fallbackTitle;
+    } catch (err: any) {
+      console.warn('[ChatService] Background title generation failed, using fallback:', err?.message || err);
+      return fallbackTitle;
+    }
   }
 }

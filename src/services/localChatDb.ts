@@ -1,13 +1,54 @@
 import { ChatMessage, Conversation } from '../../shared/types/chat';
 
 const DB_NAME = 'jexa_local_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const CONVERSATIONS_STORE = 'conversations';
 const MESSAGES_STORE = 'messages';
+const AUDIO_CACHE_STORE = 'audio_cache';
+
+export interface CachedAudioEntry {
+  cacheKey: string;
+  messageId: string;
+  conversationId: string;
+  voiceId: string;
+  model: string;
+  textHash: string;
+  blob: Blob;
+  mimeType: string;
+  createdAt: number;
+}
 
 // In-memory fallback for environments where IndexedDB is unavailable (e.g. restricted iframes or SSR)
 const fallbackConversations = new Map<string, Conversation>();
 const fallbackMessages = new Map<string, ChatMessage[]>();
+const fallbackAudioCache = new Map<string, CachedAudioEntry>();
+
+function hashString(input: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${(h2 >>> 0).toString(16)}_${(h1 >>> 0).toString(16)}_${input.length}`;
+}
+
+export function buildAudioCacheKey(
+  messageId: string,
+  voiceId: string,
+  model: string,
+  text: string
+): { cacheKey: string; textHash: string } {
+  const normalizedText = (text || '').trim();
+  const textHash = hashString(normalizedText);
+  const cleanVoice = (voiceId || 'default').trim().toLowerCase();
+  const cleanModel = (model || 'default').trim().toLowerCase();
+  const cacheKey = `${messageId}::${cleanVoice}::${cleanModel}::${textHash}`;
+  return { cacheKey, textHash };
+}
 
 function generateUuid(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -26,6 +67,7 @@ function generateUuid(): string {
 export function deriveConversationTitle(firstMessage: string): string {
   const cleaned = (firstMessage || '')
     .replace(/^\[web search requested\]\s*/i, '')
+    .replace(/^\[deep think reasoning\]\s*/i, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (!cleaned) return 'New Conversation';
@@ -63,6 +105,11 @@ function openDatabase(): Promise<IDBDatabase | null> {
         if (!db.objectStoreNames.contains(MESSAGES_STORE)) {
           const msgStore = db.createObjectStore(MESSAGES_STORE, { keyPath: 'id' });
           msgStore.createIndex('conversationId', 'conversationId', { unique: false });
+        }
+        if (!db.objectStoreNames.contains(AUDIO_CACHE_STORE)) {
+          const audioStore = db.createObjectStore(AUDIO_CACHE_STORE, { keyPath: 'cacheKey' });
+          audioStore.createIndex('messageId', 'messageId', { unique: false });
+          audioStore.createIndex('conversationId', 'conversationId', { unique: false });
         }
       };
 
@@ -150,17 +197,30 @@ export const localChatDb = {
     return conv;
   },
 
-  async renameConversation(id: string, title: string): Promise<Conversation | null> {
+  async renameConversation(
+    id: string,
+    title: string,
+    isManual = true
+  ): Promise<Conversation | null> {
     const cleanTitle = title.trim();
     if (!id || !cleanTitle) return null;
 
     const existing = await this.getConversation(id);
     if (!existing) return null;
 
+    // Never allow auto-titling to overwrite a manual user rename
+    if (!isManual && existing.metadata?.customTitle) {
+      return existing;
+    }
+
     const updated: Conversation = {
       ...existing,
       title: cleanTitle,
       updatedAt: new Date().toISOString(),
+      metadata: {
+        ...(existing.metadata || {}),
+        customTitle: isManual ? true : Boolean(existing.metadata?.customTitle),
+      },
     };
 
     const db = await openDatabase();
@@ -202,10 +262,18 @@ export const localChatDb = {
     if (!db) {
       const existed = fallbackConversations.delete(id);
       fallbackMessages.delete(id);
+      for (const [k, entry] of fallbackAudioCache.entries()) {
+        if (entry.conversationId === id) {
+          fallbackAudioCache.delete(k);
+        }
+      }
       return existed;
     }
 
-    const tx = db.transaction([CONVERSATIONS_STORE, MESSAGES_STORE], 'readwrite');
+    const stores = db.objectStoreNames.contains(AUDIO_CACHE_STORE)
+      ? [CONVERSATIONS_STORE, MESSAGES_STORE, AUDIO_CACHE_STORE]
+      : [CONVERSATIONS_STORE, MESSAGES_STORE];
+    const tx = db.transaction(stores, 'readwrite');
     tx.objectStore(CONVERSATIONS_STORE).delete(id);
     const msgStore = tx.objectStore(MESSAGES_STORE);
     const index = msgStore.index('conversationId');
@@ -213,6 +281,16 @@ export const localChatDb = {
     for (const key of keys || []) {
       msgStore.delete(key);
     }
+
+    if (db.objectStoreNames.contains(AUDIO_CACHE_STORE)) {
+      const audioStore = tx.objectStore(AUDIO_CACHE_STORE);
+      const audioConvIdx = audioStore.index('conversationId');
+      const audioKeys = await reqToPromise<IDBValidKey[]>(audioConvIdx.getAllKeys(id));
+      for (const aKey of audioKeys || []) {
+        audioStore.delete(aKey);
+      }
+    }
+
     await txDone(tx);
     return true;
   },
@@ -275,7 +353,8 @@ export const localChatDb = {
     const shouldRenameFromFirst =
       savedMsg.role === 'user' &&
       (conv.messageCount || 0) === 0 &&
-      (conv.title === 'New Conversation' || !conv.title.trim());
+      (conv.title === 'New Conversation' || !conv.title.trim()) &&
+      !conv.metadata?.customTitle;
 
     const updatedConv: Conversation = {
       ...conv,
@@ -298,6 +377,132 @@ export const localChatDb = {
     tx.objectStore(CONVERSATIONS_STORE).put(updatedConv);
     await txDone(tx);
     return savedMsg;
+  },
+
+  async deleteMessage(messageId: string, conversationId?: string): Promise<void> {
+    if (!messageId) return;
+    await this.deleteAudioForMessage(messageId);
+    const db = await openDatabase();
+    if (!db) {
+      if (conversationId && fallbackMessages.has(conversationId)) {
+        fallbackMessages.set(
+          conversationId,
+          (fallbackMessages.get(conversationId) || []).filter((m) => m.id !== messageId)
+        );
+      } else {
+        for (const [cid, list] of fallbackMessages.entries()) {
+          fallbackMessages.set(
+            cid,
+            list.filter((m) => m.id !== messageId)
+          );
+        }
+      }
+      return;
+    }
+
+    const tx = db.transaction(MESSAGES_STORE, 'readwrite');
+    tx.objectStore(MESSAGES_STORE).delete(messageId);
+    await txDone(tx);
+  },
+
+  async getCachedAudio(
+    messageId: string,
+    voiceId: string,
+    model: string,
+    text: string
+  ): Promise<CachedAudioEntry | null> {
+    if (!messageId || !text.trim()) return null;
+    const { cacheKey } = buildAudioCacheKey(messageId, voiceId, model, text);
+    const db = await openDatabase();
+    if (!db || !db.objectStoreNames.contains(AUDIO_CACHE_STORE)) {
+      return fallbackAudioCache.get(cacheKey) || null;
+    }
+
+    const tx = db.transaction(AUDIO_CACHE_STORE, 'readonly');
+    const item = await reqToPromise<CachedAudioEntry | undefined>(
+      tx.objectStore(AUDIO_CACHE_STORE).get(cacheKey)
+    );
+    await txDone(tx);
+    return item || null;
+  },
+
+  async saveCachedAudio(params: {
+    messageId: string;
+    conversationId: string;
+    voiceId: string;
+    model: string;
+    text: string;
+    blob: Blob;
+    mimeType?: string;
+  }): Promise<void> {
+    if (!params.messageId || !params.blob || params.blob.size === 0) return;
+    const { cacheKey, textHash } = buildAudioCacheKey(
+      params.messageId,
+      params.voiceId,
+      params.model,
+      params.text
+    );
+    const entry: CachedAudioEntry = {
+      cacheKey,
+      messageId: params.messageId,
+      conversationId: params.conversationId || '',
+      voiceId: (params.voiceId || 'default').trim().toLowerCase(),
+      model: (params.model || 'default').trim().toLowerCase(),
+      textHash,
+      blob: params.blob,
+      mimeType: params.mimeType || params.blob.type || 'audio/wav',
+      createdAt: Date.now(),
+    };
+
+    const db = await openDatabase();
+    if (!db || !db.objectStoreNames.contains(AUDIO_CACHE_STORE)) {
+      fallbackAudioCache.set(cacheKey, entry);
+      return;
+    }
+
+    const tx = db.transaction(AUDIO_CACHE_STORE, 'readwrite');
+    tx.objectStore(AUDIO_CACHE_STORE).put(entry);
+    await txDone(tx);
+  },
+
+  async deleteAudioForMessage(messageId: string): Promise<void> {
+    if (!messageId) return;
+    for (const [k, entry] of fallbackAudioCache.entries()) {
+      if (entry.messageId === messageId) {
+        fallbackAudioCache.delete(k);
+      }
+    }
+    const db = await openDatabase();
+    if (!db || !db.objectStoreNames.contains(AUDIO_CACHE_STORE)) return;
+
+    const tx = db.transaction(AUDIO_CACHE_STORE, 'readwrite');
+    const store = tx.objectStore(AUDIO_CACHE_STORE);
+    const index = store.index('messageId');
+    const keys = await reqToPromise<IDBValidKey[]>(index.getAllKeys(messageId));
+    for (const key of keys || []) {
+      store.delete(key);
+    }
+    await txDone(tx);
+  },
+
+  async deleteAudioForConversation(conversationId: string): Promise<void> {
+    if (!conversationId) return;
+    for (const [k, entry] of fallbackAudioCache.entries()) {
+      if (entry.conversationId === conversationId) {
+        fallbackAudioCache.delete(k);
+      }
+    }
+    const db = await openDatabase();
+    if (!db || !db.objectStoreNames.contains(AUDIO_CACHE_STORE)) return;
+
+    const tx = db.transaction(AUDIO_CACHE_STORE, 'readwrite');
+    const store = tx.objectStore(AUDIO_CACHE_STORE);
+    const index = store.index('conversationId');
+    const keys = await reqToPromise<IDBValidKey[]>(index.getAllKeys(conversationId));
+    for (const key of keys || []) {
+      store.delete(key);
+    }
+    await txDone(tx);
   },
 
   async searchConversations(
@@ -346,16 +551,23 @@ export const localChatDb = {
   },
 
   async clearAllConversations(): Promise<void> {
+    fallbackConversations.clear();
+    fallbackMessages.clear();
+    fallbackAudioCache.clear();
     const db = await openDatabase();
     if (!db) {
-      fallbackConversations.clear();
-      fallbackMessages.clear();
       return;
     }
 
-    const tx = db.transaction([CONVERSATIONS_STORE, MESSAGES_STORE], 'readwrite');
+    const stores = db.objectStoreNames.contains(AUDIO_CACHE_STORE)
+      ? [CONVERSATIONS_STORE, MESSAGES_STORE, AUDIO_CACHE_STORE]
+      : [CONVERSATIONS_STORE, MESSAGES_STORE];
+    const tx = db.transaction(stores, 'readwrite');
     tx.objectStore(CONVERSATIONS_STORE).clear();
     tx.objectStore(MESSAGES_STORE).clear();
+    if (db.objectStoreNames.contains(AUDIO_CACHE_STORE)) {
+      tx.objectStore(AUDIO_CACHE_STORE).clear();
+    }
     await txDone(tx);
   },
 };

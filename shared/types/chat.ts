@@ -46,6 +46,9 @@ export interface ChatMessageMetadata {
   model?: string;
   provider?: string;
   tokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  latencyMs?: number;
   audioUrl?: string;
   isDevelopmentMock?: boolean;
   fallbackUsed?: boolean;

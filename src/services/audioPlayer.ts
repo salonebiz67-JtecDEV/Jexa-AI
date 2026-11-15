@@ -1,24 +1,62 @@
 /**
  * Audio Player Service for JEXA AI Companion
- * Robust, production-grade audio playback handling binary Blobs, MIME detection,
- * Object URLs, and safe lifecycle revocation without memory leaks.
+ * Supports single-active message playback with idle, loading, playing, paused, and error states,
+ * binary Blob & URL playback, real pause/resume, and safe Object URL lifecycle management.
  */
+
+export type AudioPlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused';
+
+export interface AudioPlayerSnapshot {
+  status: AudioPlaybackStatus;
+  activeMessageId: string | null;
+  error: string | null;
+  errorMessageId: string | null;
+}
+
+type AudioStateListener = (snapshot: AudioPlayerSnapshot) => void;
 
 class AudioPlayerService {
   private currentAudio: HTMLAudioElement | null = null;
   private currentObjectUrl: string | null = null;
-  private _isPlaying: boolean = false;
+  private _status: AudioPlaybackStatus = 'idle';
+  private _activeMessageId: string | null = null;
+  private _error: string | null = null;
+  private _errorMessageId: string | null = null;
+  private listeners = new Set<AudioStateListener>();
 
   public get isPlaying(): boolean {
-    return this._isPlaying;
+    return this._status === 'playing';
   }
 
-  /**
-   * Immediately stops any active audio and releases previous Object URLs
-   */
-  public stop(): void {
+  public getSnapshot(): AudioPlayerSnapshot {
+    return {
+      status: this._status,
+      activeMessageId: this._activeMessageId,
+      error: this._error,
+      errorMessageId: this._errorMessageId,
+    };
+  }
+
+  public subscribe(listener: AudioStateListener): () => void {
+    this.listeners.add(listener);
+    listener(this.getSnapshot());
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private notify(): void {
+    const snap = this.getSnapshot();
+    for (const listener of this.listeners) {
+      listener(snap);
+    }
+  }
+
+  private cleanupMediaElement(): void {
     if (this.currentAudio) {
       try {
+        this.currentAudio.onended = null;
+        this.currentAudio.onerror = null;
         this.currentAudio.pause();
         this.currentAudio.currentTime = 0;
         this.currentAudio.src = '';
@@ -36,61 +74,159 @@ class AudioPlayerService {
       }
       this.currentObjectUrl = null;
     }
-
-    this._isPlaying = false;
   }
 
   /**
-   * Plays a binary audio Blob with automatic MIME detection and Object URL revocation
+   * Marks a message as loading voice audio and stops any previously playing message.
    */
-  public async playBlob(blob: Blob): Promise<void> {
-    this.stop();
+  public setLoading(messageId: string): void {
+    this.cleanupMediaElement();
+    this._status = 'loading';
+    this._activeMessageId = messageId;
+    this._error = null;
+    this._errorMessageId = null;
+    this.notify();
+  }
+
+  /**
+   * Records a voice failure for a specific message without masking the real reason.
+   */
+  public setError(messageId: string, errorMessage: string): void {
+    this.cleanupMediaElement();
+    this._status = 'idle';
+    this._activeMessageId = null;
+    this._error = errorMessage || 'Voice synthesis failed.';
+    this._errorMessageId = messageId;
+    this.notify();
+  }
+
+  public clearError(messageId?: string): void {
+    if (!messageId || this._errorMessageId === messageId) {
+      this._error = null;
+      this._errorMessageId = null;
+      this.notify();
+    }
+  }
+
+  /**
+   * Immediately stops any active audio and resets playback state.
+   */
+  public stop(): void {
+    this.cleanupMediaElement();
+    this._status = 'idle';
+    this._activeMessageId = null;
+    this.notify();
+  }
+
+  /**
+   * Pauses the currently playing message audio while retaining position and Object URL.
+   */
+  public pause(): void {
+    if (this.currentAudio && this._status === 'playing') {
+      try {
+        this.currentAudio.pause();
+        this._status = 'paused';
+        this.notify();
+      } catch {
+        this.stop();
+      }
+    }
+  }
+
+  /**
+   * Resumes paused audio for the active message without re-fetching.
+   */
+  public async resume(): Promise<void> {
+    if (!this.currentAudio || this._status !== 'paused') return;
+    try {
+      this._status = 'playing';
+      this.notify();
+      await this.currentAudio.play();
+    } catch (err: any) {
+      const msg =
+        err?.name === 'NotAllowedError'
+          ? 'Audio playback requires user interaction.'
+          : err?.message || 'Audio could not resume on this device.';
+      const targetId = this._activeMessageId;
+      if (targetId) {
+        this.setError(targetId, msg);
+      } else {
+        this.stop();
+      }
+      throw new Error(msg);
+    }
+  }
+
+  /**
+   * Plays a binary audio Blob for an optional messageId. Only one message plays at a time.
+   */
+  public async playBlob(blob: Blob, messageId?: string): Promise<void> {
+    this.cleanupMediaElement();
 
     if (!blob || blob.size === 0) {
-      throw new Error('No audio data received from voice provider.');
+      const err = new Error('No audio data received from voice provider.');
+      if (messageId) this.setError(messageId, err.message);
+      throw err;
     }
 
     const objectUrl = URL.createObjectURL(blob);
     this.currentObjectUrl = objectUrl;
+    this._activeMessageId = messageId || null;
+    this._error = null;
+    this._errorMessageId = null;
 
-    return this.playMediaUrl(objectUrl);
+    return this.playMediaUrl(objectUrl, messageId);
   }
 
   /**
-   * Plays an audio URL (e.g. data:audio/mpeg;base64,... or data:audio/wav;base64,... or object URL)
+   * Plays an audio URL (e.g. data:audio/... or object URL) for an optional messageId.
    */
-  public async playUrl(url: string): Promise<void> {
-    this.stop();
+  public async playUrl(url: string, messageId?: string): Promise<void> {
+    this.cleanupMediaElement();
 
     if (!url || typeof url !== 'string') {
-      throw new Error('Invalid audio URL provided.');
+      const err = new Error('Invalid audio URL provided.');
+      if (messageId) this.setError(messageId, err.message);
+      throw err;
     }
 
-    return this.playMediaUrl(url);
+    this._activeMessageId = messageId || null;
+    this._error = null;
+    this._errorMessageId = null;
+
+    return this.playMediaUrl(url, messageId);
   }
 
-  private playMediaUrl(url: string): Promise<void> {
+  private playMediaUrl(url: string, messageId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const audio = new Audio();
       this.currentAudio = audio;
-      this._isPlaying = true;
+      this._status = 'playing';
+      this.notify();
 
       audio.onended = () => {
-        this._isPlaying = false;
-        if (this.currentObjectUrl) {
-          URL.revokeObjectURL(this.currentObjectUrl);
-          this.currentObjectUrl = null;
+        if (this.currentAudio === audio) {
+          this.cleanupMediaElement();
+          this._status = 'idle';
+          this._activeMessageId = null;
+          this.notify();
         }
         resolve();
       };
 
       audio.onerror = () => {
-        this._isPlaying = false;
-        if (this.currentObjectUrl) {
-          URL.revokeObjectURL(this.currentObjectUrl);
-          this.currentObjectUrl = null;
+        const msg = 'Audio was generated, but the device could not play it.';
+        if (this.currentAudio === audio) {
+          this.cleanupMediaElement();
+          this._status = 'idle';
+          this._activeMessageId = null;
+          if (messageId) {
+            this._error = msg;
+            this._errorMessageId = messageId;
+          }
+          this.notify();
         }
-        reject(new Error('Audio was generated, but the device could not play it.'));
+        reject(new Error(msg));
       };
 
       audio.src = url;
@@ -99,16 +235,21 @@ class AudioPlayerService {
       const playPromise = audio.play();
       if (playPromise !== undefined) {
         playPromise.catch((err) => {
-          this._isPlaying = false;
-          if (this.currentObjectUrl) {
-            URL.revokeObjectURL(this.currentObjectUrl);
-            this.currentObjectUrl = null;
+          const msg =
+            err?.name === 'NotAllowedError'
+              ? 'Audio playback requires user interaction.'
+              : 'Audio was generated, but the device could not play it.';
+          if (this.currentAudio === audio) {
+            this.cleanupMediaElement();
+            this._status = 'idle';
+            this._activeMessageId = null;
+            if (messageId) {
+              this._error = msg;
+              this._errorMessageId = messageId;
+            }
+            this.notify();
           }
-          if (err.name === 'NotAllowedError') {
-            reject(new Error('Audio playback requires user interaction.'));
-          } else {
-            reject(new Error('Audio was generated, but the device could not play it.'));
-          }
+          reject(new Error(msg));
         });
       }
     });

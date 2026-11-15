@@ -15,7 +15,7 @@ const CHIPS = [
 
 export const ConversationStarters: React.FC<ConversationStartersProps> = ({ onSelectPrompt }) => {
   return (
-    <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 max-w-lg mx-auto text-center select-none">
+    <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 w-full max-w-lg mx-auto text-center select-none min-w-0">
       {/* Brand Icon & Heading */}
       <div className="w-10 h-10 rounded-2xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-emerald-400 mb-4 shadow-sm">
         <Sparkles className="w-5 h-5" />
@@ -29,14 +29,14 @@ export const ConversationStarters: React.FC<ConversationStartersProps> = ({ onSe
       </p>
 
       {/* Minimal Suggestion Chips */}
-      <div className="flex flex-wrap gap-2 justify-center max-w-md">
+      <div className="flex flex-wrap gap-2 justify-center max-w-md w-full">
         {CHIPS.map((chip) => {
           const Icon = chip.icon;
           return (
             <button
               key={chip.label}
               onClick={() => onSelectPrompt(chip.prompt)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-slate-300 hover:text-white transition-all active:scale-95"
+              className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-slate-300 hover:text-white transition-all active:scale-95 cursor-pointer"
             >
               <Icon className="w-3.5 h-3.5 text-slate-400" />
               <span>{chip.label}</span>

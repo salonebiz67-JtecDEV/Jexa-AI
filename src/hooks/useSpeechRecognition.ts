@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { showToast } from '../services/toast';
+
+export type MicDictationStatus = 'idle' | 'listening' | 'processing';
 
 interface SpeechRecognitionHook {
+  status: MicDictationStatus;
   isListening: boolean;
+  isProcessing: boolean;
+  interimTranscript: string;
   transcript: string;
   isSupported: boolean;
   error: string | null;
@@ -10,18 +16,56 @@ interface SpeechRecognitionHook {
   resetTranscript: () => void;
 }
 
-// Polyfill type for Web Speech API
 type SpeechRecognitionType = any;
 
+function mapSpeechError(code?: string): string {
+  switch (code) {
+    case 'not-allowed':
+    case 'service-not-allowed':
+      return 'Microphone permission denied. Please allow microphone access in your browser settings.';
+    case 'audio-capture':
+      return 'No microphone detected. Please connect or enable a microphone.';
+    case 'network':
+      return 'Voice dictation needs an active internet connection.';
+    case 'no-speech':
+      return 'No speech was detected. Tap the mic and try speaking again.';
+    case 'aborted':
+      return '';
+    default:
+      return code ? `Microphone error: ${code}` : 'Microphone dictation failed.';
+  }
+}
+
 export function useSpeechRecognition(onResult?: (text: string) => void): SpeechRecognitionHook {
-  const [isListening, setIsListening] = useState(false);
+  const [status, setStatus] = useState<MicDictationStatus>('idle');
+  const [interimTranscript, setInterimTranscript] = useState('');
   const [transcript, setTranscript] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const recognitionRef = useRef<SpeechRecognitionType | null>(null);
 
-  const isSupported = typeof window !== 'undefined' && Boolean(
-    (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-  );
+  const recognitionRef = useRef<SpeechRecognitionType | null>(null);
+  const onResultRef = useRef(onResult);
+  const finalBufferRef = useRef('');
+  const interimBufferRef = useRef('');
+  const hasCommittedRef = useRef(false);
+  const hadFatalErrorRef = useRef(false);
+
+  useEffect(() => {
+    onResultRef.current = onResult;
+  }, [onResult]);
+
+  const isSupported =
+    typeof window !== 'undefined' &&
+    Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+
+  const commitIfAny = useCallback(() => {
+    if (hasCommittedRef.current || hadFatalErrorRef.current) return;
+    const text = (finalBufferRef.current || interimBufferRef.current).replace(/\s+/g, ' ').trim();
+    if (text) {
+      hasCommittedRef.current = true;
+      setTranscript(text);
+      onResultRef.current?.(text);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isSupported) return;
@@ -35,31 +79,64 @@ export function useSpeechRecognition(onResult?: (text: string) => void): SpeechR
     recognition.lang = 'en-US';
 
     recognition.onstart = () => {
-      setIsListening(true);
+      finalBufferRef.current = '';
+      interimBufferRef.current = '';
+      hasCommittedRef.current = false;
+      hadFatalErrorRef.current = false;
       setError(null);
+      setInterimTranscript('');
+      setStatus('listening');
     };
 
     recognition.onresult = (event: any) => {
-      let current = '';
+      let finals = '';
+      let interim = '';
       for (let i = 0; i < event.results.length; i++) {
-        current += event.results[i][0].transcript;
+        const result = event.results[i];
+        const piece = result?.[0]?.transcript || '';
+        if (result.isFinal) {
+          finals += (finals ? ' ' : '') + piece.trim();
+        } else {
+          interim += (interim ? ' ' : '') + piece.trim();
+        }
       }
-      setTranscript(current);
-      if (onResult && current) {
-        onResult(current);
+
+      if (finals) {
+        finalBufferRef.current = finals;
       }
+      interimBufferRef.current = interim;
+
+      const combinedPreview = [finalBufferRef.current, interim].filter(Boolean).join(' ').trim();
+      setInterimTranscript(combinedPreview);
     };
 
     recognition.onerror = (event: any) => {
-      console.warn('[SpeechRecognition] Error event:', event.error);
-      if (event.error !== 'no-speech') {
-        setError(`Microphone error: ${event.error}`);
+      const code = event?.error;
+      const friendly = mapSpeechError(code);
+      if (code !== 'no-speech' && code !== 'aborted') {
+        hadFatalErrorRef.current = true;
       }
-      setIsListening(false);
+      if (friendly) {
+        setError(friendly);
+        showToast(friendly, code === 'no-speech' ? 'info' : 'error');
+      }
+      setInterimTranscript('');
+      setStatus('idle');
     };
 
     recognition.onend = () => {
-      setIsListening(false);
+      const hasPendingText = Boolean((finalBufferRef.current || interimBufferRef.current).trim());
+      if (hasPendingText && !hadFatalErrorRef.current) {
+        setStatus('processing');
+        commitIfAny();
+        window.setTimeout(() => {
+          setInterimTranscript('');
+          setStatus('idle');
+        }, 180);
+      } else {
+        setInterimTranscript('');
+        setStatus('idle');
+      }
     };
 
     recognitionRef.current = recognition;
@@ -71,38 +148,60 @@ export function useSpeechRecognition(onResult?: (text: string) => void): SpeechR
         // cleanup ignore
       }
     };
-  }, [isSupported, onResult]);
+  }, [isSupported, commitIfAny]);
 
   const startListening = useCallback(() => {
     if (!isSupported) {
-      setError('Speech recognition is not supported in this browser environment.');
+      const msg = 'Speech recognition is not supported in this browser.';
+      setError(msg);
+      showToast(msg, 'error');
       return;
     }
+
     setError(null);
     setTranscript('');
+    setInterimTranscript('');
+    finalBufferRef.current = '';
+    interimBufferRef.current = '';
+    hasCommittedRef.current = false;
+    hadFatalErrorRef.current = false;
+
     try {
       recognitionRef.current?.start();
     } catch (err: any) {
-      console.warn('[SpeechRecognition] Start error:', err);
-      // If already started, ignore
+      const msg = err?.message || 'Unable to start microphone dictation.';
+      console.warn('[SpeechRecognition] Start error:', msg);
+      if (!String(msg).toLowerCase().includes('already started')) {
+        setError(msg);
+        showToast(msg, 'error');
+        setStatus('idle');
+      }
     }
   }, [isSupported]);
 
   const stopListening = useCallback(() => {
+    setStatus((prev) => (prev === 'listening' ? 'processing' : prev));
     try {
       recognitionRef.current?.stop();
     } catch {
-      // ignore
+      commitIfAny();
+      setInterimTranscript('');
+      setStatus('idle');
     }
-    setIsListening(false);
-  }, []);
+  }, [commitIfAny]);
 
   const resetTranscript = useCallback(() => {
+    finalBufferRef.current = '';
+    interimBufferRef.current = '';
     setTranscript('');
+    setInterimTranscript('');
   }, []);
 
   return {
-    isListening,
+    status,
+    isListening: status === 'listening',
+    isProcessing: status === 'processing',
+    interimTranscript,
     transcript,
     isSupported,
     error,
