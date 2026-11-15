@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import {
   ArrowUp,
   Mic,
@@ -31,6 +31,8 @@ interface ComposerProps {
   disabled?: boolean;
 }
 
+const MAX_LINES_HEIGHT_PX = 152; // ~6 lines at 22px line-height + 20px vertical padding
+
 export const Composer: React.FC<ComposerProps> = ({
   onSendMessage,
   onOpenLive,
@@ -61,13 +63,42 @@ export const Composer: React.FC<ComposerProps> = ({
     setInputText((prev) => (prev.trim() ? `${prev.trim()} ${recognizedText}` : recognizedText));
   });
 
-  // Auto-resize textarea
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 140)}px`;
+  // Auto-resize textarea: starts at 1 line, grows upward up to ~6 lines or 40% of screen height, then scrolls inside itself
+  const resizeTextarea = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+
+    el.style.height = 'auto';
+    if (!el.value) {
+      el.style.overflowY = 'hidden';
+      return;
     }
-  }, [inputText]);
+
+    const viewportHeight =
+      typeof window !== 'undefined'
+        ? window.visualViewport?.height || window.innerHeight || 640
+        : 640;
+    const maxByViewport = Math.floor(viewportHeight * 0.4);
+    const maxHeight = Math.min(MAX_LINES_HEIGHT_PX, Math.max(84, maxByViewport));
+
+    const nextHeight = Math.min(el.scrollHeight, maxHeight);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, []);
+
+  useLayoutEffect(() => {
+    resizeTextarea();
+  }, [inputText, resizeTextarea]);
+
+  useEffect(() => {
+    const handleViewportResize = () => resizeTextarea();
+    window.addEventListener('resize', handleViewportResize);
+    window.visualViewport?.addEventListener('resize', handleViewportResize);
+    return () => {
+      window.removeEventListener('resize', handleViewportResize);
+      window.visualViewport?.removeEventListener('resize', handleViewportResize);
+    };
+  }, [resizeTextarea]);
 
   // Click outside to close plus menu
   useEffect(() => {
@@ -107,11 +138,13 @@ export const Composer: React.FC<ComposerProps> = ({
 
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.overflowY = 'hidden';
     }
   };
 
+  // Enter inserts a new line; Cmd/Ctrl+Enter or the Send button submits
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSubmit();
     }
@@ -151,12 +184,11 @@ export const Composer: React.FC<ComposerProps> = ({
     }
   };
 
-  // Has typed text or attached files
   const hasContent = inputText.trim().length > 0 || attachments.length > 0;
   const canSend = hasContent && !disabled;
 
   return (
-    <div className="p-2.5 sm:p-4 max-w-3xl lg:max-w-4xl mx-auto w-full min-w-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+    <div className="w-full max-w-3xl lg:max-w-4xl mx-auto min-w-0 px-0 sm:px-4 overscroll-none">
       {/* Hidden File Inputs for functional Plus button */}
       <input
         ref={fileInputRef}
@@ -174,8 +206,8 @@ export const Composer: React.FC<ComposerProps> = ({
         onChange={(e) => handleFileUpload(e, 'image')}
       />
 
-      {/* Modern ChatGPT-style rounded capsule composer */}
-      <div className="relative rounded-[24px] sm:rounded-[28px] bg-[#0c101d] border border-white/[0.09] shadow-[0_8px_30px_rgb(0,0,0,0.5)] focus-within:border-cyan-500/40 focus-within:shadow-[0_0_24px_rgba(6,182,212,0.15)] transition-all duration-200 max-w-full">
+      {/* Bottom-docked composer surface: zero blank gap beneath except env(safe-area-inset-bottom) */}
+      <div className="relative rounded-t-[22px] sm:rounded-t-[24px] bg-[#0c101d]/95 backdrop-blur-md border-t border-x border-white/[0.09] shadow-[0_-8px_28px_rgba(0,0,0,0.45)] focus-within:border-cyan-500/40 transition-colors duration-200 max-w-full pb-[env(safe-area-inset-bottom,0px)]">
         {/* Live Voice Dictation Status Strip */}
         {(isListening || isProcessing) && (
           <div className="flex items-center justify-between gap-2 px-4 pt-2.5 pb-1.5 border-b border-white/[0.05] text-xs min-w-0">
@@ -209,10 +241,9 @@ export const Composer: React.FC<ComposerProps> = ({
           </div>
         )}
 
-        {/* Active attachment & tool chips */}
+        {/* Active attachment & tool items */}
         {(attachments.length > 0 || webSearchActive || deepThinkActive) && (
-          <div className="flex flex-wrap items-center gap-1.5 px-3.5 pt-3 pb-1 border-b border-white/[0.04]">
-            {/* Attachments */}
+          <div className="flex flex-wrap items-center gap-1.5 px-3.5 pt-2.5 pb-1 border-b border-white/[0.04]">
             {attachments.map((att) => (
               <div
                 key={att.id}
@@ -236,11 +267,10 @@ export const Composer: React.FC<ComposerProps> = ({
               </div>
             ))}
 
-            {/* Active Web Search Badge */}
             {webSearchActive && (
-              <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-[11px] font-medium text-cyan-300">
+              <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-cyan-500/15 border border-cyan-500/30 text-[11px] font-medium text-cyan-300">
                 <Globe className="w-3 h-3 text-cyan-400" />
-                <span>Web Search Active</span>
+                <span>Web Search</span>
                 <button
                   type="button"
                   onClick={() => setWebSearchActive(false)}
@@ -252,11 +282,10 @@ export const Composer: React.FC<ComposerProps> = ({
               </div>
             )}
 
-            {/* Active Deep Think Badge */}
             {deepThinkActive && (
-              <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[11px] font-medium text-emerald-300">
+              <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-[11px] font-medium text-emerald-300">
                 <Sparkles className="w-3 h-3 text-emerald-400" />
-                <span>Deep Think Active</span>
+                <span>Deep Think</span>
                 <button
                   type="button"
                   onClick={() => setDeepThinkActive(false)}
@@ -270,8 +299,8 @@ export const Composer: React.FC<ComposerProps> = ({
           </div>
         )}
 
-        {/* Main Input Row: [Plus] [Textarea] [Dynamic Action Buttons] */}
-        <div className="flex items-end gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 min-w-0">
+        {/* Main Input Row: [Plus] [Auto-growing Textarea] [Mic+LIVE | Send] */}
+        <div className="flex items-end gap-1 sm:gap-1.5 px-2 sm:px-3 py-2 min-w-0">
           {/* Functional Plus (+) Button on the Left */}
           <div className="relative shrink-0" ref={plusMenuRef}>
             <button
@@ -289,7 +318,7 @@ export const Composer: React.FC<ComposerProps> = ({
               <Plus className="w-5 h-5 transition-transform duration-200" />
             </button>
 
-            {/* Plus Action Sheet / Menu */}
+            {/* Plus Action Sheet / Menu (opens upward) */}
             {showPlusMenu && (
               <div className="absolute left-0 bottom-full mb-2.5 w-56 rounded-2xl bg-[#0f1424] border border-white/[0.1] shadow-2xl py-1.5 z-50 text-xs text-slate-200 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150">
                 <div className="px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider text-slate-500 font-mono">
@@ -385,8 +414,8 @@ export const Composer: React.FC<ComposerProps> = ({
             )}
           </div>
 
-          {/* Text Input in Center */}
-          <div className="flex-1 min-w-0 flex items-center">
+          {/* Auto-growing Textarea (1 line -> up to ~6 lines or 40dvh -> internal scroll) */}
+          <div className="flex-1 min-w-0 flex items-end">
             <textarea
               ref={textareaRef}
               rows={1}
@@ -394,21 +423,20 @@ export const Composer: React.FC<ComposerProps> = ({
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={isListening ? 'Listening… speak now' : 'Message JEXA...'}
-              className="w-full bg-transparent px-1.5 sm:px-2 py-2.5 text-[15px] sm:text-base text-slate-100 placeholder-slate-500 focus:outline-none resize-none leading-relaxed min-h-[44px] max-h-[140px] block"
+              className="w-full bg-transparent px-2 py-[10px] text-[15px] sm:text-base text-slate-100 placeholder-slate-500 focus:outline-none resize-none leading-[22px] min-h-[42px] max-h-[40dvh] block overscroll-contain scrollbar-none"
             />
           </div>
 
-          {/* Dynamic Right Actions: Switch between [Mic + LIVE] and [Send] */}
+          {/* Dynamic Right Actions: [Mic + LIVE] when empty, [Send] when content is present */}
           <div className="flex items-center gap-1 shrink-0">
             {hasContent ? (
-              /* As soon as text is typed: Show Circular Send Button */
               <button
                 type="button"
                 onClick={() => handleSubmit()}
                 disabled={!canSend}
                 className={`min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 ${
                   canSend
-                    ? 'bg-white text-slate-950 hover:bg-slate-200 shadow-[0_0_15px_rgba(255,255,255,0.3)]'
+                    ? 'bg-white text-slate-950 hover:bg-slate-200 shadow-[0_0_15px_rgba(255,255,255,0.28)]'
                     : 'bg-white/[0.08] text-slate-500 cursor-not-allowed'
                 }`}
                 title="Send message"
@@ -417,9 +445,7 @@ export const Composer: React.FC<ComposerProps> = ({
                 <ArrowUp className="w-5 h-5 stroke-[2.5]" />
               </button>
             ) : (
-              /* When input is empty: Show Microphone AND prominent LIVE voice button */
               <div className="flex items-center gap-1 sm:gap-1.5">
-                {/* Voice Dictation (Speech-to-text recording) */}
                 <button
                   type="button"
                   onClick={handleMicToggle}
@@ -455,7 +481,6 @@ export const Composer: React.FC<ComposerProps> = ({
                   )}
                 </button>
 
-                {/* Prominent LIVE Voice Conversation Button (Gemini Live API) */}
                 <button
                   type="button"
                   onClick={onOpenLive}
@@ -471,7 +496,6 @@ export const Composer: React.FC<ComposerProps> = ({
                       : 'bg-gradient-to-r from-cyan-500/10 via-emerald-500/10 to-cyan-500/10 hover:from-cyan-500/20 hover:to-emerald-500/20 border-cyan-500/30 hover:border-cyan-400/60 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.15)]'
                   }`}
                 >
-                  {/* Glowing pulsation indicator */}
                   <span className="relative flex h-2 w-2">
                     <span
                       className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${

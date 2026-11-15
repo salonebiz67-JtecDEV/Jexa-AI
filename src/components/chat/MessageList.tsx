@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { ArrowDown } from 'lucide-react';
 import { MessageItem } from './MessageItem';
 import { TypingIndicator } from './TypingIndicator';
@@ -8,6 +8,8 @@ import { ArtifactData } from '../panels/ArtifactWorkspace';
 import { AudioPlayerSnapshot } from '../../services/audioPlayer';
 
 interface MessageListProps {
+  conversationId?: string | null;
+  composerHeight?: number;
   messages: ChatMessage[];
   isSending: boolean;
   regeneratingMessageId?: string | null;
@@ -29,7 +31,11 @@ interface MessageListProps {
   onRetrySearch?: () => void;
 }
 
+const BOTTOM_SNAP_THRESHOLD_PX = 72;
+
 export const MessageList: React.FC<MessageListProps> = ({
+  conversationId,
+  composerHeight = 68,
   messages,
   isSending,
   regeneratingMessageId,
@@ -47,41 +53,85 @@ export const MessageList: React.FC<MessageListProps> = ({
   onRetrySearch,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const isAtBottomRef = useRef<boolean>(true);
+  const prevConversationIdRef = useRef<string | null | undefined>(conversationId);
+  const prevLastMessageIdRef = useRef<string | undefined>(messages[messages.length - 1]?.id);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
-  // Smoothly scroll to the bottom when messages or activity status changes
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (behavior === 'smooth') {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
   }, []);
 
-  useEffect(() => {
-    scrollToBottom('smooth');
-  }, [messages, isSending, activityStatus, scrollToBottom]);
+  const handleScroll = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distanceFromBottom <= BOTTOM_SNAP_THRESHOLD_PX;
+    isAtBottomRef.current = atBottom;
+    setShowJumpToLatest(!atBottom);
+  }, []);
 
-  // Monitor scroll position to show/hide "Scroll to bottom" floating button
-  const handleScroll = () => {
-    if (!containerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    const isUp = scrollHeight - scrollTop - clientHeight > 180;
-    setShowScrollBottom(isUp);
-  };
+  // Reset to bottom when switching conversations
+  useLayoutEffect(() => {
+    if (prevConversationIdRef.current !== conversationId) {
+      prevConversationIdRef.current = conversationId;
+      prevLastMessageIdRef.current = messages[messages.length - 1]?.id;
+      isAtBottomRef.current = true;
+      setShowJumpToLatest(false);
+      scrollToBottom('auto');
+    }
+  }, [conversationId, messages, scrollToBottom]);
+
+  // Auto-scroll when pinned to bottom OR when user sends a new message; preserve scroll place if scrolled up
+  useEffect(() => {
+    const lastMsg = messages[messages.length - 1];
+    const lastMsgId = lastMsg?.id;
+    const isNewUserMessage =
+      Boolean(lastMsgId) &&
+      lastMsgId !== prevLastMessageIdRef.current &&
+      lastMsg?.role === 'user';
+
+    prevLastMessageIdRef.current = lastMsgId;
+
+    if (isNewUserMessage) {
+      isAtBottomRef.current = true;
+      setShowJumpToLatest(false);
+      scrollToBottom('smooth');
+      return;
+    }
+
+    if (isAtBottomRef.current) {
+      scrollToBottom('auto');
+    }
+  }, [messages, isSending, activityStatus, composerHeight, scrollToBottom]);
+
+  const effectiveBottomPadding = Math.max(composerHeight, 64) + 12;
 
   if (messages.length === 0) {
     return (
-      <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-none flex items-center justify-center p-4">
+      <div
+        className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-none flex items-center justify-center p-4"
+        style={{ paddingBottom: `${effectiveBottomPadding}px` }}
+      >
         <ConversationStarters onSelectPrompt={onSelectPrompt} />
       </div>
     );
   }
 
   return (
-    <div className="relative flex-1 min-h-0 flex flex-col overflow-x-hidden">
-      {/* Scrollable Message Feed with hidden scrollbars and zero horizontal overflow */}
+    <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
+      {/* Only this feed scrolls; overscroll-contain prevents pulling the app shell */}
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-none py-4 px-1.5 sm:px-3 pb-36 sm:pb-40 space-y-1.5 max-w-3xl lg:max-w-4xl w-full mx-auto scroll-smooth"
+        className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-none pt-3 px-1.5 sm:px-3 space-y-1.5 max-w-3xl lg:max-w-4xl w-full mx-auto"
+        style={{ paddingBottom: `${effectiveBottomPadding}px` }}
       >
         {messages.map((message) => {
           const isThisAudioActive = audioState.activeMessageId === message.id;
@@ -115,21 +165,28 @@ export const MessageList: React.FC<MessageListProps> = ({
             onRetry={onRetrySearch}
           />
         )}
-
-        <div ref={bottomRef} className="h-4" />
       </div>
 
-      {/* Floating Scroll-to-Bottom Button */}
-      {showScrollBottom && (
-        <button
-          type="button"
-          onClick={() => scrollToBottom('smooth')}
-          className="absolute right-4 sm:right-8 bottom-4 z-20 min-h-[44px] min-w-[44px] rounded-full bg-[#111726]/90 border border-white/[0.12] text-slate-300 hover:text-white shadow-xl backdrop-blur-md flex items-center justify-center transition-all duration-150 hover:scale-105 active:scale-95 cursor-pointer"
-          title="Scroll to bottom"
-          aria-label="Scroll to bottom"
+      {/* Compact "Jump to latest" button when user scrolls up */}
+      {showJumpToLatest && (
+        <div
+          className="pointer-events-none absolute inset-x-0 flex justify-center z-20 px-4"
+          style={{ bottom: `${Math.max(composerHeight, 64) + 10}px` }}
         >
-          <ArrowDown className="w-4 h-4" />
-        </button>
+          <button
+            type="button"
+            onClick={() => {
+              isAtBottomRef.current = true;
+              setShowJumpToLatest(false);
+              scrollToBottom('smooth');
+            }}
+            className="pointer-events-auto min-h-[40px] px-3.5 py-2 rounded-full bg-[#111726]/95 hover:bg-[#192136] border border-white/[0.14] text-xs font-medium text-slate-100 shadow-xl backdrop-blur-md flex items-center gap-1.5 transition-all duration-150 active:scale-95 cursor-pointer whitespace-nowrap"
+            aria-label="Jump to latest"
+          >
+            <ArrowDown className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>Jump to latest</span>
+          </button>
+        </div>
       )}
     </div>
   );

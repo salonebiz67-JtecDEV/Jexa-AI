@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AlertTriangle, ArrowRight, X } from 'lucide-react';
 import { Sidebar, ActiveNavTab } from '../components/layout/Sidebar';
 import { ChatHeader } from '../components/layout/ChatHeader';
@@ -55,6 +55,8 @@ export const ChatPage: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveNavTab>(getInitialTab);
   const [currentArtifact, setCurrentArtifact] = useState<ArtifactData | null>(null);
+  const [composerHeight, setComposerHeight] = useState<number>(68);
+  const composerFooterRef = useRef<HTMLElement>(null);
 
   // Dialogs
   const [searchOpen, setSearchOpen] = useState(false);
@@ -77,6 +79,28 @@ export const ChatPage: React.FC = () => {
   useEffect(() => {
     return AudioPlayer.subscribe(setAudioState);
   }, []);
+
+  // Measure live composer height so MessageList always pads bottom by exact composer height
+  useEffect(() => {
+    if (activeTab !== 'chat' || currentArtifact) return;
+    const el = composerFooterRef.current;
+    if (!el) return;
+
+    const updateHeight = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      if (h > 0) setComposerHeight(h);
+    };
+    updateHeight();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(updateHeight);
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener('resize', updateHeight);
+    return () => window.removeEventListener('resize', updateHeight);
+  }, [activeTab, currentArtifact, voiceNotification]);
 
   // Chat State
   const {
@@ -551,7 +575,7 @@ export const ChatPage: React.FC = () => {
   );
 
   return (
-    <div className="flex h-screen h-[100dvh] w-screen overflow-hidden bg-[#07090e] text-slate-100 font-sans antialiased">
+    <div className="flex h-[100dvh] w-full overflow-hidden overscroll-none bg-[#07090e] text-slate-100 font-sans antialiased">
       {/* ONE Clean Navigation Sidebar (Collapsible on Desktop, Slide Drawer on Mobile) */}
       <Sidebar
         isOpen={sidebarOpen}
@@ -580,7 +604,7 @@ export const ChatPage: React.FC = () => {
       />
 
       {/* Main Viewport Container */}
-      <div className="flex-1 flex flex-col h-full min-w-0 relative overflow-hidden">
+      <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 relative overflow-hidden">
         {/* Contextual Artifact Workspace (Only active when viewing an artifact) */}
         {currentArtifact ? (
           <ArtifactWorkspace
@@ -610,9 +634,11 @@ export const ChatPage: React.FC = () => {
             {/* Subtle PWA In-App Install Banner (Dismissible, only active if installable) */}
             <PWAInstallBanner />
 
-            {/* Main Conversation Feed */}
+            {/* Main Conversation Feed (only this area scrolls; bottom padding tracks composer height) */}
             <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
               <MessageList
+                conversationId={currentConversationId}
+                composerHeight={composerHeight}
                 messages={messages}
                 isSending={isSending}
                 regeneratingMessageId={regeneratingMessageId}
@@ -631,44 +657,49 @@ export const ChatPage: React.FC = () => {
               />
             </main>
 
-            {/* ONE Primary Compact Floating Composer */}
-            <footer className="sticky bottom-0 z-20 shrink-0 bg-gradient-to-t from-[#07090e] via-[#07090e]/95 to-transparent pt-1">
-              {/* Voice Engine Fallback & Notification Pill */}
-              {voiceNotification && (
-                <div className="max-w-3xl mx-auto px-4 sm:px-6 mb-2">
-                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between gap-3 text-xs sm:text-sm text-amber-200 backdrop-blur-md shadow-lg animate-fadeIn">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-                      <span className="truncate">{voiceNotification.message}</span>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {voiceNotification.actionLabel && voiceNotification.onAction && (
+            {/* Fixed Bottom Composer Dock (grows upward cleanly without scrolling the page) */}
+            <footer
+              ref={composerFooterRef}
+              className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none"
+            >
+              <div className="pointer-events-auto">
+                {/* Voice Engine Fallback & Notification Banner */}
+                {voiceNotification && (
+                  <div className="max-w-3xl mx-auto px-4 sm:px-6 mb-2">
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between gap-3 text-xs sm:text-sm text-amber-200 backdrop-blur-md shadow-lg animate-fadeIn">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span className="truncate">{voiceNotification.message}</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {voiceNotification.actionLabel && voiceNotification.onAction && (
+                          <button
+                            onClick={voiceNotification.onAction}
+                            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 transition-colors flex items-center gap-1 cursor-pointer"
+                          >
+                            {voiceNotification.actionLabel}
+                            <ArrowRight className="w-3 h-3" />
+                          </button>
+                        )}
                         <button
-                          onClick={voiceNotification.onAction}
-                          className="px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 transition-colors flex items-center gap-1 cursor-pointer"
+                          onClick={() => setVoiceNotification(null)}
+                          className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                          title="Dismiss"
                         >
-                          {voiceNotification.actionLabel}
-                          <ArrowRight className="w-3 h-3" />
+                          <X className="w-3.5 h-3.5" />
                         </button>
-                      )}
-                      <button
-                        onClick={() => setVoiceNotification(null)}
-                        className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer"
-                        title="Dismiss"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              <Composer
-                onSendMessage={(text, attachments) => sendMessage(text, undefined, attachments)}
-                onOpenLive={liveVoice.startLiveMode}
-                liveStatus={liveVoice.isOpen ? liveVoice.status : 'idle'}
-                disabled={isSending}
-              />
+                <Composer
+                  onSendMessage={(text, attachments) => sendMessage(text, undefined, attachments)}
+                  onOpenLive={liveVoice.startLiveMode}
+                  liveStatus={liveVoice.isOpen ? liveVoice.status : 'idle'}
+                  disabled={isSending}
+                />
+              </div>
             </footer>
           </>
         ) : activeTab === 'projects' ? (

@@ -54,55 +54,59 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const displayTitle = activeConversation?.title || 'JEXA';
 
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between min-h-[56px] px-3 sm:px-4 bg-[#080b12]/95 backdrop-blur-md border-b border-white/[0.06] shrink-0 pt-safe pt-[max(0.25rem,env(safe-area-inset-top))]">
-      {/* Left: Hamburger Menu Button */}
-      <button
-        onClick={onToggleSidebar}
-        aria-label="Open sidebar"
-        className="min-h-[44px] min-w-[44px] flex items-center justify-center text-slate-400 hover:text-white rounded-lg active:bg-white/[0.04] transition-colors"
-      >
-        <Menu className="w-5 h-5" />
-      </button>
-
-      {/* Center: Clean App / Conversation Title */}
-      <div className="flex-1 text-center min-w-0 px-2">
-        {isEditingTitle ? (
-          <form onSubmit={handleTitleSubmit} className="inline-flex items-center gap-1.5 max-w-xs">
-            <input
-              type="text"
-              value={titleValue}
-              onChange={(e) => setTitleValue(e.target.value)}
-              onBlur={() => setIsEditingTitle(false)}
-              autoFocus
-              className="bg-slate-900 border border-slate-700 px-2.5 py-1 rounded-lg text-xs text-white focus:outline-none w-full text-center"
-            />
-            <button type="submit" className="p-1 text-emerald-400">
-              <Check className="w-3.5 h-3.5" />
-            </button>
-          </form>
-        ) : (
-          <button
-            onClick={() => {
-              setTitleValue(displayTitle);
-              setIsEditingTitle(true);
-            }}
-            className="text-sm font-semibold text-slate-200 hover:text-white truncate max-w-[200px] sm:max-w-md inline-block transition-colors"
-            title="Click to rename"
-          >
-            {displayTitle}
-          </button>
-        )}
-      </div>
-
-      {/* Right: Single More Button [⋮] */}
-      <div className="relative" ref={menuRef}>
+    <header className="relative z-30 shrink-0 w-full bg-[#080b12]/95 backdrop-blur-md border-b border-white/[0.06] pt-[env(safe-area-inset-top,0px)] select-none">
+      <div className="flex items-center justify-between h-14 px-2 sm:px-4">
+        {/* Left: Hamburger Menu Button */}
         <button
-          onClick={() => setMenuOpen(!menuOpen)}
-          aria-label="Conversation options"
-          className="min-h-[44px] min-w-[44px] flex items-center justify-center text-slate-400 hover:text-white rounded-lg active:bg-white/[0.04] transition-colors"
+          type="button"
+          onClick={onToggleSidebar}
+          aria-label="Open sidebar"
+          className="min-h-[44px] min-w-[44px] flex items-center justify-center text-slate-300 hover:text-white rounded-lg active:bg-white/[0.06] transition-colors cursor-pointer shrink-0"
         >
-          <MoreVertical className="w-5 h-5" />
+          <Menu className="w-5 h-5" />
         </button>
+
+        {/* Center: Clean App / Conversation Title */}
+        <div className="flex-1 text-center min-w-0 px-2">
+          {isEditingTitle ? (
+            <form onSubmit={handleTitleSubmit} className="inline-flex items-center gap-1.5 max-w-xs w-full justify-center">
+              <input
+                type="text"
+                value={titleValue}
+                onChange={(e) => setTitleValue(e.target.value)}
+                onBlur={() => setIsEditingTitle(false)}
+                autoFocus
+                className="bg-slate-900 border border-slate-700 px-2.5 py-1.5 rounded-lg text-xs text-white focus:outline-none w-full text-center"
+              />
+              <button type="submit" className="min-h-[36px] min-w-[36px] flex items-center justify-center text-emerald-400 cursor-pointer">
+                <Check className="w-4 h-4" />
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setTitleValue(displayTitle);
+                setIsEditingTitle(true);
+              }}
+              className="text-sm font-semibold text-slate-200 hover:text-white truncate max-w-[210px] sm:max-w-md inline-block transition-colors cursor-pointer py-2"
+              title="Click to rename"
+            >
+              {displayTitle}
+            </button>
+          )}
+        </div>
+
+        {/* Right: Single More Button [⋮] */}
+        <div className="relative shrink-0" ref={menuRef}>
+          <button
+            type="button"
+            onClick={() => setMenuOpen(!menuOpen)}
+            aria-label="Conversation options"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center text-slate-300 hover:text-white rounded-lg active:bg-white/[0.06] transition-colors cursor-pointer"
+          >
+            <MoreVertical className="w-5 h-5" />
+          </button>
 
         {/* Dropdown Menu */}
         {menuOpen && (
@@ -175,6 +179,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             </button>
           </div>
         )}
+        </div>
       </div>
     </header>
   );
