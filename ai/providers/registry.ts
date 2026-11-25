@@ -2,6 +2,8 @@ import { ITextAIProvider } from './text-provider.interface';
 import { IVoiceAIProvider } from './voice-provider.interface';
 import { GeminiTextAIProvider } from './gemini.provider';
 import { GeminiVoiceAIProvider } from './gemini-voice.provider';
+import { LiteLLMTextAIProvider } from './litellm.provider';
+import { resolveDirectGeminiModel, resolveLiteLLMModelAlias } from './model-aliases';
 import {
   ProviderStatus,
   TextProviderType,
@@ -32,23 +34,43 @@ export class AIProviderRegistry {
 
   private constructor() {
     this.config = loadAIProvidersConfig();
+    this.defaultTextType = this.config.text.provider;
     this.activeTextModel = this.config.text.model;
     this.activeBackupModel = this.config.text.backupModel;
     this.activeVoiceModel = this.config.voice.model;
 
-    const geminiText = new GeminiTextAIProvider(this.activeTextModel);
-    const geminiBackup = new GeminiTextAIProvider(this.activeBackupModel);
-    const geminiBackground = new GeminiTextAIProvider(this.config.text.backgroundModel);
+    const geminiText = new GeminiTextAIProvider(
+      resolveDirectGeminiModel(this.activeTextModel, DEFAULT_CHAT_MODEL)
+    );
+    const geminiBackup = new GeminiTextAIProvider(
+      resolveDirectGeminiModel(this.activeBackupModel, DEFAULT_BACKUP_MODEL)
+    );
+    const geminiBackground = new GeminiTextAIProvider(
+      resolveDirectGeminiModel(this.config.text.backgroundModel)
+    );
+
+    const litellmText = new LiteLLMTextAIProvider(this.activeTextModel);
+    const litellmBackup = new LiteLLMTextAIProvider(this.activeBackupModel);
+    const litellmBackground = new LiteLLMTextAIProvider(this.config.text.backgroundModel);
+
     const geminiVoice = new GeminiVoiceAIProvider(this.activeVoiceModel);
 
     this.textProviders.set('gemini', geminiText);
+    this.textProviders.set('litellm', litellmText);
     this.voiceProviders.set('gemini', geminiVoice);
 
-    this.backupTextProvider = geminiBackup.isConfigured ? geminiBackup : geminiText;
-    this.backgroundTextProvider = geminiBackground.isConfigured ? geminiBackground : geminiText;
+    if (this.defaultTextType === 'litellm' && litellmText.isConfigured) {
+      this.backupTextProvider = litellmBackup.isConfigured ? litellmBackup : litellmText;
+      this.backgroundTextProvider = litellmBackground.isConfigured ? litellmBackground : litellmText;
+    } else {
+      this.defaultTextType = 'gemini';
+      this.backupTextProvider = geminiBackup.isConfigured ? geminiBackup : geminiText;
+      this.backgroundTextProvider = geminiBackground.isConfigured ? geminiBackground : geminiText;
+    }
 
+    const activePrimary = this.textProviders.get(this.defaultTextType) || geminiText;
     console.log(
-      `[AIProviderRegistry] Loaded Gemini providers - Text: ${geminiText.modelName} (${geminiText.isConfigured ? 'ready' : 'missing key'}), Backup: ${this.backupTextProvider.modelName}, Background: ${this.backgroundTextProvider.modelName} | Voice: ${geminiVoice.modelName} (${geminiVoice.isConfigured ? 'ready' : 'missing key'})`
+      `[AIProviderRegistry] Active text route: ${this.defaultTextType} (${activePrimary.modelName}, configured=${activePrimary.isConfigured}) | Backup: ${this.backupTextProvider.modelName} | Background: ${this.backgroundTextProvider.modelName} | Voice: gemini (${geminiVoice.modelName}, configured=${geminiVoice.isConfigured})`
     );
   }
 
@@ -59,8 +81,18 @@ export class AIProviderRegistry {
     return AIProviderRegistry.instance;
   }
 
+  public static reload(): AIProviderRegistry {
+    AIProviderRegistry.instance = new AIProviderRegistry();
+    return AIProviderRegistry.instance;
+  }
+
   public getConfig(): AIProvidersConfig {
     return this.config;
+  }
+
+  public isGatewayActive(): boolean {
+    const litellm = this.textProviders.get('litellm');
+    return this.defaultTextType === 'litellm' && Boolean(litellm?.isConfigured);
   }
 
   public getActiveTextModel(): string {
@@ -76,15 +108,22 @@ export class AIProviderRegistry {
   }
 
   public setSelectedModels(models: { textModel?: string; backupModel?: string; voiceModel?: string }): void {
+    const useGateway = this.isGatewayActive();
+
     if (models.textModel !== undefined) {
       const clean = sanitizeTextModel(models.textModel, DEFAULT_CHAT_MODEL, 'selectedTextModel');
       this.activeTextModel = clean;
-      this.textProviders.set('gemini', new GeminiTextAIProvider(clean));
+      this.textProviders.set('gemini', new GeminiTextAIProvider(resolveDirectGeminiModel(clean, DEFAULT_CHAT_MODEL)));
+      if (useGateway || this.textProviders.get('litellm')?.isConfigured) {
+        this.textProviders.set('litellm', new LiteLLMTextAIProvider(clean));
+      }
     }
     if (models.backupModel !== undefined) {
       const cleanBackup = sanitizeTextModel(models.backupModel, DEFAULT_BACKUP_MODEL, 'selectedBackupModel');
       this.activeBackupModel = cleanBackup;
-      this.backupTextProvider = new GeminiTextAIProvider(cleanBackup);
+      this.backupTextProvider = useGateway
+        ? new LiteLLMTextAIProvider(cleanBackup)
+        : new GeminiTextAIProvider(resolveDirectGeminiModel(cleanBackup, DEFAULT_BACKUP_MODEL));
     }
     if (models.voiceModel !== undefined) {
       const cleanVoice = sanitizeVoiceModel(models.voiceModel, DEFAULT_VOICE_MODEL, 'selectedVoiceModel');
@@ -93,39 +132,66 @@ export class AIProviderRegistry {
     }
   }
 
-  public getTextProvider(_type?: TextProviderType, customModel?: string): ITextAIProvider {
+  public getTextProvider(type?: TextProviderType, customModel?: string): ITextAIProvider {
+    const useGateway = this.isGatewayActive();
+    const effectiveType: TextProviderType =
+      useGateway && (!type || type === 'gemini' || type === 'litellm' || type === 'groq')
+        ? 'litellm'
+        : type === 'litellm' && this.textProviders.get('litellm')?.isConfigured
+        ? 'litellm'
+        : 'gemini';
+
     if (customModel && customModel.trim()) {
       const trimmed = customModel.trim();
       if (isTtsModel(trimmed)) {
         throw new Error(`TTS model '${trimmed}' cannot be used for chat.`);
       }
-      const existing = this.textProviders.get('gemini');
-      if (existing && existing.modelName === trimmed) {
+      const existing = this.textProviders.get(effectiveType);
+      if (effectiveType === 'litellm') {
+        const alias = resolveLiteLLMModelAlias(trimmed);
+        if (existing && existing.modelName === alias) {
+          return existing;
+        }
+        return new LiteLLMTextAIProvider(alias);
+      }
+
+      const directModel = resolveDirectGeminiModel(trimmed, DEFAULT_CHAT_MODEL);
+      if (existing && existing.modelName === directModel) {
         return existing;
       }
-      return new GeminiTextAIProvider(trimmed);
+      return new GeminiTextAIProvider(directModel);
     }
-    const provider = this.textProviders.get('gemini');
+
+    const provider = this.textProviders.get(effectiveType) || this.textProviders.get('gemini');
     if (provider) return provider;
-    throw new Error('[AIProviderRegistry] Gemini text provider unavailable.');
+    throw new Error('[AIProviderRegistry] Text provider unavailable.');
   }
 
   public getBackupTextProvider(customBackupModel?: string): ITextAIProvider {
+    const useGateway = this.isGatewayActive();
     if (customBackupModel && customBackupModel.trim()) {
       const trimmed = customBackupModel.trim();
       if (isTtsModel(trimmed)) {
         return this.backupTextProvider;
       }
-      if (this.backupTextProvider.modelName === trimmed) {
+      if (useGateway) {
+        const alias = resolveLiteLLMModelAlias(trimmed);
+        if (this.backupTextProvider.modelName === alias) {
+          return this.backupTextProvider;
+        }
+        return new LiteLLMTextAIProvider(alias);
+      }
+      const directModel = resolveDirectGeminiModel(trimmed, DEFAULT_BACKUP_MODEL);
+      if (this.backupTextProvider.modelName === directModel) {
         return this.backupTextProvider;
       }
-      return new GeminiTextAIProvider(trimmed);
+      return new GeminiTextAIProvider(directModel);
     }
-    return this.backupTextProvider || this.getTextProvider('gemini');
+    return this.backupTextProvider || this.getTextProvider(this.defaultTextType);
   }
 
   public getBackgroundTextProvider(): ITextAIProvider {
-    return this.backgroundTextProvider || this.getTextProvider('gemini');
+    return this.backgroundTextProvider || this.getTextProvider(this.defaultTextType);
   }
 
   public getVoiceProvider(_type?: VoiceProviderType, customModel?: string): IVoiceAIProvider {
@@ -154,6 +220,9 @@ export class AIProviderRegistry {
   }
 
   public setDefaultTextType(type: TextProviderType): void {
+    if (type === 'litellm' && !this.textProviders.get('litellm')?.isConfigured) {
+      return;
+    }
     this.defaultTextType = type;
   }
 
@@ -169,7 +238,7 @@ export class AIProviderRegistry {
     return this.defaultVoiceType;
   }
 
-  public async testTextProvider(_type?: TextProviderType, customModel?: string): Promise<{
+  public async testTextProvider(type?: TextProviderType, customModel?: string): Promise<{
     success: boolean;
     latencyMs: number;
     model: string;
@@ -188,7 +257,7 @@ export class AIProviderRegistry {
       };
     }
 
-    const provider = this.getTextProvider('gemini', customModel);
+    const provider = this.getTextProvider(type || this.defaultTextType, customModel);
     if ('testConnection' in provider && typeof (provider as any).testConnection === 'function') {
       const res = await (provider as any).testConnection(customModel);
       const status: ProviderHealthStatus = res.success
@@ -286,8 +355,12 @@ export class AIProviderRegistry {
     selectedBackupModel?: string,
     selectedVoiceModel?: string
   ): ProviderStatus {
+    const litellmText = this.textProviders.get('litellm');
     const geminiText = this.textProviders.get('gemini');
     const geminiVoice = this.voiceProviders.get('gemini') as any;
+
+    const gatewayActive = this.isGatewayActive();
+    const activeTextProvider = gatewayActive ? litellmText : geminiText;
 
     const currentTextModel = selectedTextModel
       ? sanitizeTextModel(selectedTextModel, this.activeTextModel, 'statusTextModel')
@@ -298,6 +371,12 @@ export class AIProviderRegistry {
     const currentVoiceModel = selectedVoiceModel
       ? sanitizeVoiceModel(selectedVoiceModel, this.activeVoiceModel, 'statusVoiceModel')
       : this.activeVoiceModel;
+
+    const textStatus: ProviderHealthStatus = !activeTextProvider?.isConfigured
+      ? 'NOT_CONFIGURED'
+      : (activeTextProvider as any)?.lastError
+      ? 'UNAVAILABLE'
+      : 'CONNECTED';
 
     const geminiTextStatus: ProviderHealthStatus = !geminiText?.isConfigured
       ? 'NOT_CONFIGURED'
@@ -312,14 +391,29 @@ export class AIProviderRegistry {
       : 'UNAVAILABLE';
 
     const availableTextProviders: ProviderDetail[] = [
+      ...(litellmText?.isConfigured
+        ? [
+            {
+              type: 'litellm',
+              name: 'LiteLLM AI Gateway',
+              isConfigured: true,
+              model: resolveLiteLLMModelAlias(currentTextModel),
+              description: 'Private LiteLLM gateway routing Gemini & Groq with fallback',
+              status: textStatus,
+              error: (litellmText as any)?.lastError,
+            },
+          ]
+        : []),
       {
         type: 'gemini',
         name: 'Google Gemini',
         isConfigured: Boolean(geminiText?.isConfigured),
         model: currentTextModel,
-        description: 'Google Gemini chat, reasoning & native tool execution',
-        status: geminiTextStatus,
-        error: (geminiText as any)?.lastError,
+        description: gatewayActive
+          ? 'Google Gemini (routed via LiteLLM Gateway)'
+          : 'Google Gemini chat, reasoning & native tool execution',
+        status: gatewayActive ? textStatus : geminiTextStatus,
+        error: gatewayActive ? (litellmText as any)?.lastError : (geminiText as any)?.lastError,
       },
     ];
 
@@ -339,14 +433,14 @@ export class AIProviderRegistry {
 
     return {
       textProvider: {
-        type: 'gemini',
-        isConfigured: Boolean(geminiText?.isConfigured),
-        hasApiKey: Boolean(geminiText?.isConfigured),
+        type: gatewayActive ? 'litellm' : 'gemini',
+        isConfigured: Boolean(activeTextProvider?.isConfigured),
+        hasApiKey: Boolean(activeTextProvider?.isConfigured),
         model: currentTextModel,
         backupModel: currentBackupModel,
-        status: geminiTextStatus,
-        description: 'Google Gemini active',
-        lastError: (geminiText as any)?.lastError,
+        status: textStatus,
+        description: gatewayActive ? 'Private LiteLLM AI Gateway active' : 'Google Gemini active',
+        lastError: (activeTextProvider as any)?.lastError,
       },
       voiceProvider: {
         type: 'gemini',
@@ -366,7 +460,7 @@ export class AIProviderRegistry {
         isConfigured: hasSupabase,
         status: hasSupabase ? 'connected' : 'unconfigured_fallback',
       },
-      isProductionReady: Boolean(geminiText?.isConfigured) && Boolean(geminiVoice?.isConfigured) && hasSupabase,
+      isProductionReady: Boolean(activeTextProvider?.isConfigured) && Boolean(geminiVoice?.isConfigured),
     };
   }
 }

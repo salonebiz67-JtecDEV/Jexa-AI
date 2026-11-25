@@ -140,14 +140,36 @@ export class ApiError extends Error {
   }
 }
 
+type AccessTokenProvider = () => Promise<string | null> | string | null;
+let accessTokenProvider: AccessTokenProvider | null = null;
+
+export function setAccessTokenProvider(provider: AccessTokenProvider | null): void {
+  accessTokenProvider = provider;
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  if (!accessTokenProvider) return {};
+  try {
+    const token = await accessTokenProvider();
+    if (typeof token === 'string' && token.trim()) {
+      return { Authorization: `Bearer ${token.trim()}` };
+    }
+  } catch {
+    // Ignore token provider lookup failures
+  }
+  return {};
+}
+
 async function fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 25000): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const authHeaders = await getAuthHeaders();
 
   try {
     const res = await fetch(url, {
       ...options,
       headers: {
+        ...authHeaders,
         ...(options?.headers || {}),
       },
       signal: controller.signal,
@@ -241,7 +263,7 @@ export const ApiClient = {
       message: typeof payload?.message === 'string' ? payload.message : '',
       conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
       personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
-      textProvider: payload?.textProvider || 'gemini',
+      textProvider: payload?.textProvider,
       textModel: typeof payload?.textModel === 'string' ? payload.textModel : undefined,
       backupModel: typeof payload?.backupModel === 'string' ? payload.backupModel : undefined,
       history: Array.isArray(payload?.history) ? payload.history.slice(-8) : undefined,
@@ -269,7 +291,7 @@ export const ApiClient = {
       message: typeof payload?.message === 'string' ? payload.message : '',
       conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
       personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
-      textProvider: payload?.textProvider || 'gemini',
+      textProvider: payload?.textProvider,
       textModel: typeof payload?.textModel === 'string' ? payload.textModel : undefined,
       backupModel: typeof payload?.backupModel === 'string' ? payload.backupModel : undefined,
       history: Array.isArray(payload?.history) ? payload.history.slice(-8) : undefined,

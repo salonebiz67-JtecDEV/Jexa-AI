@@ -119,6 +119,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     getBehaviorInstructions()
   );
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
 
   // Real Notification Support (Native LocalNotifications + Web Notification API)
   const [notificationStatus, setNotificationStatus] = useState<NotificationPermissionState>('default');
@@ -303,6 +304,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   const handleSave = async () => {
     setSaveError(null);
+    setSaveNotice(null);
     if (hasValidationErrors) {
       setSaveError(chatModelValidationError || backupModelValidationError || voiceModelValidationError);
       return;
@@ -315,9 +317,12 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     setAboutMe(aboutMe);
     setBehaviorInstructions(behaviorInstructions);
 
+    const activeServerProvider =
+      providerStatus?.textProvider?.type === 'litellm' ? 'litellm' : 'gemini';
+
     try {
       await ApiClient.selectProviders({
-        textProvider: 'gemini',
+        textProvider: activeServerProvider,
         voiceProvider: 'gemini',
         textModel: effectiveTextModel,
         backupModel: effectiveBackupModel,
@@ -325,7 +330,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
         theme,
       });
       await updateSettings({
-        selectedTextProvider: 'gemini',
+        selectedTextProvider: activeServerProvider,
         selectedVoiceProvider: 'gemini',
         selectedTextModel: effectiveTextModel,
         selectedBackupModel: effectiveBackupModel,
@@ -344,20 +349,33 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
         onClose();
       }, 700);
     } catch (err: any) {
+      const status = err?.status;
+      if (status === 401 || status === 403) {
+        setSavedSuccess(true);
+        setSaveNotice('Saved on this device. Server-wide defaults require owner authentication.');
+        setTimeout(() => {
+          setSavedSuccess(false);
+          setSaveNotice(null);
+          onClose();
+        }, 1200);
+        return;
+      }
       console.error('[SettingsDialog] Failed to persist settings:', err);
       setSaveError(err?.message || "Couldn't save. Please try again.");
     }
   };
 
-  const geminiTextDetail = providerStatus?.availableTextProviders?.find((p) => p.type === 'gemini');
+  const activeTextDetail =
+    providerStatus?.availableTextProviders?.find((p) => p.type === 'litellm') ||
+    providerStatus?.availableTextProviders?.find((p) => p.type === 'gemini');
   const geminiVoiceDetail = providerStatus?.availableVoiceProviders?.find((p) => p.type === 'gemini');
 
-  const isGeminiTextConfigured = geminiTextDetail?.isConfigured ?? providerStatus?.textProvider?.isConfigured ?? true;
+  const isGeminiTextConfigured = activeTextDetail?.isConfigured ?? providerStatus?.textProvider?.isConfigured ?? true;
   const isGeminiVoiceConfigured = geminiVoiceDetail?.isConfigured ?? providerStatus?.voiceProvider?.isConfigured ?? true;
 
   const geminiTextStatus: ProviderHealthStatus = geminiTextTestResult
     ? (geminiTextTestResult.status || (geminiTextTestResult.success ? 'CONNECTED' : (geminiTextTestResult.code as ProviderHealthStatus) || 'UNAVAILABLE'))
-    : (geminiTextDetail?.status || (isGeminiTextConfigured ? 'CONNECTED' : 'NOT_CONFIGURED'));
+    : (activeTextDetail?.status || (isGeminiTextConfigured ? 'CONNECTED' : 'NOT_CONFIGURED'));
 
   const geminiVoiceStatus: ProviderHealthStatus = geminiVoiceTestResult
     ? (geminiVoiceTestResult.status || (geminiVoiceTestResult.success ? 'CONNECTED' : (geminiVoiceTestResult.code as ProviderHealthStatus) || 'UNAVAILABLE'))
@@ -845,7 +863,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                     <div className="bg-white/[0.03] p-2 rounded-lg border border-white/[0.04]">
                       <span className="text-slate-500 block mb-0.5">Active Provider</span>
                       <p className="text-white font-semibold">
-                        Text & Voice: <span className="text-emerald-400">GEMINI</span>
+                        Text: <span className="text-emerald-400">{providerStatus?.textProvider?.type === 'litellm' ? 'LITELLM GATEWAY' : 'GEMINI'}</span> · Voice: <span className="text-emerald-400">GEMINI</span>
                       </p>
                       <p className="text-slate-400 truncate">Backup: {effectiveBackupModel}</p>
                     </div>
@@ -1105,11 +1123,15 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           {/* Footer Actions */}
           <div className="flex items-center justify-between gap-2 px-4 py-3 border-t border-white/[0.06] bg-[#0b0f19]">
             <div className="min-w-0">
-              {saveError && (
+              {saveError ? (
                 <span className="text-xs text-rose-400 font-medium truncate block">
                   {saveError}
                 </span>
-              )}
+              ) : saveNotice ? (
+                <span className="text-xs text-amber-300 font-medium truncate block">
+                  {saveNotice}
+                </span>
+              ) : null}
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button

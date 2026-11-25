@@ -18,6 +18,7 @@ export interface HealthCheckResponse {
   uptime: number;
   version: string;
   environment: string;
+  gatewayActive?: boolean;
   services: {
     textAI: {
       provider: string;

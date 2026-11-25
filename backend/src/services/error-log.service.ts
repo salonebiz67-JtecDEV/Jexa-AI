@@ -24,7 +24,8 @@ export class ErrorLogService {
     // 1. Scrub bearer authorization tokens
     sanitized = sanitized.replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED_TOKEN]');
 
-    // 2. Scrub OpenAI / Groq / general API keys starting with sk-
+    // 2. Scrub OpenAI / Groq / general API keys starting with sk- or gsk_
+    sanitized = sanitized.replace(/gsk_[A-Za-z0-9_\-]{16,}/gi, 'gsk_[REDACTED_GROQ_KEY]');
     sanitized = sanitized.replace(/sk-[A-Za-z0-9_\-]{16,}/gi, 'sk-[REDACTED_API_KEY]');
 
     // 3. Scrub Google Gemini API keys (AIza...)
@@ -40,7 +41,7 @@ export class ErrorLogService {
     sanitized = sanitized.replace(/(postgres(?:ql)?:\/\/[^:\s]+:)([^@\s]+)(@[^/\s]+)/gi, '$1[REDACTED_PASSWORD]$3');
 
     // 7. Scrub explicit password/secret/api_key key-value patterns
-    sanitized = sanitized.replace(/(?:password|secret|apiKey|api_key|token|access_key)\s*[:=]\s*["']?([^"',\s]+)["']?/gi, (match, val) => {
+    sanitized = sanitized.replace(/(?:password|secret|apiKey|api_key|token|access_key|master_key)\s*[:=]\s*["']?([^"',\s]+)["']?/gi, (match, val) => {
       return match.replace(val, '[REDACTED]');
     });
 
@@ -48,7 +49,18 @@ export class ErrorLogService {
     const sensitiveEnvKeys = [
       'GEMINI_API_KEY',
       'AI_API_KEY',
+      'VOICE_AI_API_KEY',
       'TAVILY_API_KEY',
+      'LITELLM_BASE_URL',
+      'LITELLM_MASTER_KEY',
+      'LITELLM_API_KEY',
+      'GROQ_API_KEY',
+      'UPSTASH_REDIS_REST_URL',
+      'UPSTASH_REDIS_REST_TOKEN',
+      'SUPABASE_SERVICE_ROLE_KEY',
+      'SUPABASE_ANON_KEY',
+      'OWNER_EMAIL',
+      'OWNER_USER_ID',
     ];
     for (const envKey of sensitiveEnvKeys) {
       const val = process.env[envKey]?.trim();

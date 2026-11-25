@@ -1,0 +1,25 @@
+# Example Render Private Service blueprint for JEXA's LiteLLM Gateway.
+# Merge into your Render workspace or create a Private Service manually in Render Dashboard.
+services:
+  - type: pserv
+    name: jexa-litellm-gateway
+    runtime: docker
+    dockerfilePath: ./litellm/Dockerfile
+    dockerContext: ./litellm
+    plan: starter
+    envVars:
+      - key: PORT
+        value: "4000"
+      - key: LITELLM_MASTER_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      # Optional Redis cache credentials (kept disabled by default for private chat)
+      - key: REDIS_HOST
+        sync: false
+      - key: REDIS_PORT
+        sync: false
+      - key: REDIS_PASSWORD
+        sync: false

@@ -16,6 +16,7 @@ export class HealthController {
       uptime: Math.floor((Date.now() - startTime) / 1000),
       version: JEXA_IDENTITY.version,
       environment: process.env.NODE_ENV || 'development',
+      gatewayActive: registry.isGatewayActive(),
       services: {
         textAI: {
           provider: status.textProvider.type,

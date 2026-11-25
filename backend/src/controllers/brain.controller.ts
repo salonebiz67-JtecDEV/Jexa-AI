@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { JEXA_IDENTITY } from '../../../ai/brain/identity';
 import { BrainProfile } from '../../../shared/types/brain';
-import { isTtsModel } from '../../../shared/types/provider';
+import { isTtsModel, scrubSecretsAndUrls } from '../../../shared/types/provider';
 
 let inMemoryBrainProfile: BrainProfile | null = null;
 
@@ -16,7 +16,7 @@ export function getInMemoryBrainProfile(): BrainProfile {
       creator: JEXA_IDENTITY.creator,
       version: JEXA_IDENTITY.version,
       activePersonality: 'empathetic_companion',
-      selectedTextProvider: 'gemini',
+      selectedTextProvider: registry.getDefaultTextType(),
       selectedTextModel: registry.getActiveTextModel(),
       selectedBackupModel: registry.getActiveBackupModel(),
       selectedVoiceProvider: 'gemini',
@@ -66,9 +66,11 @@ export class BrainController {
   public static async getProfile(_req: Request, res: Response): Promise<void> {
     try {
       const profile = getInMemoryBrainProfile();
-      const providerStatus = AIProviderRegistry.getInstance().getStatus(
+      const registry = AIProviderRegistry.getInstance();
+      const activeTextType = registry.getDefaultTextType();
+      const providerStatus = registry.getStatus(
         false,
-        'gemini',
+        activeTextType,
         'gemini',
         profile.selectedTextModel,
         profile.selectedBackupModel,
@@ -85,7 +87,10 @@ export class BrainController {
       });
     } catch (error: any) {
       console.error('[BrainController] getProfile error:', error);
-      res.status(500).json({ success: false, error: error.message || 'Failed to fetch brain profile.' });
+      res.status(500).json({
+        success: false,
+        error: scrubSecretsAndUrls(error?.message || 'Failed to fetch brain profile.'),
+      });
     }
   }
 
@@ -117,13 +122,14 @@ export class BrainController {
         return;
       }
 
-      updates.selectedTextProvider = 'gemini';
+      const registry = AIProviderRegistry.getInstance();
+      const activeTextType = registry.getDefaultTextType();
+      updates.selectedTextProvider = activeTextType;
       updates.selectedVoiceProvider = 'gemini';
 
       const updated = updateInMemoryBrainProfile(updates);
 
-      const registry = AIProviderRegistry.getInstance();
-      registry.setDefaultTextType('gemini');
+      registry.setDefaultTextType(activeTextType);
       registry.setDefaultVoiceType('gemini');
       registry.setSelectedModels({
         textModel: updated.selectedTextModel,
@@ -138,7 +144,10 @@ export class BrainController {
       });
     } catch (error: any) {
       console.error('[BrainController] updateProfile error:', error);
-      res.status(500).json({ success: false, error: error.message || "Couldn't save settings. Please try again." });
+      res.status(500).json({
+        success: false,
+        error: scrubSecretsAndUrls(error?.message || "Couldn't save settings. Please try again."),
+      });
     }
   }
 }

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
-import { isTtsModel } from '../../../shared/types/provider';
+import { isTtsModel, scrubSecretsAndUrls } from '../../../shared/types/provider';
 import { getInMemoryBrainProfile, updateInMemoryBrainProfile } from './brain.controller';
 
 export class ProviderController {
@@ -8,9 +8,10 @@ export class ProviderController {
     try {
       const profile = getInMemoryBrainProfile();
       const registry = AIProviderRegistry.getInstance();
+      const defaultTextType = registry.getDefaultTextType();
       const status = registry.getStatus(
         false,
-        'gemini',
+        defaultTextType,
         'gemini',
         profile.selectedTextModel,
         profile.selectedBackupModel,
@@ -20,6 +21,7 @@ export class ProviderController {
       res.status(200).json({
         success: true,
         data: {
+          gatewayActive: registry.isGatewayActive(),
           text: {
             provider: status.textProvider.type,
             model: status.textProvider.model,
@@ -43,7 +45,10 @@ export class ProviderController {
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
+      res.status(500).json({
+        success: false,
+        error: scrubSecretsAndUrls(err?.message || 'Failed to read provider status.'),
+      });
     }
   }
 
@@ -88,7 +93,8 @@ export class ProviderController {
       }
 
       const registry = AIProviderRegistry.getInstance();
-      registry.setDefaultTextType('gemini');
+      const activeTextType = registry.getDefaultTextType();
+      registry.setDefaultTextType(activeTextType);
       registry.setDefaultVoiceType('gemini');
       registry.setSelectedModels({
         ...(textModel ? { textModel } : {}),
@@ -97,7 +103,7 @@ export class ProviderController {
       });
 
       const updated = updateInMemoryBrainProfile({
-        selectedTextProvider: 'gemini',
+        selectedTextProvider: activeTextType,
         selectedVoiceProvider: 'gemini',
         ...(textModel ? { selectedTextModel: textModel } : {}),
         ...(backupModel ? { selectedBackupModel: backupModel } : {}),
@@ -107,9 +113,9 @@ export class ProviderController {
 
       res.status(200).json({
         success: true,
-        message: 'Active Gemini models and preferences updated successfully.',
+        message: 'Active AI models and preferences updated successfully.',
         data: {
-          textProvider: 'gemini',
+          textProvider: activeTextType,
           voiceProvider: 'gemini',
           textModel: updated.selectedTextModel,
           backupModel: updated.selectedBackupModel,
@@ -119,7 +125,10 @@ export class ProviderController {
       });
     } catch (err: any) {
       console.error('[ProviderController] selectProviders error:', err);
-      res.status(500).json({ success: false, error: err.message || "Couldn't save. Please try again." });
+      res.status(500).json({
+        success: false,
+        error: scrubSecretsAndUrls(err?.message || "Couldn't save. Please try again."),
+      });
     }
   }
 
@@ -140,12 +149,13 @@ export class ProviderController {
       }
 
       const registry = AIProviderRegistry.getInstance();
-      const result = await registry.testTextProvider('gemini', requestedModel);
+      const activeTextType = registry.getDefaultTextType();
+      const result = await registry.testTextProvider(activeTextType, requestedModel);
 
       res.status(200).json({
         success: result.success,
         data: {
-          provider: 'gemini',
+          provider: activeTextType,
           model: result.model,
           latencyMs: result.latencyMs,
           status: result.status,
@@ -158,7 +168,7 @@ export class ProviderController {
     } catch (err: any) {
       res.status(500).json({
         success: false,
-        error: err.message,
+        error: scrubSecretsAndUrls(err?.message || 'Text provider test failed.'),
         timestamp: new Date().toISOString(),
       });
     }
@@ -201,7 +211,7 @@ export class ProviderController {
     } catch (err: any) {
       res.status(500).json({
         success: false,
-        error: err.message,
+        error: scrubSecretsAndUrls(err?.message || 'Voice provider test failed.'),
         timestamp: new Date().toISOString(),
       });
     }

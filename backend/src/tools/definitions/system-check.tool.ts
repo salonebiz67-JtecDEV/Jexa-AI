@@ -18,6 +18,7 @@ export interface SystemCheckData {
     memoryHeapUsedMb: number;
   };
   aiProviders: {
+    gateway: { active: boolean; provider: string };
     geminiText: { configured: boolean; model: string; backupModel: string };
     geminiVoice: { configured: boolean; model: string };
   };
@@ -34,7 +35,7 @@ export interface SystemCheckData {
 export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemCheckData> = {
   name: 'system_check',
   displayName: 'System Health & Infrastructure Self-Check',
-  description: 'Run diagnostics on server health, Gemini AI providers, web search readiness, and environment configuration.',
+  description: 'Run diagnostics on server health, AI gateway/providers, web search readiness, and environment configuration.',
   category: 'system',
   permissionLevel: 'sensitive',
   timeoutMs: 15000,
@@ -77,7 +78,13 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
 
     // 2. Environment Variables Audit (Names ONLY, NEVER values!)
     const auditVars = [
+      'LITELLM_BASE_URL',
+      'LITELLM_API_KEY',
       'GEMINI_API_KEY',
+      'GROQ_API_KEY',
+      'UPSTASH_REDIS_REST_URL',
+      'UPSTASH_REDIS_REST_TOKEN',
+      'SUPABASE_URL',
       'TAVILY_API_KEY',
       'PORT',
       'NODE_ENV',
@@ -95,19 +102,24 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
       }
     }
 
-    // 3. AI Providers (Gemini Only)
+    // 3. AI Providers & Gateway
     const registry = AIProviderRegistry.getInstance();
-    let geminiConfigured = false;
+    const gatewayActive = registry.isGatewayActive();
+    let textConfigured = false;
     try {
-      const gemini = registry.getTextProvider('gemini');
-      geminiConfigured = Boolean(gemini?.isConfigured);
+      const textProvider = registry.getTextProvider();
+      textConfigured = Boolean(textProvider?.isConfigured);
     } catch {
-      geminiConfigured = Boolean(process.env.GEMINI_API_KEY?.trim());
+      textConfigured = Boolean(process.env.GEMINI_API_KEY?.trim());
     }
 
     const aiProviders = {
+      gateway: {
+        active: gatewayActive,
+        provider: registry.getDefaultTextType(),
+      },
       geminiText: {
-        configured: geminiConfigured,
+        configured: textConfigured,
         model: registry.getActiveTextModel(),
         backupModel: registry.getActiveBackupModel(),
       },
@@ -126,9 +138,14 @@ export const systemCheckTool: InternalToolDefinition<SystemCheckArgs, SystemChec
     const recommendations: string[] = [];
     let overallStatus: 'OK' | 'Warning' | 'Problem' = 'OK';
 
-    if (!geminiConfigured) {
+    if (!textConfigured) {
       overallStatus = 'Problem';
-      recommendations.push('GEMINI_API_KEY is not configured. Add GEMINI_API_KEY to enable Gemini chat and voice.');
+      recommendations.push('No active text AI provider is configured. Configure LiteLLM Gateway (LITELLM_BASE_URL + LITELLM_API_KEY) or GEMINI_API_KEY.');
+    }
+
+    if (!gatewayActive) {
+      if (overallStatus === 'OK') overallStatus = 'Warning';
+      recommendations.push('LiteLLM Gateway is not active (direct Gemini fallback mode). Configure LITELLM_BASE_URL and LITELLM_API_KEY for unified gateway routing.');
     }
 
     if (!search.tavilyConfigured) {

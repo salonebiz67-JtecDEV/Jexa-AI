@@ -246,6 +246,7 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [authBlocked, setAuthBlocked] = useState(false);
   const [togglingTool, setTogglingTool] = useState<string | null>(null);
 
   const [testingTool, setTestingTool] = useState<string | null>(null);
@@ -298,7 +299,12 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
       setSummary(usageRes);
       setTools(toolsRes?.tools || []);
       setError(null);
+      setAuthBlocked(false);
     } catch (err: any) {
+      if (err?.status === 401 || err?.status === 403) {
+        setAuthBlocked(true);
+        setAutoRefresh(false);
+      }
       setError(err?.message || 'Failed to load usage and tool status.');
     } finally {
       setLoading(false);
@@ -607,14 +613,31 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-safe pl-safe pr-safe">
         <div className="max-w-5xl mx-auto space-y-4 pb-10">
-          {error && (
+          {authBlocked ? (
+            <div className="p-5 rounded-2xl bg-[#0b101b] border border-amber-500/30 text-center space-y-2.5">
+              <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <h2 className="text-sm font-semibold text-white">Owner Authentication Required</h2>
+              <p className="text-xs text-slate-300 max-w-md mx-auto leading-relaxed">
+                {error || 'Usage telemetry and tool administration endpoints are restricted to authenticated owner accounts.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => fetchData(true)}
+                className="min-h-[40px] px-4 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.1] text-xs font-medium text-white cursor-pointer"
+              >
+                Retry
+              </button>
+            </div>
+          ) : error && (
             <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <span className="break-words">{error}</span>
             </div>
           )}
 
-          {loading && !summary ? (
+          {authBlocked ? null : loading && !summary ? (
             <div className="py-16 text-center text-xs text-slate-400">Loading usage and tool status…</div>
           ) : activeTab === 'usage' ? (
             /* ============================================================ */

@@ -1,0 +1,162 @@
+# =========================================================================
+# JEXA AI - Dedicated LiteLLM AI Gateway Configuration
+# Deploy as a private service behind Render internal networking.
+# Never expose LITELLM_MASTER_KEY or this service publicly to browsers.
+# =========================================================================
+
+model_list:
+  # --- Logical JEXA Chat Aliases (Preferred) ---
+  - model_name: jexa-chat-primary
+    litellm_params:
+      model: gemini/gemini-3.8-flash
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 30
+
+  - model_name: jexa-chat-fast
+    litellm_params:
+      model: gemini/gemini-4-hydrogen
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 30
+
+  - model_name: jexa-chat-backup
+    litellm_params:
+      model: gemini/gemini-3.7-flash
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 30
+
+  - model_name: jexa-chat-background
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 20
+
+  # --- Groq Aliases (Fast Fallback & Dedicated Routing) ---
+  - model_name: jexa-groq-fast
+    litellm_params:
+      model: groq/llama-3.1-8b-instant
+      api_key: os.environ/GROQ_API_KEY
+      timeout: 25
+
+  - model_name: jexa-groq-versatile
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+      timeout: 30
+
+  # --- Explicit Gemini Model Aliases (Settings UI Compatibility) ---
+  - model_name: gemini-4-hydrogen
+    litellm_params:
+      model: gemini/gemini-4-hydrogen
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 30
+
+  - model_name: gemini-3.8-flash
+    litellm_params:
+      model: gemini/gemini-3.8-flash
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 30
+
+  - model_name: gemini-3.7-flash
+    litellm_params:
+      model: gemini/gemini-3.7-flash
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 30
+
+  - model_name: gemini-3.6-flash
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 30
+
+  - model_name: gemini-3.5-flash
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 30
+
+  - model_name: gemini-3.5-flash-lite
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 20
+
+  - model_name: gemini-3.1-flash-lite
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 20
+
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 30
+
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 30
+
+  - model_name: gemini-2.5-flash-lite
+    litellm_params:
+      model: gemini/gemini-2.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 20
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  timeout: 30
+  retry_after: 1
+  allowed_fails: 3
+  cooldown_time: 60
+  enable_pre_call_checks: true
+  # Strict acyclic fallback chains (prevents infinite fallback loops)
+  fallbacks:
+    - jexa-chat-primary:
+        - jexa-chat-backup
+        - jexa-groq-versatile
+    - jexa-chat-fast:
+        - jexa-chat-backup
+        - jexa-groq-fast
+    - jexa-chat-backup:
+        - jexa-groq-versatile
+    - jexa-chat-background:
+        - jexa-groq-fast
+    - jexa-groq-versatile:
+        - jexa-groq-fast
+    - gemini-3.8-flash:
+        - jexa-chat-backup
+        - jexa-groq-versatile
+    - gemini-4-hydrogen:
+        - jexa-chat-backup
+        - jexa-groq-fast
+    - gemini-3.7-flash:
+        - jexa-groq-versatile
+
+litellm_settings:
+  request_timeout: 30
+  num_retries: 2
+  drop_params: true
+  set_verbose: false
+  # Privacy default: NEVER cache private user conversations by default.
+  # JEXA backend also sends explicit Cache-Control: no-store / caching=false per request.
+  cache: false
+  # Optional Redis-backed caching (enable only for non-private/shared cacheable requests):
+  # cache: true
+  # cache_params:
+  #   type: redis
+  #   host: os.environ/REDIS_HOST
+  #   port: os.environ/REDIS_PORT
+  #   password: os.environ/REDIS_PASSWORD
+  #   ttl: 600
+  #   default_in_memory_ttl: 300
+  #   supported_call_types:
+  #     - completion
+  #     - acompletion
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Do not log or store private user prompts in gateway spend tables
+  store_prompts_in_spend_logs: false

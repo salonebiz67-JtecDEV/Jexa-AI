@@ -1,4 +1,4 @@
-export type TextProviderType = 'gemini';
+export type TextProviderType = 'gemini' | 'litellm' | 'groq';
 export type VoiceProviderType = 'gemini';
 
 export interface GeminiModelOption {
@@ -7,6 +7,12 @@ export interface GeminiModelOption {
   badge?: string;
   isDefault?: boolean;
 }
+
+export const DEFAULT_CHAT_ALIAS = 'jexa-chat-primary';
+export const DEFAULT_BACKUP_ALIAS = 'jexa-chat-backup';
+export const DEFAULT_BACKGROUND_ALIAS = 'jexa-chat-background';
+export const GROQ_FAST_ALIAS = 'jexa-groq-fast';
+export const GROQ_VERSATILE_ALIAS = 'jexa-groq-versatile';
 
 export const DEFAULT_CHAT_MODEL = 'gemini-3.8-flash';
 export const DEFAULT_BACKUP_MODEL = 'gemini-3.7-flash';
@@ -174,11 +180,12 @@ export function scrubSecretsAndUrls(text: string): string {
   // 2. Scrub standard API keys and tokens
   s = s.replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]');
   s = s.replace(/sk-[A-Za-z0-9_\-]{14,}/gi, 'sk-[REDACTED]');
+  s = s.replace(/gsk_[A-Za-z0-9]{14,}/gi, 'gsk_[REDACTED]');
   s = s.replace(/AIza[0-9A-Za-z\-_]{30,}/g, 'AIza[REDACTED]');
   s = s.replace(/ghp_[0-9a-zA-Z]{30,}/g, 'ghp_[REDACTED]');
   s = s.replace(/eyJhbGciOi[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g, '[REDACTED_JWT]');
   // 3. Scrub key=, secret=, token=, password=
-  s = s.replace(/(?:key|secret|token|password|apiKey|api_key|access_key)\s*[:=]\s*["']?([^"',\s]+)["']?/gi, (m, val) => {
+  s = s.replace(/(?:key|secret|token|password|apiKey|api_key|access_key|master_key)\s*[:=]\s*["']?([^"',\s]+)["']?/gi, (m, val) => {
     return m.replace(val, '[REDACTED]');
   });
   // 4. Scrub long random strings
@@ -215,8 +222,18 @@ export function formatCleanProviderError(error: any): {
   const rawModel = (error?.model || errObj?.model || (typeof error === 'object' && error?.modelName) || '').toString().trim();
   const fullText = `${rawMsg} ${innerMsg} ${error?.code || ''} ${rawProvider}`.toLowerCase();
 
-  const providerName = 'Gemini';
-  const resolvedProviderKey = 'gemini';
+  const resolvedProviderKey =
+    rawProvider === 'litellm'
+      ? 'litellm'
+      : rawProvider === 'groq'
+      ? 'groq'
+      : 'gemini';
+  const providerName =
+    resolvedProviderKey === 'litellm'
+      ? 'AI Gateway'
+      : resolvedProviderKey === 'groq'
+      ? 'Groq'
+      : 'Gemini';
 
   // Extract retry-after if provided
   let retryAfterSeconds: number | undefined = error?.retryAfterSeconds;

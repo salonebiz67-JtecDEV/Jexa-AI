@@ -359,8 +359,15 @@ export class ChatService {
       DEFAULT_BACKUP_MODEL;
     const activeBackupModel = !isTtsModel(candidateBackup) ? candidateBackup : DEFAULT_BACKUP_MODEL;
 
-    const primaryProviderType: TextProviderType = 'gemini';
-    const primaryProvider = registry.getTextProvider('gemini', activeTextModel);
+    const primaryProviderType: TextProviderType =
+      payload.textProvider === 'litellm' || payload.textProvider === 'gemini' || payload.textProvider === 'groq'
+        ? registry.isGatewayActive()
+          ? 'litellm'
+          : payload.textProvider === 'gemini'
+          ? 'gemini'
+          : registry.getDefaultTextType()
+        : registry.getDefaultTextType();
+    const primaryProvider = registry.getTextProvider(primaryProviderType, activeTextModel);
     const backupProvider = registry.getBackupTextProvider(activeBackupModel);
 
     // 4. Read last 8 messages supplied by the client for conversational context
@@ -421,12 +428,13 @@ export class ChatService {
     let executedToolsInTurn: Array<{ name: string; args: any; result: any }> = [];
     let lastAiError: any = null;
 
-    // PATH 1: Default Gemini routing with tools
+    // PATH 1: Default routing with tools
     if (providerSupportsTools && !isManualSearchToggle && primaryProvider) {
       let activeProvider = primaryProvider;
+      let alreadyStreamedInPath1 = false;
 
       onStatusUpdate?.('Processing information...', {
-        provider: 'gemini',
+        provider: activeProvider.providerType,
         model: activeProvider.modelName,
         fallbackUsed,
       });
@@ -479,7 +487,7 @@ export class ChatService {
         }
 
         onStatusUpdate?.('Writing the answer…', {
-          provider: 'gemini',
+          provider: activeProvider.providerType,
           model: activeProvider.modelName,
           fallbackUsed,
         });
@@ -544,24 +552,24 @@ export class ChatService {
             currentResponse = await activeProvider.generateResponse(genRequest);
           } catch (callErr: any) {
             lastAiError = callErr;
-            console.warn(`[ChatService] Native tool round ${round} error with Gemini (${activeProvider.modelName}):`, callErr.message);
+            console.warn(`[ChatService] Native tool round ${round} error with ${activeProvider.providerType} (${activeProvider.modelName}):`, callErr.message);
             ErrorLogService.log('ai_provider', callErr, {
-              provider: 'gemini',
+              provider: activeProvider.providerType,
               model: activeProvider.modelName,
               round,
               conversationId: convId,
             });
 
-            // Failover to user-selected Gemini backup model
+            // Failover to backup model
             let recovered = false;
 
             if (!shouldStopAiCalls() && backupProvider && backupProvider.modelName !== activeProvider.modelName) {
-              console.log(`[ChatService] Failing over tool round ${round} to Gemini backup model '${backupProvider.modelName}'...`);
+              console.log(`[ChatService] Failing over tool round ${round} to backup model '${backupProvider.modelName}'...`);
               try {
                 activeProvider = backupProvider;
                 fallbackUsed = true;
                 onStatusUpdate?.('Retrying…', {
-                  provider: 'gemini',
+                  provider: activeProvider.providerType,
                   model: activeProvider.modelName,
                   fallbackUsed: true,
                 });
@@ -841,7 +849,7 @@ ${pageData.text || ''}
             }
 
             onStatusUpdate?.('Writing the answer…', {
-              provider: 'gemini',
+              provider: activeProvider.providerType,
               model: activeProvider.modelName,
               fallbackUsed,
             });
@@ -986,7 +994,7 @@ ${pageData.text || ''}
         // If loop exited after web search returned results without final answer, synthesize plain text once
         if (!providerResponse && searchResults.length > 0 && !shouldStopAiCalls()) {
           onStatusUpdate?.('Writing the answer…', {
-            provider: 'gemini',
+            provider: activeProvider.providerType,
             model: activeProvider.modelName,
             fallbackUsed,
           });
@@ -1036,6 +1044,7 @@ ${formattedSources}
           try {
             aiCallCount++;
             if (onChunk && typeof activeProvider.streamResponse === 'function') {
+              alreadyStreamedInPath1 = true;
               providerResponse = await activeProvider.streamResponse(fallbackRequest, (chunk) => {
                 onChunk(chunk);
               });
@@ -1043,12 +1052,13 @@ ${formattedSources}
               providerResponse = await activeProvider.generateResponse(fallbackRequest);
             }
           } catch (synthErr: any) {
+            alreadyStreamedInPath1 = false;
             lastAiError = synthErr;
             console.warn('[ChatService] Plain-text synthesis round failed:', synthErr.message);
           }
         } else if (!providerResponse && !shouldStopAiCalls()) {
           onStatusUpdate?.('Writing the answer…', {
-            provider: 'gemini',
+            provider: activeProvider.providerType,
             model: activeProvider.modelName,
             fallbackUsed,
           });
@@ -1074,7 +1084,7 @@ ${formattedSources}
         }
       }
 
-      // Retry once on Gemini backup model if reply is empty or finished with length
+      // Retry once on backup model if reply is empty or finished with length
       const isReplyEmptyOrLength =
         !providerResponse ||
         !providerResponse.content ||
@@ -1082,9 +1092,9 @@ ${formattedSources}
         providerResponse.finishReason === 'length';
 
       if (isReplyEmptyOrLength && !shouldStopAiCalls() && backupProvider && backupProvider.modelName !== activeProvider.modelName) {
-        console.log(`[ChatService] Reply is empty or truncated (${activeProvider.modelName}). Retrying once on backup Gemini model '${backupProvider.modelName}'...`);
+        console.log(`[ChatService] Reply is empty or truncated (${activeProvider.modelName}). Retrying once on backup model '${backupProvider.modelName}'...`);
         onStatusUpdate?.('Retrying…', {
-          provider: 'gemini',
+          provider: backupProvider.providerType,
           model: backupProvider.modelName,
           fallbackUsed: true,
         });
@@ -1114,10 +1124,11 @@ ${formattedSources}
             providerResponse = retryRes;
             activeProvider = backupProvider;
             fallbackUsed = true;
+            alreadyStreamedInPath1 = false;
           }
         } catch (retryErr: any) {
           lastAiError = retryErr;
-          console.warn('[ChatService] Retry on backup Gemini model failed:', retryErr.message);
+          console.warn('[ChatService] Retry on backup model failed:', retryErr.message);
         }
       }
 
@@ -1129,19 +1140,20 @@ ${formattedSources}
             providerResponse = {
               content: fallbackAnswer,
               model: activeProvider.modelName,
-              provider: 'gemini',
+              provider: activeProvider.providerType,
               tokensUsed: { prompt: 0, completion: Math.ceil(fallbackAnswer.length / 4), total: Math.ceil(fallbackAnswer.length / 4) },
               isMock: false,
               finishReason: 'stop',
             };
+            alreadyStreamedInPath1 = false;
           }
         }
         if (!providerResponse || !providerResponse.content || providerResponse.content.trim().length === 0) {
           throw (
             lastAiError ||
             new ProviderError(
-              `Gemini (${activeTextModel}) returned an empty response. Please try again.`,
-              'gemini',
+              `AI provider (${activeTextModel}) returned an empty response. Please try again.`,
+              activeProvider.providerType,
               'EMPTY_RESPONSE',
               502,
               activeTextModel
@@ -1150,8 +1162,8 @@ ${formattedSources}
         }
       }
 
-      // Stream words to client if callback provided
-      if (providerResponse && onChunk && providerResponse.content) {
+      // Stream words to client if callback provided and not already streamed live
+      if (providerResponse && onChunk && providerResponse.content && !alreadyStreamedInPath1) {
         const words = providerResponse.content.split(' ');
         for (let i = 0; i < words.length; i++) {
           const chunk = (i === 0 ? '' : ' ') + words[i];
@@ -1342,7 +1354,7 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
       }
 
       onStatusUpdate?.('Preparing answer...', {
-        provider: 'gemini',
+        provider: primaryProvider.providerType,
         model: primaryProvider.modelName,
         fallbackUsed: false,
       });
@@ -1368,13 +1380,13 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
         }
       } catch (primaryError: any) {
         lastAiError = primaryError;
-        console.warn(`[ChatService] Primary Gemini model '${primaryProvider.modelName}' failed:`, primaryError.message);
+        console.warn(`[ChatService] Primary model '${primaryProvider.modelName}' failed:`, primaryError.message);
 
         if (backupProvider && backupProvider.modelName !== primaryProvider.modelName && !shouldStopAiCalls()) {
           try {
-            console.log(`[ChatService] Failing over to Gemini backup model '${backupProvider.modelName}'...`);
+            console.log(`[ChatService] Failing over to backup model '${backupProvider.modelName}'...`);
             onStatusUpdate?.('Retrying…', {
-              provider: 'gemini',
+              provider: backupProvider.providerType,
               model: backupProvider.modelName,
               fallbackUsed: true,
             });
@@ -1391,10 +1403,10 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
               providerResponse = await backupProvider.generateResponse(backupReq);
             }
             fallbackUsed = true;
-            console.log(`[ChatService] Failover to Gemini backup '${backupProvider.modelName}' succeeded.`);
+            console.log(`[ChatService] Failover to backup '${backupProvider.modelName}' succeeded.`);
           } catch (backupErr: any) {
             lastAiError = backupErr;
-            console.error(`[ChatService] Backup Gemini model '${backupProvider.modelName}' also failed:`, backupErr.message);
+            console.error(`[ChatService] Backup model '${backupProvider.modelName}' also failed:`, backupErr.message);
           }
         }
 
@@ -1406,7 +1418,7 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
               providerResponse = {
                 content: toolSummaryAnswer,
                 model: activeTextModel,
-                provider: 'gemini',
+                provider: primaryProviderType,
                 isMock: false,
                 finishReason: 'stop',
                 tokensUsed: { prompt: 0, completion: Math.ceil(toolSummaryAnswer.length / 4), total: Math.ceil(toolSummaryAnswer.length / 4) },
@@ -1430,7 +1442,7 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
           providerResponse = {
             content: bestAvailableAnswer,
             model: activeTextModel,
-            provider: 'gemini',
+            provider: primaryProviderType,
             isMock: false,
             finishReason: 'stop',
             tokensUsed: { prompt: 0, completion: Math.ceil(bestAvailableAnswer.length / 4), total: Math.ceil(bestAvailableAnswer.length / 4) },
@@ -1441,8 +1453,8 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
         throw (
           lastAiError ||
           new ProviderError(
-            'Gemini could not complete your response in time. Please try again.',
-            'gemini',
+            'AI provider could not complete your response in time. Please try again.',
+            primaryProviderType,
             'TIMEOUT',
             504,
             activeTextModel
@@ -1469,8 +1481,8 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
       }
       if (!cleanContent || cleanContent.trim().length === 0) {
         throw new ProviderError(
-          `Gemini (${providerResponse.model || activeTextModel}) returned an empty response. Please try again.`,
-          'gemini',
+          `AI provider (${providerResponse.model || activeTextModel}) returned an empty response. Please try again.`,
+          providerResponse.provider || primaryProviderType,
           'EMPTY_RESPONSE',
           502,
           providerResponse.model || activeTextModel
