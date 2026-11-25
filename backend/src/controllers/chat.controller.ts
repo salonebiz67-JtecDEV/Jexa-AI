@@ -3,15 +3,16 @@ import { ChatService } from '../services/chat.service';
 import { SendMessagePayload, StreamChatEvent } from '../../../shared/types/chat';
 import { formatCleanProviderError } from '../../../shared/types/provider';
 import { ErrorLogService } from '../services/error-log.service';
-import { SupabaseAuthService } from '../services/supabase-auth.service';
+import { isOwnerAuthEnforced } from '../middleware/auth.middleware';
 
 export class ChatController {
   public static async sendMessage(req: Request, res: Response): Promise<void> {
     const payload: SendMessagePayload = req.body || {};
+    const authEnforced = isOwnerAuthEnforced();
     const authExecutionContext = {
       userId: req.auth?.userId,
-      isOwner: Boolean(req.auth?.isOwner),
-      restrictSensitiveTools: SupabaseAuthService.isConfigured() && !req.auth?.isOwner,
+      isOwner: Boolean(req.auth?.isOwner) || !authEnforced,
+      restrictSensitiveTools: authEnforced && !req.auth?.isOwner,
     };
 
     if (!payload.message || typeof payload.message !== 'string' || !payload.message.trim()) {

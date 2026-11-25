@@ -13,6 +13,7 @@ export interface ToolStatusItem {
   displayName: string;
   description: string;
   category: string;
+  permissionLevel: InternalToolDefinition['permissionLevel'];
   enabled: boolean;
   isAvailable: boolean;
   available: boolean;
@@ -164,6 +165,7 @@ export class ToolRegistry {
         displayName: tool.displayName || tool.name,
         description: tool.description,
         category: tool.category,
+        permissionLevel: tool.permissionLevel,
         enabled: !this.disabledTools.has(tool.name),
         isAvailable,
         available: isAvailable,

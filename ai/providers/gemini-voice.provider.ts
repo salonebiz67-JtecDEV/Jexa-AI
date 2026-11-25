@@ -10,6 +10,7 @@ import {
   isTtsModel,
 } from '../../shared/types/provider';
 import { UsageTracker } from '../../backend/src/services/usage-tracker.service';
+import { LocalConfigManager } from '../../shared/config/local-config';
 
 function addWavHeader(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16): Buffer {
   const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
@@ -38,7 +39,8 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
   public readonly providerType: VoiceProviderType = 'gemini';
   public readonly modelName: string;
   private ai: GoogleGenAI | null = null;
-  public readonly isConfigured: boolean = false;
+  private activeApiKey: string = '';
+  public isConfigured: boolean = false;
   public lastError?: string;
   public lastErrorCode?: string;
   private quotaExhaustedByModel: Map<string, number> = new Map();
@@ -48,8 +50,8 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
   constructor(customModel?: string) {
     let rawModel = (
       customModel ||
-      process.env.VOICE_AI_MODEL ||
-      process.env.GEMINI_VOICE_MODEL ||
+      LocalConfigManager.get('VOICE_AI_MODEL') ||
+      LocalConfigManager.get('GEMINI_VOICE_MODEL') ||
       DEFAULT_VOICE_MODEL
     ).trim();
 
@@ -59,23 +61,54 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
     }
 
     this.modelName = rawModel;
+    this.syncClientFromConfig(true);
+  }
 
-    const apiKey =
-      process.env.GEMINI_API_KEY ||
-      process.env.AI_API_KEY ||
-      process.env.VOICE_AI_API_KEY;
+  private syncClientFromConfig(logOnInit = false): GoogleGenAI | null {
+    const apiKey = (
+      LocalConfigManager.getGeminiConfig().voiceApiKey ||
+      LocalConfigManager.get('VOICE_AI_API_KEY') ||
+      ''
+    ).trim();
 
-    if (apiKey) {
-      try {
-        this.ai = new GoogleGenAI({ apiKey });
-        this.isConfigured = true;
+    if (!apiKey) {
+      this.ai = null;
+      this.activeApiKey = '';
+      this.isConfigured = false;
+      return null;
+    }
+
+    if (this.ai && this.activeApiKey === apiKey) {
+      this.isConfigured = true;
+      return this.ai;
+    }
+
+    try {
+      this.ai = new GoogleGenAI({
+        apiKey,
+        apiVersion: 'v1beta',
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+      this.activeApiKey = apiKey;
+      this.isConfigured = true;
+      this.lastError = undefined;
+      this.lastErrorCode = undefined;
+      if (logOnInit) {
         console.log(`[GeminiVoiceAIProvider] Initialized with model: ${this.modelName}`);
-      } catch (err: any) {
-        console.error('[GeminiVoiceAIProvider] Initialization error:', err);
-        this.isConfigured = false;
-        this.lastError = err.message;
-        this.lastErrorCode = 'NOT_CONFIGURED';
       }
+      return this.ai;
+    } catch (err: any) {
+      console.error('[GeminiVoiceAIProvider] Initialization error:', err);
+      this.ai = null;
+      this.activeApiKey = '';
+      this.isConfigured = false;
+      this.lastError = err.message;
+      this.lastErrorCode = 'NOT_CONFIGURED';
+      return null;
     }
   }
 
@@ -101,7 +134,8 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
   }
 
   public getStatus(): ProviderHealthStatus {
-    if (!this.isConfigured || !this.ai) return 'NOT_CONFIGURED';
+    const aiClient = this.syncClientFromConfig();
+    if (!this.isConfigured || !aiClient) return 'NOT_CONFIGURED';
     if (this.isQuotaExhausted() || this.lastErrorCode === 'QUOTA_EXHAUSTED') return 'QUOTA_EXHAUSTED';
     if (this.lastErrorCode === 'AUTHENTICATION_ERROR') return 'AUTHENTICATION_ERROR';
     if (this.lastErrorCode === 'MODEL_NOT_FOUND') return 'MODEL_NOT_FOUND';
@@ -113,11 +147,12 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
 
   public async synthesizeSpeech(request: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
     const targetModel = this.resolveVoiceModel(request.model);
+    const aiClient = this.syncClientFromConfig();
 
-    if (!this.ai || !this.isConfigured) {
+    if (!aiClient || !this.isConfigured) {
       this.lastErrorCode = 'NOT_CONFIGURED';
       throw new ProviderError(
-        'Voice AI service is not configured. Please configure GEMINI_API_KEY in your environment variables.',
+        'Voice AI service is not configured. Please set GEMINI_API_KEY in Variables or environment settings.',
         'gemini',
         'NOT_CONFIGURED',
         400,
@@ -157,7 +192,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         throw new ProviderError('No valid text provided for speech synthesis.', 'gemini', 'INVALID_INPUT', 400);
       }
 
-      const responseStream = await this.ai.models.generateContentStream({
+      const responseStream = await aiClient.models.generateContentStream({
         model: targetModel,
         contents: [
           {
@@ -233,7 +268,8 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         model: targetModel,
       };
     } catch (error: any) {
-      console.error('[GeminiVoiceAIProvider] Speech synthesis failed:', error);
+      const errStatus = Number(error?.status || error?.statusCode) || 500;
+      console.warn(`[GeminiVoiceAIProvider] Speech synthesis failed (${errStatus}): ${error?.message || error}`);
       const latencyMs = Date.now() - startTime;
       const promptChars = (request.text || '').length;
 
@@ -375,9 +411,16 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         );
       }
 
-      this.lastErrorCode = 'UNAVAILABLE';
-      this.lastError = error.message || 'Gemini Voice is temporarily unavailable.';
       const statusNum = Number(error.status || error.statusCode) || 500;
+      const isBadRequest = statusNum === 400 || errStr.includes('INVALID_ARGUMENT');
+      const resolvedCode = isBadRequest ? 'INVALID_ARGUMENT' : (error.code || 'UNAVAILABLE');
+      const resolvedMessage = error.message || (isBadRequest ? 'Invalid voice synthesis request.' : 'Gemini Voice is temporarily unavailable.');
+
+      if (!isBadRequest) {
+        this.lastErrorCode = 'UNAVAILABLE';
+        this.lastError = resolvedMessage;
+      }
+
       UsageTracker.recordAICall({
         provider: 'gemini',
         model: targetModel,
@@ -388,14 +431,14 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         durationMs: latencyMs,
         status: 'error',
         errorStatusCode: statusNum,
-        errorCode: error.code || 'UNAVAILABLE',
-        errorMessage: this.lastError,
-        errorDetails: error.message || this.lastError,
+        errorCode: resolvedCode,
+        errorMessage: resolvedMessage,
+        errorDetails: error.message || resolvedMessage,
       });
       throw new ProviderError(
-        this.lastError || 'Gemini Voice is temporarily unavailable.',
+        resolvedMessage,
         'gemini',
-        'UNAVAILABLE',
+        resolvedCode,
         statusNum,
         targetModel
       );
@@ -403,7 +446,8 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
   }
 
   public async transcribeAudio(request: AudioTranscriptionRequest): Promise<AudioTranscriptionResponse> {
-    if (!this.ai || !this.isConfigured) {
+    const aiClient = this.syncClientFromConfig();
+    if (!aiClient || !this.isConfigured) {
       throw new ProviderError(
         'Gemini speech transcription is unconfigured.',
         'gemini',
@@ -421,7 +465,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
             : Buffer.from(request.audioBuffer as ArrayBuffer).toString('base64')
           : '';
 
-      const response = await this.ai.models.generateContent({
+      const response = await aiClient.models.generateContent({
         model: 'gemini-3.5-transcribe',
         contents: [
           {
@@ -479,7 +523,8 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
       };
     }
 
-    if (!this.ai || !this.isConfigured) {
+    const aiClient = this.syncClientFromConfig();
+    if (!aiClient || !this.isConfigured) {
       return {
         success: false,
         latencyMs: 0,
@@ -487,7 +532,7 @@ export class GeminiVoiceAIProvider implements IVoiceAIProvider {
         voiceId: 'Aoede (Aura)',
         code: 'NOT_CONFIGURED',
         status: 'NOT_CONFIGURED',
-        error: 'GEMINI_API_KEY is not configured on the backend server.',
+        error: 'GEMINI_API_KEY is not configured.',
       };
     }
 

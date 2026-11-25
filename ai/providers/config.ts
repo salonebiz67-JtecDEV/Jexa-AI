@@ -8,6 +8,7 @@ import {
   isTtsModel,
 } from '../../shared/types/provider';
 import { resolveDirectGeminiModel } from './model-aliases';
+import { LocalConfigManager } from '../../shared/config/local-config';
 
 export function sanitizeTextModel(modelName: string | undefined, fallback: string, label: string): string {
   const trimmed = (modelName || '').trim();
@@ -75,36 +76,42 @@ export interface AIProvidersConfig {
 }
 
 export function loadAIProvidersConfig(): AIProvidersConfig {
-  const rawBaseUrl = (process.env.LITELLM_BASE_URL || '').trim();
+  const rawBaseUrl = (LocalConfigManager.get('LITELLM_BASE_URL') || '').trim();
   const litellmBaseUrl = normalizeGatewayBaseUrl(rawBaseUrl);
-  const litellmKey = (process.env.LITELLM_API_KEY || process.env.LITELLM_MASTER_KEY || '').trim();
+  const litellmKey = (
+    LocalConfigManager.get('LITELLM_API_KEY') ||
+    LocalConfigManager.get('LITELLM_MASTER_KEY') ||
+    ''
+  ).trim();
   const gatewayEnabled = Boolean(litellmBaseUrl && litellmKey);
-  const gatewayEnforced = process.env.ENFORCE_LITELLM_GATEWAY === 'true';
+  const gatewayEnforced = LocalConfigManager.get('ENFORCE_LITELLM_GATEWAY') === 'true';
 
-  const requestedProvider = (process.env.TEXT_AI_PROVIDER || '').trim().toLowerCase();
+  const requestedProvider = (LocalConfigManager.get('TEXT_AI_PROVIDER') || '').trim().toLowerCase();
   const textProvider: TextProviderType =
     gatewayEnabled || gatewayEnforced || requestedProvider === 'litellm' ? 'litellm' : 'gemini';
+
+  const geminiLocal = LocalConfigManager.getGeminiConfig();
 
   const textApiKey =
     textProvider === 'litellm'
       ? litellmKey
-      : process.env.TEXT_AI_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '';
+      : LocalConfigManager.get('TEXT_AI_API_KEY') || geminiLocal.apiKey || '';
 
   const voiceApiKey =
-    process.env.VOICE_AI_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '';
+    LocalConfigManager.get('VOICE_AI_API_KEY') || geminiLocal.voiceApiKey || '';
 
   const rawTextModel = sanitizeTextModel(
-    process.env.TEXT_AI_MODEL || DEFAULT_CHAT_MODEL,
+    LocalConfigManager.get('TEXT_AI_MODEL') || LocalConfigManager.get('GEMINI_MODEL') || DEFAULT_CHAT_MODEL,
     DEFAULT_CHAT_MODEL,
     'TEXT_AI_MODEL'
   );
   const rawBackupModel = sanitizeTextModel(
-    process.env.TEXT_AI_BACKUP_MODEL || DEFAULT_BACKUP_MODEL,
+    LocalConfigManager.get('TEXT_AI_BACKUP_MODEL') || DEFAULT_BACKUP_MODEL,
     DEFAULT_BACKUP_MODEL,
     'TEXT_AI_BACKUP_MODEL'
   );
   const rawBackgroundModel = sanitizeTextModel(
-    process.env.BACKGROUND_AI_MODEL || DEFAULT_BACKGROUND_MODEL,
+    LocalConfigManager.get('BACKGROUND_AI_MODEL') || DEFAULT_BACKGROUND_MODEL,
     DEFAULT_BACKGROUND_MODEL,
     'BACKGROUND_AI_MODEL'
   );
@@ -120,7 +127,7 @@ export function loadAIProvidersConfig(): AIProvidersConfig {
       : resolveDirectGeminiModel(rawBackgroundModel, DEFAULT_BACKGROUND_MODEL);
 
   const voiceModel = sanitizeVoiceModel(
-    process.env.VOICE_AI_MODEL || DEFAULT_VOICE_MODEL,
+    LocalConfigManager.get('VOICE_AI_MODEL') || LocalConfigManager.get('GEMINI_VOICE_MODEL') || DEFAULT_VOICE_MODEL,
     DEFAULT_VOICE_MODEL,
     'VOICE_AI_MODEL'
   );
@@ -132,8 +139,8 @@ export function loadAIProvidersConfig(): AIProvidersConfig {
       model: textModel,
       backupModel: textBackupModel,
       backgroundModel: backgroundModel,
-      temperature: parseFloat(process.env.TEXT_AI_TEMPERATURE || '0.7'),
-      maxTokens: parseInt(process.env.TEXT_AI_MAX_TOKENS || '4096', 10),
+      temperature: geminiLocal.temperature,
+      maxTokens: geminiLocal.maxTokens,
       endpoint: undefined,
     },
     gateway: {
@@ -146,8 +153,8 @@ export function loadAIProvidersConfig(): AIProvidersConfig {
       provider: 'gemini',
       apiKey: voiceApiKey,
       model: voiceModel,
-      voiceId: process.env.VOICE_AI_VOICE_ID || 'aura',
-      endpoint: process.env.VOICE_AI_ENDPOINT,
+      voiceId: geminiLocal.voiceName,
+      endpoint: LocalConfigManager.get('VOICE_AI_ENDPOINT'),
     },
   };
 }

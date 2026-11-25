@@ -277,6 +277,19 @@ function hasRawToolCallParts(
     .some((m) => m.role === 'tool' || Boolean(m.rawModelParts) || Boolean(m.toolCalls?.length));
 }
 
+function isNonRecoverableProviderError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || '').toUpperCase();
+  const status = Number(err.statusCode || err.status || 0);
+  if (code === 'MISSING_CREDENTIALS' || code === 'AUTHENTICATION_ERROR' || code === 'INVALID_MODEL_TYPE') {
+    return true;
+  }
+  if (status === 401 || status === 403) {
+    return true;
+  }
+  return false;
+}
+
 export type ChunkCallback = (chunk: string) => void;
 
 export class ChatService {
@@ -288,14 +301,19 @@ export class ChatService {
     onChunk?: ChunkCallback,
     authContext?: { userId?: string; isOwner?: boolean; restrictSensitiveTools?: boolean }
   ): Promise<ChatResponsePayload> {
-    // 60-second message deadline and 3 AI calls cap
+    // 60-second message deadline and separate caps for tool rounds vs model failover
     const messageStartTime = Date.now();
     const MESSAGE_DEADLINE_MS = 60000;
     let aiCallCount = 0;
-    const MAX_AI_CALLS = 3;
+    const MAX_AI_CALLS = 4;
+    let failoverAttempts = 0;
+    const MAX_FAILOVER_ATTEMPTS = 5;
 
     const shouldStopAiCalls = () =>
       aiCallCount >= MAX_AI_CALLS || Date.now() - messageStartTime >= MESSAGE_DEADLINE_MS;
+
+    const canAttemptFailover = () =>
+      failoverAttempts < MAX_FAILOVER_ATTEMPTS && Date.now() - messageStartTime < MESSAGE_DEADLINE_MS;
 
     const UNCACHABLE_TOOLS = new Set([
       'open_link',
@@ -554,7 +572,6 @@ export class ChatService {
             currentResponse = await activeProvider.generateResponse(genRequest);
           } catch (callErr: any) {
             lastAiError = callErr;
-            console.warn(`[ChatService] Native tool round ${round} error with ${activeProvider.providerType} (${activeProvider.modelName}):`, callErr.message);
             ErrorLogService.log('ai_provider', callErr, {
               provider: activeProvider.providerType,
               model: activeProvider.modelName,
@@ -562,69 +579,86 @@ export class ChatService {
               conversationId: convId,
             });
 
-            // Failover to backup model
+            // Failover cascade: user backup model first, then healthy resilient fallbacks
             let recovered = false;
 
-            if (!shouldStopAiCalls() && backupProvider && backupProvider.modelName !== activeProvider.modelName) {
-              console.log(`[ChatService] Failing over tool round ${round} to backup model '${backupProvider.modelName}'...`);
-              try {
-                activeProvider = backupProvider;
-                fallbackUsed = true;
-                onStatusUpdate?.('Retrying…', {
-                  provider: activeProvider.providerType,
-                  model: activeProvider.modelName,
-                  fallbackUsed: true,
-                });
+            if (!isNonRecoverableProviderError(callErr) && canAttemptFailover()) {
+              const triedModels = new Set<string>([activeProvider.modelName]);
+              const failoverCandidates = [
+                ...(backupProvider && !triedModels.has(backupProvider.modelName) ? [backupProvider] : []),
+                ...registry.getFallbackCandidateProviders(triedModels, primaryProviderType),
+              ].filter((p) => p && !triedModels.has(p.modelName) && p.isConfigured);
 
-                const hadPriorToolParts = hasRawToolCallParts(activeMessages, currentTurnUserIndex);
-                // NEVER replay the first model's raw tool-call parts to backup model; convert to plain-text tool results
-                const failoverMessages = hadPriorToolParts
-                  ? convertToPlainTextFailoverMessages(activeMessages, currentTurnUserIndex)
-                  : buildRoundMessages(activeMessages, currentTurnUserIndex);
-
-                const failoverRequest: TextGenerationRequest = hadPriorToolParts
-                  ? {
-                      model: activeProvider.modelName,
-                      systemPrompt: augmentedSystemPrompt,
-                      messages: failoverMessages,
-                      temperature: 0.7,
-                      maxTokens: 4096,
-                      toolChoice: 'none',
-                      purpose: 'chat',
-                      messageId: userMessage.id,
-                    }
-                  : {
-                      model: activeProvider.modelName,
-                      systemPrompt: augmentedSystemPrompt,
-                      messages: failoverMessages,
-                      temperature: 0.7,
-                      maxTokens: 4096,
-                      tools: toolDeclarations,
-                      toolChoice: 'auto',
-                      purpose: 'tool_round',
-                      messageId: userMessage.id,
-                    };
-
-                aiCallCount++;
-                currentResponse = await activeProvider.generateResponse(failoverRequest);
-                recovered = Boolean(
-                  currentResponse &&
-                    (currentResponse.content?.trim() ||
-                      (currentResponse.finishReason === 'tool_call' && currentResponse.toolCalls?.length))
-                );
-                if (recovered) {
-                  console.log(`[ChatService] Failover to Gemini backup model '${activeProvider.modelName}' succeeded.`);
+              for (const candidateProvider of failoverCandidates) {
+                if (!canAttemptFailover() || triedModels.has(candidateProvider.modelName)) {
+                  continue;
                 }
-              } catch (bkErr: any) {
-                lastAiError = bkErr;
-                console.warn('[ChatService] Failover to Gemini backup failed:', bkErr.message);
+                triedModels.add(candidateProvider.modelName);
+                failoverAttempts++;
+                fallbackUsed = true;
+
+                try {
+                  onStatusUpdate?.('Retrying…', {
+                    provider: candidateProvider.providerType,
+                    model: candidateProvider.modelName,
+                    fallbackUsed: true,
+                  });
+
+                  const hadPriorToolParts = hasRawToolCallParts(activeMessages, currentTurnUserIndex);
+                  // NEVER replay the first model's raw tool-call parts to backup model; convert to plain-text tool results
+                  const failoverMessages = hadPriorToolParts
+                    ? convertToPlainTextFailoverMessages(activeMessages, currentTurnUserIndex)
+                    : buildRoundMessages(activeMessages, currentTurnUserIndex);
+
+                  const failoverRequest: TextGenerationRequest = hadPriorToolParts
+                    ? {
+                        model: candidateProvider.modelName,
+                        systemPrompt: augmentedSystemPrompt,
+                        messages: failoverMessages,
+                        temperature: 0.7,
+                        maxTokens: 4096,
+                        toolChoice: 'none',
+                        purpose: 'chat',
+                        messageId: userMessage.id,
+                      }
+                    : {
+                        model: candidateProvider.modelName,
+                        systemPrompt: augmentedSystemPrompt,
+                        messages: failoverMessages,
+                        temperature: 0.7,
+                        maxTokens: 4096,
+                        tools: toolDeclarations,
+                        toolChoice: 'auto',
+                        purpose: 'tool_round',
+                        messageId: userMessage.id,
+                      };
+
+                  currentResponse = await candidateProvider.generateResponse(failoverRequest);
+                  recovered = Boolean(
+                    currentResponse &&
+                      (currentResponse.content?.trim() ||
+                        (currentResponse.finishReason === 'tool_call' && currentResponse.toolCalls?.length))
+                  );
+                  if (recovered) {
+                    activeProvider = candidateProvider;
+                    registry.clearTextProviderError(primaryProviderType);
+                    break;
+                  }
+                } catch (bkErr: any) {
+                  lastAiError = bkErr;
+                  if (isNonRecoverableProviderError(bkErr)) {
+                    break;
+                  }
+                }
               }
             }
 
             if (!recovered) {
               if (searchResults.length > 0 || executedToolsInTurn.length > 0) {
-                console.log('[ChatService] Tool round failed after tools returned results. Recovering from tool results...');
                 break;
+              }
+              if (lastAiError && typeof lastAiError === 'object') {
+                (lastAiError as any).fallbackUsed = fallbackUsed;
               }
               throw lastAiError;
             }
@@ -1055,20 +1089,25 @@ ${formattedSources}
             messageId: userMessage.id,
           };
 
+          let streamedAnyInSynth = false;
           try {
             aiCallCount++;
             if (onChunk && typeof activeProvider.streamResponse === 'function') {
-              alreadyStreamedInPath1 = true;
               providerResponse = await activeProvider.streamResponse(fallbackRequest, (chunk) => {
+                if (chunk) {
+                  streamedAnyInSynth = true;
+                  alreadyStreamedInPath1 = true;
+                }
                 onChunk(chunk);
               });
             } else {
               providerResponse = await activeProvider.generateResponse(fallbackRequest);
             }
           } catch (synthErr: any) {
-            alreadyStreamedInPath1 = false;
+            if (!streamedAnyInSynth) {
+              alreadyStreamedInPath1 = false;
+            }
             lastAiError = synthErr;
-            console.warn('[ChatService] Plain-text synthesis round failed:', synthErr.message);
           }
         } else if (!providerResponse && !shouldStopAiCalls()) {
           onStatusUpdate?.('Writing the answer…', {
@@ -1093,25 +1132,28 @@ ${formattedSources}
             providerResponse = await activeProvider.generateResponse(finalReq);
           } catch (finalErr: any) {
             lastAiError = finalErr;
-            console.warn('[ChatService] Error in final synthesis round:', finalErr.message);
           }
         }
       }
 
-      // Retry once on backup model if reply is empty or finished with length
+      // Retry across backup & resilient fallback chain if reply is empty/failed/truncated (unless already streamed chunks)
       const isReplyEmptyOrLength =
         !providerResponse ||
         !providerResponse.content ||
         providerResponse.content.trim().length === 0 ||
         providerResponse.finishReason === 'length';
 
-      if (isReplyEmptyOrLength && !shouldStopAiCalls() && backupProvider && backupProvider.modelName !== activeProvider.modelName) {
-        console.log(`[ChatService] Reply is empty or truncated (${activeProvider.modelName}). Retrying once on backup model '${backupProvider.modelName}'...`);
-        onStatusUpdate?.('Retrying…', {
-          provider: backupProvider.providerType,
-          model: backupProvider.modelName,
-          fallbackUsed: true,
-        });
+      if (
+        isReplyEmptyOrLength &&
+        !alreadyStreamedInPath1 &&
+        !isNonRecoverableProviderError(lastAiError) &&
+        canAttemptFailover()
+      ) {
+        const triedModels = new Set<string>([activeProvider.modelName]);
+        const retryCandidates = [
+          ...(backupProvider && !triedModels.has(backupProvider.modelName) ? [backupProvider] : []),
+          ...registry.getFallbackCandidateProviders(triedModels, primaryProviderType),
+        ].filter((p) => p && !triedModels.has(p.modelName) && p.isConfigured);
 
         const retryMessages =
           executedToolsInTurn.length > 0 ||
@@ -1120,29 +1162,46 @@ ${formattedSources}
             ? convertToPlainTextFailoverMessages(activeMessages, currentTurnUserIndex)
             : buildRoundMessages(activeMessages, currentTurnUserIndex);
 
-        const retryRequest: TextGenerationRequest = {
-          model: backupProvider.modelName,
-          systemPrompt: augmentedSystemPrompt,
-          messages: retryMessages,
-          temperature: 0.7,
-          maxTokens: 4096,
-          toolChoice: 'none',
-          purpose: 'chat',
-          messageId: userMessage.id,
-        };
-
-        try {
-          aiCallCount++;
-          const retryRes = await backupProvider.generateResponse(retryRequest);
-          if (retryRes && retryRes.content && retryRes.content.trim().length > 0) {
-            providerResponse = retryRes;
-            activeProvider = backupProvider;
-            fallbackUsed = true;
-            alreadyStreamedInPath1 = false;
+        for (const candidate of retryCandidates) {
+          if (!canAttemptFailover() || triedModels.has(candidate.modelName)) {
+            continue;
           }
-        } catch (retryErr: any) {
-          lastAiError = retryErr;
-          console.warn('[ChatService] Retry on backup model failed:', retryErr.message);
+          triedModels.add(candidate.modelName);
+          failoverAttempts++;
+          fallbackUsed = true;
+
+          onStatusUpdate?.('Retrying…', {
+            provider: candidate.providerType,
+            model: candidate.modelName,
+            fallbackUsed: true,
+          });
+
+          const retryRequest: TextGenerationRequest = {
+            model: candidate.modelName,
+            systemPrompt: augmentedSystemPrompt,
+            messages: retryMessages,
+            temperature: 0.7,
+            maxTokens: 4096,
+            toolChoice: 'none',
+            purpose: 'chat',
+            messageId: userMessage.id,
+          };
+
+          try {
+            const retryRes = await candidate.generateResponse(retryRequest);
+            if (retryRes && retryRes.content && retryRes.content.trim().length > 0) {
+              providerResponse = retryRes;
+              activeProvider = candidate;
+              alreadyStreamedInPath1 = false;
+              registry.clearTextProviderError(primaryProviderType);
+              break;
+            }
+          } catch (retryErr: any) {
+            lastAiError = retryErr;
+            if (isNonRecoverableProviderError(retryErr)) {
+              break;
+            }
+          }
         }
       }
 
@@ -1383,44 +1442,64 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
         messageId: userMessage.id,
       };
 
+      let streamedAnyInPath2 = false;
       try {
         aiCallCount++;
         if (onChunk && typeof primaryProvider.streamResponse === 'function') {
           providerResponse = await primaryProvider.streamResponse(genRequest, (chunk) => {
+            if (chunk) streamedAnyInPath2 = true;
             onChunk(chunk);
           });
         } else {
           providerResponse = await primaryProvider.generateResponse(genRequest);
         }
+        registry.clearTextProviderError(primaryProviderType);
       } catch (primaryError: any) {
         lastAiError = primaryError;
-        console.warn(`[ChatService] Primary model '${primaryProvider.modelName}' failed:`, primaryError.message);
 
-        if (backupProvider && backupProvider.modelName !== primaryProvider.modelName && !shouldStopAiCalls()) {
-          try {
-            console.log(`[ChatService] Failing over to backup model '${backupProvider.modelName}'...`);
-            onStatusUpdate?.('Retrying…', {
-              provider: backupProvider.providerType,
-              model: backupProvider.modelName,
-              fallbackUsed: true,
-            });
-            aiCallCount++;
-            const backupReq: TextGenerationRequest = {
-              ...genRequest,
-              model: backupProvider.modelName,
-            };
-            if (onChunk && typeof backupProvider.streamResponse === 'function') {
-              providerResponse = await backupProvider.streamResponse(backupReq, (chunk) => {
-                onChunk(chunk);
-              });
-            } else {
-              providerResponse = await backupProvider.generateResponse(backupReq);
+        if (!streamedAnyInPath2 && !isNonRecoverableProviderError(primaryError) && canAttemptFailover()) {
+          const triedModels = new Set<string>([primaryProvider.modelName]);
+          const path2Candidates = [
+            ...(backupProvider && !triedModels.has(backupProvider.modelName) ? [backupProvider] : []),
+            ...registry.getFallbackCandidateProviders(triedModels, primaryProviderType),
+          ].filter((p) => p && !triedModels.has(p.modelName) && p.isConfigured);
+
+          for (const candidate of path2Candidates) {
+            if (!canAttemptFailover() || triedModels.has(candidate.modelName) || streamedAnyInPath2) {
+              continue;
             }
+            triedModels.add(candidate.modelName);
+            failoverAttempts++;
             fallbackUsed = true;
-            console.log(`[ChatService] Failover to backup '${backupProvider.modelName}' succeeded.`);
-          } catch (backupErr: any) {
-            lastAiError = backupErr;
-            console.error(`[ChatService] Backup model '${backupProvider.modelName}' also failed:`, backupErr.message);
+
+            try {
+              onStatusUpdate?.('Retrying…', {
+                provider: candidate.providerType,
+                model: candidate.modelName,
+                fallbackUsed: true,
+              });
+              const backupReq: TextGenerationRequest = {
+                ...genRequest,
+                model: candidate.modelName,
+              };
+              if (onChunk && typeof candidate.streamResponse === 'function') {
+                providerResponse = await candidate.streamResponse(backupReq, (chunk) => {
+                  if (chunk) streamedAnyInPath2 = true;
+                  onChunk(chunk);
+                });
+              } else {
+                providerResponse = await candidate.generateResponse(backupReq);
+              }
+              if (providerResponse) {
+                registry.clearTextProviderError(primaryProviderType);
+                break;
+              }
+            } catch (backupErr: any) {
+              lastAiError = backupErr;
+              if (isNonRecoverableProviderError(backupErr)) {
+                break;
+              }
+            }
           }
         }
 
@@ -1441,6 +1520,9 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
             }
           }
           if (!providerResponse) {
+            if (lastAiError && typeof lastAiError === 'object') {
+              (lastAiError as any).fallbackUsed = fallbackUsed;
+            }
             throw lastAiError;
           }
         }
@@ -1542,7 +1624,8 @@ Web search for "${searchDecision.query}" encountered an error (${searchError || 
       },
     };
 
-    // 14. Signal answer complete
+    // 14. Clear any stale singleton error now that a response completed and signal answer complete
+    registry.clearTextProviderError(primaryProviderType);
     onStatusUpdate?.('Answer complete');
 
     return {

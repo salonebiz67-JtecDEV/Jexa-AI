@@ -17,8 +17,12 @@ export function securityHeadersMiddleware(req: Request, res: Response, next: Nex
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
 
-  // Apply strict API Content-Security-Policy on JSON/SSE API & health endpoints
-  if (req.path.startsWith('/api') || req.path === '/health' || req.path === '/') {
+  // Apply strict API Content-Security-Policy on JSON/SSE API & health endpoints (and / only in API-only production mode)
+  if (
+    req.path.startsWith('/api') ||
+    req.path === '/health' ||
+    (process.env.NODE_ENV === 'production' && req.path === '/')
+  ) {
     res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
   }
 

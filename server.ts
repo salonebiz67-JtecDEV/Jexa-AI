@@ -15,8 +15,22 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Default to 10000 on Render/production, or 3000 in local dev environment
-const PORT = Number(process.env.PORT) || (process.env.NODE_ENV === 'production' ? 10000 : 3000);
+function resolveListenPort(): number {
+  const portArgIdx = process.argv.indexOf('--port');
+  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+    const cliPort = Number(process.argv[portArgIdx + 1]);
+    if (Number.isFinite(cliPort) && cliPort > 0) return cliPort;
+  }
+  if (process.env.NODE_ENV === 'production') {
+    return Number(process.env.PORT) || 10000;
+  }
+  const envPort = Number(process.env.PORT);
+  // Ignore Cloud Run ingress PORT=8080 in development so Express + Vite bind to port 3000
+  if (Number.isFinite(envPort) && envPort > 0 && envPort !== 8080) {
+    return envPort;
+  }
+  return 3000;
+}
 
 const CAPACITOR_NATIVE_ORIGINS = new Set([
   'https://localhost',
@@ -137,13 +151,15 @@ export function createApp(options: { includeErrorHandler?: boolean } = {}) {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 
-  // Root endpoint: Returns backend service status (API-first architecture for Render + GitHub Pages)
-  app.get('/', (_req, res) => {
-    res.status(200).json({
-      name: 'JEXA API',
-      status: 'online',
+  if (isProd) {
+    // Root endpoint: Returns backend service status in production (API-first architecture for Render + GitHub Pages)
+    app.get('/', (_req, res) => {
+      res.status(200).json({
+        name: 'JEXA API',
+        status: 'online',
+      });
     });
-  });
+  }
 
   // Health check endpoint (Render health monitoring) - Never exposes credentials, URLs, or secrets
   app.get('/health', (_req, res) => {
@@ -199,14 +215,15 @@ export async function startServer() {
   // Central error handling middleware
   app.use(errorHandler);
 
-  const server = app.listen(PORT, '0.0.0.0', () => {
+  const listenPort = resolveListenPort();
+  const server = app.listen(listenPort, '0.0.0.0', () => {
     console.log(`=========================================`);
     console.log(` JEXA AI Companion Server Online`);
     console.log(` Powered by JOHNEY TEC`);
-    console.log(`[Server] Listening on 0.0.0.0:${PORT}`);
-    console.log(` Port: ${PORT}`);
+    console.log(`[Server] Listening on 0.0.0.0:${listenPort}`);
+    console.log(` Port: ${listenPort}`);
     console.log(` Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(` URL: http://0.0.0.0:${PORT}`);
+    console.log(` URL: http://0.0.0.0:${listenPort}`);
     console.log(`[Server] Stateless API mode active (device-local persistence)`);
     console.log(`[Server] Ready`);
     console.log(`=========================================`);

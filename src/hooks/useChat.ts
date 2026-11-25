@@ -468,7 +468,9 @@ export function useChat() {
         } else if (err.code === 'AUTHENTICATION_ERROR') {
           userHelpMessage = 'Gemini authentication failed. Please verify your GEMINI_API_KEY configuration.';
         } else if (err.code === 'MISSING_CREDENTIALS') {
-          userHelpMessage = 'Gemini API key (GEMINI_API_KEY) is not configured on the server.';
+          userHelpMessage =
+            err.message ||
+            'Gemini API key (GEMINI_API_KEY) is not configured. Add it in Variables in the sidebar or on the backend.';
         }
 
         showToast(userHelpMessage, 'error');

@@ -17,13 +17,8 @@ import {
   ChevronRight,
   Loader2,
   ShieldCheck,
-  ShieldAlert,
-  Lock,
-  LogOut,
-  KeyRound,
 } from 'lucide-react';
-import { ApiClient, ToolTestResult } from '../../services/api.client';
-import { useAuth } from '../../context/AuthContext';
+import { ApiClient, ToolTestResult, hasConfiguredBackend } from '../../services/api.client';
 import { safeStorage } from '../../services/storage';
 import { FREE_GEMINI_CHAT_MODELS, FREE_GEMINI_VOICE_MODELS } from '../../../shared/types/provider';
 
@@ -161,6 +156,7 @@ interface ToolStatusItem {
   displayName: string;
   description: string;
   category: string;
+  permissionLevel?: 'read_only' | 'sensitive' | 'write' | string;
   enabled: boolean;
   available: boolean;
   callsToday: number;
@@ -172,6 +168,137 @@ interface ToolStatusItem {
   lastUsedAt: string | null;
   lastError?: string | null;
 }
+
+const BUILT_IN_TOOLS_CATALOG: ToolStatusItem[] = [
+  {
+    name: 'web_search',
+    displayName: 'Web Search',
+    description: 'Search the live web for current events, facts, documentation, and sources.',
+    category: 'web',
+    permissionLevel: 'read_only',
+    enabled: true,
+    available: false,
+    callsToday: 0,
+    totalCalls: 0,
+    successCount: 0,
+    failureCount: 0,
+    successRate: null,
+    avgDurationMs: 0,
+    lastUsedAt: null,
+  },
+  {
+    name: 'open_link',
+    displayName: 'Open & Analyze Link',
+    description: 'Fetch and extract clean readable text and metadata from a specific URL.',
+    category: 'web',
+    permissionLevel: 'read_only',
+    enabled: true,
+    available: false,
+    callsToday: 0,
+    totalCalls: 0,
+    successCount: 0,
+    failureCount: 0,
+    successRate: null,
+    avgDurationMs: 0,
+    lastUsedAt: null,
+  },
+  {
+    name: 'system_time',
+    displayName: 'System Time',
+    description: 'Return current UTC and local date/time in any IANA timezone.',
+    category: 'system',
+    permissionLevel: 'read_only',
+    enabled: true,
+    available: false,
+    callsToday: 0,
+    totalCalls: 0,
+    successCount: 0,
+    failureCount: 0,
+    successRate: null,
+    avgDurationMs: 0,
+    lastUsedAt: null,
+  },
+  {
+    name: 'system_check',
+    displayName: 'System Health Check',
+    description: 'Inspect runtime uptime, provider readiness, and active tool health.',
+    category: 'system',
+    permissionLevel: 'sensitive',
+    enabled: true,
+    available: false,
+    callsToday: 0,
+    totalCalls: 0,
+    successCount: 0,
+    failureCount: 0,
+    successRate: null,
+    avgDurationMs: 0,
+    lastUsedAt: null,
+  },
+  {
+    name: 'recent_errors',
+    displayName: 'Recent Errors',
+    description: 'Retrieve buffered backend and provider error diagnostics.',
+    category: 'diagnostics',
+    permissionLevel: 'sensitive',
+    enabled: true,
+    available: false,
+    callsToday: 0,
+    totalCalls: 0,
+    successCount: 0,
+    failureCount: 0,
+    successRate: null,
+    avgDurationMs: 0,
+    lastUsedAt: null,
+  },
+  {
+    name: 'list_source_files',
+    displayName: 'List Source Files',
+    description: 'Browse project directories and source files inside the repository.',
+    category: 'code',
+    permissionLevel: 'sensitive',
+    enabled: true,
+    available: false,
+    callsToday: 0,
+    totalCalls: 0,
+    successCount: 0,
+    failureCount: 0,
+    successRate: null,
+    avgDurationMs: 0,
+    lastUsedAt: null,
+  },
+  {
+    name: 'read_source_file',
+    displayName: 'Read Source File',
+    description: 'Read specific line ranges from repository source files for analysis.',
+    category: 'code',
+    permissionLevel: 'sensitive',
+    enabled: true,
+    available: false,
+    callsToday: 0,
+    totalCalls: 0,
+    successCount: 0,
+    failureCount: 0,
+    successRate: null,
+    avgDurationMs: 0,
+    lastUsedAt: null,
+  },
+  {
+    name: 'search_code',
+    displayName: 'Search Code',
+    description: 'Search across source files for symbols, patterns, and definitions.',
+    category: 'code',
+    permissionLevel: 'sensitive',
+    enabled: true,
+    available: false,
+    callsToday: 0,
+    totalCalls: 0,
+    successCount: 0,
+    failureCount: 0,
+    successRate: null,
+    avgDurationMs: 0,
+    lastUsedAt: null,
+  },
+];
 
 interface ModelQuotaLimits {
   rpm?: number;
@@ -354,20 +481,6 @@ interface SecurityStatusData {
 type SecurityFilterCategory = 'all' | 'auth' | 'blocked' | 'config';
 
 export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
-  const {
-    authenticated,
-    isOwner,
-    user: authUser,
-    expiresAtMs,
-    setup: authSetup,
-    isLoading: authLoading,
-    isSubmitting: authSubmitting,
-    authError,
-    login,
-    logout,
-    clearAuthError,
-  } = useAuth();
-
   const [activeTab, setActiveTab] = useState<'usage' | 'tools' | 'security'>('usage');
   const [callLogFilter, setCallLogFilter] = useState<'recent' | 'failed' | 'expensive'>('recent');
   const [securityFilter, setSecurityFilter] = useState<SecurityFilterCategory>('all');
@@ -378,15 +491,10 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
   const [securityEvents, setSecurityEvents] = useState<SecurityAuditEvent[]>([]);
   const [securityCounts24h, setSecurityCounts24h] = useState<SecurityCounts24h | null>(null);
 
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authNotice, setAuthNotice] = useState<string | null>(null);
-
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [authBlocked, setAuthBlocked] = useState(false);
   const [togglingTool, setTogglingTool] = useState<string | null>(null);
 
   const [testingTool, setTestingTool] = useState<string | null>(null);
@@ -428,91 +536,78 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
     }
   }, []);
 
+  const backendConfigured = hasConfiguredBackend();
+
   const fetchData = useCallback(async (isInitial = false) => {
-    if (!isOwner) {
+    if (!hasConfiguredBackend()) {
+      setTools((prev) => (prev.length > 0 ? prev : BUILT_IN_TOOLS_CATALOG));
+      setError(null);
       setLoading(false);
       setRefreshing(false);
       return;
     }
+
     if (isInitial) setLoading(true);
     else setRefreshing(true);
+
     try {
-      const [usageRes, toolsRes, secStatusRes, secLogsRes] = await Promise.all([
+      const [usageRes, toolsRes, secStatusRes, secLogsRes] = await Promise.allSettled([
         ApiClient.getUsageSummary(),
         ApiClient.getToolsStatus(),
         ApiClient.getSecurityStatus(),
         ApiClient.getSecurityAuditLogs(100),
       ]);
-      setSummary(usageRes);
-      setTools(toolsRes?.tools || []);
-      setSecurityStatus(secStatusRes || null);
-      setSecurityEvents(secLogsRes?.events || []);
-      setSecurityCounts24h(secLogsRes?.countsLast24h || secStatusRes?.countsLast24h || null);
-      setError(null);
-      setAuthBlocked(false);
-    } catch (err: any) {
-      if (err?.status === 401 || err?.status === 403) {
-        setAuthBlocked(true);
-        setAutoRefresh(false);
+
+      const failures: string[] = [];
+
+      if (usageRes.status === 'fulfilled') {
+        setSummary(usageRes.value);
+      } else {
+        failures.push(usageRes.reason?.message || 'Usage telemetry unavailable');
       }
+
+      if (toolsRes.status === 'fulfilled') {
+        setTools(toolsRes.value?.tools || BUILT_IN_TOOLS_CATALOG);
+      } else {
+        setTools((prev) => (prev.length > 0 ? prev : BUILT_IN_TOOLS_CATALOG));
+        failures.push(toolsRes.reason?.message || 'Tools status unavailable');
+      }
+
+      if (secStatusRes.status === 'fulfilled') {
+        setSecurityStatus(secStatusRes.value || null);
+      }
+      if (secLogsRes.status === 'fulfilled') {
+        setSecurityEvents(secLogsRes.value?.events || []);
+        setSecurityCounts24h(
+          secLogsRes.value?.countsLast24h ||
+            (secStatusRes.status === 'fulfilled' ? secStatusRes.value?.countsLast24h : null) ||
+            null
+        );
+      } else if (secStatusRes.status === 'fulfilled') {
+        setSecurityCounts24h(secStatusRes.value?.countsLast24h || null);
+      }
+
+      setError(failures.length > 0 ? failures[0] : null);
+    } catch (err: any) {
+      setTools((prev) => (prev.length > 0 ? prev : BUILT_IN_TOOLS_CATALOG));
       setError(err?.message || 'Failed to load usage, tools, and security status.');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [isOwner]);
+  }, []);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (isOwner) {
-      setAuthBlocked(false);
-      void fetchData(true);
-    } else {
-      setSummary(null);
-      setTools([]);
-      setSecurityEvents([]);
-      setSecurityStatus(null);
-      setLoading(false);
-    }
-  }, [authLoading, isOwner, fetchData]);
+    void fetchData(true);
+  }, [fetchData]);
 
   useEffect(() => {
-    if (!autoRefresh || !isOwner) return;
+    if (!autoRefresh || !backendConfigured) return;
     const interval = setInterval(() => {
       void fetchData(false);
     }, 5000);
     return () => clearInterval(interval);
-  }, [autoRefresh, isOwner, fetchData]);
-
-  const handlePanelLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    clearAuthError();
-    setAuthNotice(null);
-    const trimmedEmail = authEmail.trim();
-    if (!trimmedEmail || !authPassword) {
-      setAuthNotice('Please enter both email and password.');
-      return;
-    }
-    const result = await login(trimmedEmail, authPassword);
-    if (result.ok) {
-      setAuthPassword('');
-      if (!result.isOwner) {
-        setAuthNotice('Signed in as a standard user. Owner privileges are required to view the Developer Control Center.');
-      } else {
-        setAuthBlocked(false);
-        setAutoRefresh(true);
-      }
-    }
-  };
-
-  const handlePanelLogout = async () => {
-    await logout();
-    setSummary(null);
-    setTools([]);
-    setSecurityEvents([]);
-    setSecurityStatus(null);
-    setAuthNotice('Signed out cleanly.');
-  };
+  }, [autoRefresh, backendConfigured, fetchData]);
 
   const handleToggleTool = async (tool: ToolStatusItem) => {
     setTogglingTool(tool.name);
@@ -752,281 +847,133 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {isOwner && (
-            <>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={autoRefresh}
-                onClick={() => setAutoRefresh((v) => !v)}
-                className="min-h-[44px] px-2 flex items-center gap-2 rounded-lg text-xs text-slate-300 hover:bg-white/[0.05] transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                title="Auto-refresh every 5 seconds"
-              >
-                <span className="text-[11px] font-medium text-slate-400">Auto</span>
-                <span
-                  className={`w-8 h-4.5 rounded-full transition-colors relative p-0.5 inline-flex items-center ${
-                    autoRefresh ? 'bg-emerald-500' : 'bg-slate-700'
-                  }`}
-                >
-                  <span
-                    className={`w-3.5 h-3.5 rounded-full bg-white transition-transform ${
-                      autoRefresh ? 'translate-x-3.5' : 'translate-x-0'
-                    }`}
-                  />
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => fetchData(false)}
-                disabled={refreshing}
-                aria-label="Refresh"
-                title="Refresh"
-                className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg bg-white/[0.04] hover:bg-white/[0.09] border border-white/[0.08] text-slate-200 transition-colors cursor-pointer disabled:opacity-50 shrink-0"
-              >
-                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
-              </button>
-            </>
-          )}
-          {authenticated && (
-            <button
-              type="button"
-              onClick={handlePanelLogout}
-              disabled={authSubmitting}
-              className="min-h-[40px] px-2.5 flex items-center gap-1.5 rounded-lg bg-white/[0.04] hover:bg-rose-500/15 border border-white/[0.08] hover:border-rose-500/30 text-xs font-medium text-slate-300 hover:text-rose-200 transition-colors cursor-pointer shrink-0"
-              title="Sign out"
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoRefresh}
+            onClick={() => setAutoRefresh((v) => !v)}
+            className="min-h-[44px] px-2 flex items-center gap-2 rounded-lg text-xs text-slate-300 hover:bg-white/[0.05] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            title="Auto-refresh every 5 seconds"
+          >
+            <span className="text-[11px] font-medium text-slate-400">Auto</span>
+            <span
+              className={`w-8 h-4.5 rounded-full transition-colors relative p-0.5 inline-flex items-center ${
+                autoRefresh ? 'bg-emerald-500' : 'bg-slate-700'
+              }`}
             >
-              <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Sign Out</span>
-            </button>
-          )}
+              <span
+                className={`w-3.5 h-3.5 rounded-full bg-white transition-transform ${
+                  autoRefresh ? 'translate-x-3.5' : 'translate-x-0'
+                }`}
+              />
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => fetchData(false)}
+            disabled={refreshing}
+            aria-label="Refresh"
+            title="Refresh"
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg bg-white/[0.04] hover:bg-white/[0.09] border border-white/[0.08] text-slate-200 transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
+          </button>
         </div>
         </div>
       </header>
 
-      {/* Owner Tab Bar (only visible when authorized) */}
-      {isOwner && !authBlocked && (
-        <div className="px-3 sm:px-5 py-2.5 border-b border-white/[0.06] bg-[#080b12] flex items-center justify-between gap-3 shrink-0 flex-wrap pl-safe pr-safe">
-          <div
-            role="tablist"
-            aria-label="Tools views"
-            className="inline-flex p-1 rounded-xl bg-[#0e1422] border border-white/[0.07]"
+      {/* Dashboard Tab Bar */}
+      <div className="px-3 sm:px-5 py-2.5 border-b border-white/[0.06] bg-[#080b12] flex items-center justify-between gap-3 shrink-0 flex-wrap pl-safe pr-safe">
+        <div
+          role="tablist"
+          aria-label="Tools views"
+          className="inline-flex p-1 rounded-xl bg-[#0e1422] border border-white/[0.07]"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'usage'}
+            onClick={() => setActiveTab('usage')}
+            className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'usage'
+                ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                : 'text-slate-400 hover:text-slate-200 border border-transparent'
+            }`}
           >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'usage'}
-              onClick={() => setActiveTab('usage')}
-              className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                activeTab === 'usage'
-                  ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                  : 'text-slate-400 hover:text-slate-200 border border-transparent'
-              }`}
-            >
-              <Activity className="w-3.5 h-3.5" />
-              <span>Usage</span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'tools'}
-              onClick={() => setActiveTab('tools')}
-              className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                activeTab === 'tools'
-                  ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                  : 'text-slate-400 hover:text-slate-200 border border-transparent'
-              }`}
-            >
-              <Wrench className="w-3.5 h-3.5" />
-              <span>Tools</span>
-              <span className="text-[11px] font-mono tabular-nums text-slate-400 ml-0.5">
-                ({tools.length})
-              </span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'security'}
-              onClick={() => setActiveTab('security')}
-              className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                activeTab === 'security'
-                  ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                  : 'text-slate-400 hover:text-slate-200 border border-transparent'
-              }`}
-            >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>Security</span>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2.5 text-[11px] font-mono text-slate-400 tabular-nums flex-wrap">
-            {authUser?.email && (
-              <span className="inline-flex items-center gap-1 text-emerald-300">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>{authUser.email}</span>
-              </span>
-            )}
-            {expiresAtMs && (
-              <span className="text-slate-500">· Exp {formatHHMM(expiresAtMs)}</span>
-            )}
-            {summary && (
-              <span className="text-slate-500">
-                · Up since {formatHHMM(summary.serverStartedAtMs)}
-              </span>
-            )}
-          </div>
+            <Activity className="w-3.5 h-3.5" />
+            <span>Usage</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'tools'}
+            onClick={() => setActiveTab('tools')}
+            className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'tools'
+                ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                : 'text-slate-400 hover:text-slate-200 border border-transparent'
+            }`}
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            <span>Tools</span>
+            <span className="text-[11px] font-mono tabular-nums text-slate-400 ml-0.5">
+              ({tools.length})
+            </span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'security'}
+            onClick={() => setActiveTab('security')}
+            className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'security'
+                ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                : 'text-slate-400 hover:text-slate-200 border border-transparent'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Security</span>
+          </button>
         </div>
-      )}
+
+        <div className="flex items-center gap-2.5 text-[11px] font-mono text-slate-400 tabular-nums flex-wrap">
+          <span className="inline-flex items-center gap-1.5 text-emerald-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            <span>Development Access</span>
+          </span>
+          {summary && (
+            <span className="text-slate-500">
+              · Up since {formatHHMM(summary.serverStartedAtMs)}
+            </span>
+          )}
+        </div>
+      </div>
 
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-safe pl-safe pr-safe">
         <div className="max-w-5xl mx-auto space-y-4 pb-10">
-          {authLoading ? (
-            <div className="py-16 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
-              <span>Verifying session authorization…</span>
+          {!backendConfigured && (
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-200 text-xs flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <span>
+                Standalone device mode: showing registered tool definitions and local model limits. Live server execution and telemetry activate when a backend server URL is configured in Variables.
+              </span>
             </div>
-          ) : !isOwner || authBlocked ? (
-            <div className="max-w-md mx-auto mt-4 p-5 rounded-2xl bg-[#0b101b] border border-white/[0.1] space-y-4">
-              {authenticated && !isOwner ? (
-                <>
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 flex items-center justify-center shrink-0">
-                      <ShieldAlert className="w-5 h-5" />
-                    </div>
-                    <div className="space-y-1">
-                      <h2 className="text-sm font-semibold text-white">Owner Privileges Required (403)</h2>
-                      <p className="text-xs text-slate-400 leading-relaxed">
-                        This Developer Control Center, usage telemetry, and security audit log are locked to the verified JEXA owner account.
-                      </p>
-                    </div>
-                  </div>
+          )}
 
-                  <div className="p-3 rounded-xl bg-[#0d1320] border border-white/[0.07] space-y-1.5 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-400">Signed in as</span>
-                      <span className="font-mono text-slate-200 truncate">{authUser?.email || 'Authenticated User'}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-400">Role</span>
-                      <span className="font-mono uppercase text-amber-300">{authUser?.role || 'user'}</span>
-                    </div>
-                    {authUser?.id && (
-                      <div className="pt-1.5 border-t border-white/[0.06] space-y-1">
-                        <div className="text-[11px] text-slate-400">
-                          Your Supabase User ID (for <code className="text-slate-200">OWNER_USER_ID</code> setup on Render):
-                        </div>
-                        <div className="px-2 py-1.5 rounded bg-black/40 border border-white/[0.06] font-mono text-[11px] text-emerald-300 select-all break-all">
-                          {authUser.id}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={onBack}
-                      className="min-h-[40px] px-3.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-xs font-medium text-slate-200 cursor-pointer"
-                    >
-                      Back to Chat
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handlePanelLogout}
-                      disabled={authSubmitting}
-                      className="min-h-[40px] px-3.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-xs font-medium text-rose-200 flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <LogOut className="w-3.5 h-3.5" />
-                      <span>Sign Out</span>
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 flex items-center justify-center shrink-0">
-                      <Lock className="w-5 h-5" />
-                    </div>
-                    <div className="space-y-1">
-                      <h2 className="text-sm font-semibold text-white">Owner Sign-In Required</h2>
-                      <p className="text-xs text-slate-400 leading-relaxed">
-                        Sign in with your verified owner account to access usage telemetry, tools, and security audit logs. Normal chat remains available without signing in.
-                      </p>
-                    </div>
-                  </div>
-
-                  {!authSetup.authConfigured && (
-                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-200 leading-relaxed">
-                      Server-side Supabase authentication is not configured yet. Set <code className="font-mono">SUPABASE_URL</code>, <code className="font-mono">SUPABASE_ANON_KEY</code>, and <code className="font-mono">OWNER_USER_ID</code> on the backend.
-                    </div>
-                  )}
-
-                  {(authError || authNotice || error) && (
-                    <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-200 break-words">
-                      {authError || authNotice || error}
-                    </div>
-                  )}
-
-                  <form onSubmit={handlePanelLogin} className="space-y-3">
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-400 mb-1">Owner Email</label>
-                      <input
-                        type="email"
-                        autoComplete="email"
-                        required
-                        value={authEmail}
-                        onChange={(e) => setAuthEmail(e.target.value)}
-                        placeholder="owner@example.com"
-                        className="w-full px-3 py-2.5 rounded-xl bg-[#070a12] border border-white/[0.1] text-xs text-white focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-400 mb-1">Password</label>
-                      <input
-                        type="password"
-                        autoComplete="current-password"
-                        required
-                        value={authPassword}
-                        onChange={(e) => setAuthPassword(e.target.value)}
-                        placeholder="••••••••••••"
-                        className="w-full px-3 py-2.5 rounded-xl bg-[#070a12] border border-white/[0.1] text-xs text-white focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={onBack}
-                        className="min-h-[40px] px-3 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-white/[0.05] cursor-pointer"
-                      >
-                        Back to Chat
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={authSubmitting || !authSetup.authConfigured}
-                        className="min-h-[40px] px-4 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/35 text-xs font-semibold text-emerald-200 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                      >
-                        {authSubmitting ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <KeyRound className="w-3.5 h-3.5" />
-                        )}
-                        <span>{authSubmitting ? 'Signing In…' : 'Sign In'}</span>
-                      </button>
-                    </div>
-                  </form>
-                </>
-              )}
-            </div>
-          ) : error ? (
+          {error && (
             <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <span className="break-words">{error}</span>
             </div>
-          ) : null}
+          )}
 
-          {!isOwner || authBlocked || authLoading ? null : loading && !summary ? (
-            <div className="py-16 text-center text-xs text-slate-400">Loading usage, tool, and security telemetry…</div>
+          {loading && !summary && tools.length === 0 ? (
+            <div className="py-16 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
+              <span>Loading usage, tool, and security telemetry…</span>
+            </div>
           ) : activeTab === 'usage' ? (
             /* ============================================================ */
             /* TAB 1: HONEST USAGE TRACKER                                  */
@@ -1477,12 +1424,28 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
                         key={tool.name}
                         className="p-3.5 rounded-xl bg-[#0b101b] border border-white/[0.08] flex flex-col justify-between gap-3"
                       >
-                        {/* Top row: Name + description + On/Off switch */}
+                        {/* Top row: Name + permission/category + description + On/Off switch */}
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <h2 className="text-xs font-semibold text-white">{tool.displayName}</h2>
                               <span className="text-[11px] font-mono text-slate-400">{tool.name}</span>
+                              {tool.category && (
+                                <span className="px-1.5 py-0.5 rounded bg-white/[0.05] border border-white/[0.08] text-[9px] font-mono uppercase text-slate-300">
+                                  {tool.category}
+                                </span>
+                              )}
+                              {tool.permissionLevel && (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded border text-[9px] font-mono uppercase ${
+                                    tool.permissionLevel === 'sensitive'
+                                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                                      : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
+                                  }`}
+                                >
+                                  {tool.permissionLevel}
+                                </span>
+                              )}
                             </div>
                             <p className="text-[11px] text-slate-400 mt-1 leading-snug">
                               {tool.description}
@@ -1632,16 +1595,22 @@ export const ToolsPanel: React.FC<ToolsPanelProps> = ({ onBack }) => {
               {/* Security Posture Cards */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="p-3.5 rounded-xl bg-[#0b101b] border border-white/[0.08]">
-                  <div className="text-[11px] font-medium text-slate-400">Owner Binding</div>
+                  <div className="text-[11px] font-medium text-slate-400">
+                    {securityStatus?.setup?.authConfigured ? 'Owner Binding' : 'Access Mode'}
+                  </div>
                   <div className="text-sm font-semibold text-white mt-1 truncate">
-                    {securityStatus?.setup?.ownerUserIdConfigured
-                      ? 'OWNER_USER_ID'
-                      : securityStatus?.setup?.ownerEmailConfigured
-                      ? 'OWNER_EMAIL'
-                      : 'app_metadata'}
+                    {securityStatus?.setup?.authConfigured
+                      ? securityStatus.setup.ownerUserIdConfigured
+                        ? 'OWNER_USER_ID'
+                        : securityStatus.setup.ownerEmailConfigured
+                        ? 'OWNER_EMAIL'
+                        : 'app_metadata'
+                      : 'Development Mode'}
                   </div>
                   <div className="text-[11px] font-mono text-emerald-400 mt-1 truncate">
-                    Server-verified · TTL {securityStatus?.auth?.cacheTtlMs ?? 5000}ms
+                    {securityStatus?.setup?.authConfigured
+                      ? `Server-verified · TTL ${securityStatus?.auth?.cacheTtlMs ?? 5000}ms`
+                      : 'Open local access · Login not required'}
                   </div>
                 </div>
 

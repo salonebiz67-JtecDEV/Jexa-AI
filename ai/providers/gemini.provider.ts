@@ -9,6 +9,7 @@ import {
 } from '../../shared/types/provider';
 import { ErrorLogService } from '../../backend/src/services/error-log.service';
 import { UsageTracker } from '../../backend/src/services/usage-tracker.service';
+import { LocalConfigManager } from '../../shared/config/local-config';
 
 function sanitizeGeminiSchemaProperty(prop: any): Record<string, any> {
   if (!prop || typeof prop !== 'object') {
@@ -112,20 +113,58 @@ function estimatePromptTokens(request: TextGenerationRequest): number {
   return Math.max(1, Math.ceil((sysLen + msgLen) / 4));
 }
 
+function isGemini4Model(modelName: string): boolean {
+  return /^gemini-4(?:-|$)/i.test((modelName || '').trim());
+}
+
+function isTransientGeminiError(err: any): boolean {
+  const status = Number(err?.status || err?.statusCode || 0);
+  const msg = String(err?.message || '');
+  if (/exceeded your current quota|quota.*0|billing|API_KEY_INVALID|PERMISSION_DENIED/i.test(msg)) {
+    return false;
+  }
+  return (
+    status === 503 ||
+    status === 429 ||
+    /\b503\b|high demand|overloaded|temporarily unavailable|UNAVAILABLE/i.test(msg) ||
+    (/\b429\b|RESOURCE_EXHAUSTED|rate limit/i.test(msg) && !/current quota/i.test(msg))
+  );
+}
+
+function waitJitteredBackoff(attempt: number, signal?: AbortSignal): Promise<void> {
+  const delayMs = 350 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 150);
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export class GeminiTextAIProvider implements ITextAIProvider {
   public readonly providerType: TextProviderType = 'gemini';
   public readonly modelName: string;
   public readonly supportsTools: boolean = true;
   private static supportsThinkingConfig: boolean = true;
   private ai: GoogleGenAI | null = null;
-  public readonly isConfigured: boolean = false;
+  private activeApiKey: string = '';
+  public isConfigured: boolean = false;
   public lastError?: string;
 
   constructor(customModel?: string) {
     let rawModel = (
       customModel ||
-      process.env.TEXT_AI_MODEL ||
-      process.env.GEMINI_MODEL ||
+      LocalConfigManager.get('TEXT_AI_MODEL') ||
+      LocalConfigManager.get('GEMINI_MODEL') ||
       DEFAULT_CHAT_MODEL
     ).trim();
 
@@ -135,22 +174,47 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     }
 
     this.modelName = rawModel || DEFAULT_CHAT_MODEL;
+    this.syncClientFromConfig(true);
+  }
 
-    const apiKey =
-      process.env.GEMINI_API_KEY ||
-      process.env.AI_API_KEY ||
-      process.env.TEXT_AI_API_KEY;
+  private syncClientFromConfig(logOnInit = false): GoogleGenAI | null {
+    const apiKey = (LocalConfigManager.getGeminiConfig().apiKey || '').trim();
+    if (!apiKey) {
+      this.ai = null;
+      this.activeApiKey = '';
+      this.isConfigured = false;
+      return null;
+    }
 
-    if (apiKey) {
-      try {
-        this.ai = new GoogleGenAI({ apiKey });
-        this.isConfigured = true;
+    if (this.ai && this.activeApiKey === apiKey) {
+      this.isConfigured = true;
+      return this.ai;
+    }
+
+    try {
+      this.ai = new GoogleGenAI({
+        apiKey,
+        apiVersion: 'v1beta',
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+      this.activeApiKey = apiKey;
+      this.isConfigured = true;
+      this.lastError = undefined;
+      if (logOnInit) {
         console.log(`[GeminiTextAIProvider] Initialized with model: ${this.modelName}`);
-      } catch (err: any) {
-        console.error('[GeminiTextAIProvider] Initialization error:', err);
-        this.isConfigured = false;
-        this.lastError = err.message;
       }
+      return this.ai;
+    } catch (err: any) {
+      console.error('[GeminiTextAIProvider] Initialization error:', err);
+      this.ai = null;
+      this.activeApiKey = '';
+      this.isConfigured = false;
+      this.lastError = err.message;
+      return null;
     }
   }
 
@@ -264,9 +328,10 @@ export class GeminiTextAIProvider implements ITextAIProvider {
   }
 
   public async generateResponse(request: TextGenerationRequest): Promise<TextGenerationResponse> {
-    if (!this.ai || !this.isConfigured) {
+    const aiClient = this.syncClientFromConfig();
+    if (!aiClient || !this.isConfigured) {
       const missingErr = new ProviderError(
-        'Gemini AI service is unconfigured. Set GEMINI_API_KEY on the server.',
+        'Gemini AI service is unconfigured. Set GEMINI_API_KEY in Variables or environment settings.',
         'gemini',
         'MISSING_CREDENTIALS',
         400,
@@ -293,17 +358,20 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     const contents = this.formatGeminiContents(request.messages);
 
     const maxTokens = request.maxTokens ?? 4096;
+    const isG4 = isGemini4Model(targetModel);
     const config: any = {
       systemInstruction: request.systemPrompt,
-      temperature: request.temperature ?? 0.7,
       maxOutputTokens: maxTokens,
     };
 
-    // Small thinking budget if supported so thinking never consumes the whole output budget
-    if (GeminiTextAIProvider.supportsThinkingConfig && maxTokens > 300) {
-      config.thinkingConfig = {
-        thinkingBudget: 256,
-      };
+    // Gemini 4 models do not accept deprecated sampling parameters (temperature) or thinkingBudget
+    if (!isG4) {
+      config.temperature = request.temperature ?? 0.7;
+      if (GeminiTextAIProvider.supportsThinkingConfig && maxTokens > 300) {
+        config.thinkingConfig = {
+          thinkingBudget: 256,
+        };
+      }
     }
 
     if (request.tools && request.tools.length > 0 && request.toolChoice !== 'none') {
@@ -339,7 +407,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     try {
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          const response = await this.ai.models.generateContent({
+          const response = await aiClient.models.generateContent({
             model: targetModel,
             contents,
             config,
@@ -417,7 +485,7 @@ export class GeminiTextAIProvider implements ITextAIProvider {
             GeminiTextAIProvider.supportsThinkingConfig = false;
             delete config.thinkingConfig;
             try {
-              const retryResponse = await this.ai.models.generateContent({
+              const retryResponse = await aiClient.models.generateContent({
                 model: targetModel,
                 contents,
                 config,
@@ -471,16 +539,16 @@ export class GeminiTextAIProvider implements ITextAIProvider {
             break;
           }
 
-          if (attempt < 2 && (msg.includes('503') || msg.includes('429') || msg.includes('high demand') || msg.includes('RESOURCE_EXHAUSTED'))) {
-            console.warn(`[GeminiTextAIProvider] Transient error on attempt ${attempt}, retrying in 600ms...`);
-            await new Promise((r) => setTimeout(r, 600));
-            continue;
+          if (attempt < 2 && isTransientGeminiError(error)) {
+            await waitJitteredBackoff(attempt, controller.signal);
+            if (!controller.signal.aborted) {
+              continue;
+            }
           }
           break;
         }
       }
 
-      console.error('[GeminiTextAIProvider] API call failed:', lastError);
       if (lastError && typeof lastError === 'object') {
         (lastError as any).provider = 'gemini';
         (lastError as any).model = targetModel;
@@ -526,7 +594,8 @@ export class GeminiTextAIProvider implements ITextAIProvider {
     request: TextGenerationRequest,
     onChunk: (chunk: string, isLast: boolean) => void
   ): Promise<TextGenerationResponse> {
-    if (!this.ai || !this.isConfigured) {
+    const aiClient = this.syncClientFromConfig();
+    if (!aiClient || !this.isConfigured) {
       const missingErr = new ProviderError(
         'Gemini AI service is unconfigured. Set GEMINI_API_KEY.',
         'gemini',
@@ -565,51 +634,62 @@ export class GeminiTextAIProvider implements ITextAIProvider {
       const contents = this.formatGeminiContents(request.messages);
 
       const maxTokens = request.maxTokens ?? 4096;
+      const isG4 = isGemini4Model(targetModel);
       const config: any = {
         systemInstruction: request.systemPrompt,
-        temperature: request.temperature ?? 0.7,
         maxOutputTokens: maxTokens,
         abortSignal: controller.signal,
       };
 
-      if (GeminiTextAIProvider.supportsThinkingConfig && maxTokens > 300) {
-        config.thinkingConfig = {
-          thinkingBudget: 256,
-        };
+      if (!isG4) {
+        config.temperature = request.temperature ?? 0.7;
+        if (GeminiTextAIProvider.supportsThinkingConfig && maxTokens > 300) {
+          config.thinkingConfig = {
+            thinkingBudget: 256,
+          };
+        }
       }
 
       let responseStream: any;
-      try {
-        responseStream = await this.ai.models.generateContentStream({
-          model: targetModel,
-          contents,
-          config,
-        });
-      } catch (streamInitErr: any) {
-        if (controller.signal.aborted) {
-          throw new ProviderError(
-            'Gemini stream request timed out after 30 seconds.',
-            'gemini',
-            'PROVIDER_TIMEOUT',
-            504,
-            targetModel
-          );
-        }
-        const msg = String(streamInitErr?.message || '');
-        if (
-          config.thinkingConfig &&
-          (/thinking[-_]?config|thinking[-_]?budget|thinking_process/i.test(msg) ||
-            (msg.includes('INVALID_ARGUMENT') && /thinking/i.test(msg)))
-        ) {
-          console.warn('[GeminiTextAIProvider] Stream rejected thinkingConfig. Disabling thinkingConfig and retrying stream setup...');
-          GeminiTextAIProvider.supportsThinkingConfig = false;
-          delete config.thinkingConfig;
-          responseStream = await this.ai.models.generateContentStream({
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          responseStream = await aiClient.models.generateContentStream({
             model: targetModel,
             contents,
             config,
           });
-        } else {
+          break;
+        } catch (streamInitErr: any) {
+          if (controller.signal.aborted) {
+            throw new ProviderError(
+              'Gemini stream request timed out after 30 seconds.',
+              'gemini',
+              'PROVIDER_TIMEOUT',
+              504,
+              targetModel
+            );
+          }
+          const msg = String(streamInitErr?.message || '');
+          if (
+            config.thinkingConfig &&
+            (/thinking[-_]?config|thinking[-_]?budget|thinking_process/i.test(msg) ||
+              (msg.includes('INVALID_ARGUMENT') && /thinking/i.test(msg)))
+          ) {
+            GeminiTextAIProvider.supportsThinkingConfig = false;
+            delete config.thinkingConfig;
+            responseStream = await aiClient.models.generateContentStream({
+              model: targetModel,
+              contents,
+              config,
+            });
+            break;
+          }
+          if (attempt < 2 && isTransientGeminiError(streamInitErr)) {
+            await waitJitteredBackoff(attempt, controller.signal);
+            if (!controller.signal.aborted) {
+              continue;
+            }
+          }
           throw streamInitErr;
         }
       }
@@ -703,7 +783,6 @@ export class GeminiTextAIProvider implements ITextAIProvider {
         throw timeoutErr;
       }
 
-      console.error('[GeminiTextAIProvider] Streaming failed:', error);
       if (error && typeof error === 'object') {
         (error as any).provider = 'gemini';
         (error as any).model = targetModel;
@@ -747,13 +826,14 @@ export class GeminiTextAIProvider implements ITextAIProvider {
 
   public async testConnection(customModel?: string): Promise<{ success: boolean; latencyMs: number; model: string; error?: string }> {
     const targetModel = this.resolveRequestModel(customModel);
+    const aiClient = this.syncClientFromConfig();
 
-    if (!this.ai || !this.isConfigured) {
+    if (!aiClient || !this.isConfigured) {
       return {
         success: false,
         latencyMs: 0,
         model: targetModel,
-        error: 'GEMINI_API_KEY is not configured on the backend server.',
+        error: 'GEMINI_API_KEY is not configured.',
       };
     }
 

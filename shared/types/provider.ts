@@ -27,9 +27,16 @@ export const FREE_GEMINI_CHAT_MODELS: GeminiModelOption[] = [
   { id: 'gemini-3.5-flash', label: 'gemini-3.5-flash' },
   { id: 'gemini-3.5-flash-lite', label: 'gemini-3.5-flash-lite' },
   { id: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite' },
-  { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro' },
-  { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
-  { id: 'gemini-2.5-flash-lite', label: 'gemini-2.5-flash-lite' },
+];
+
+export const RESILIENT_GEMINI_FALLBACK_MODELS: string[] = [
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-4-hydrogen',
+  'gemini-3.5-flash',
+  'gemini-3.6-flash',
+  'gemini-3.7-flash',
+  'gemini-3.8-flash',
 ];
 
 export const FREE_GEMINI_VOICE_MODELS: GeminiModelOption[] = [
@@ -204,6 +211,24 @@ export function formatCleanProviderError(error: any): {
   model?: string;
   retryAfterSeconds?: number;
 } {
+  // Prevent double-wrapping errors that were already cleanly formatted into ProviderError
+  if (
+    error &&
+    typeof error === 'object' &&
+    (error instanceof ProviderError || error.name === 'ProviderError') &&
+    typeof error.message === 'string' &&
+    /\[Status\s+\d{3}\]\.?$/.test(error.message.trim())
+  ) {
+    return {
+      cleanMessage: error.message.trim(),
+      code: error.code || 'PROVIDER_ERROR',
+      statusCode: typeof error.statusCode === 'number' ? error.statusCode : 500,
+      provider: error.provider || 'gemini',
+      model: error.model,
+      retryAfterSeconds: error.retryAfterSeconds,
+    };
+  }
+
   const rawMsg = typeof error === 'string' ? error : error?.message || '';
   let parsedJson: any = null;
   const jsonMatch = rawMsg.match(/\{[\s\S]*\}/);

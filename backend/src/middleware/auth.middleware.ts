@@ -134,12 +134,28 @@ export function requireAuthIfConfigured(req: Request, res: Response, next: NextF
   next();
 }
 
+export function isOwnerAuthEnforced(): boolean {
+  if (process.env.ENFORCE_OWNER_AUTH === 'true') return true;
+  if (process.env.DISABLE_OWNER_AUTH === 'true') return false;
+  return SupabaseAuthService.isConfigured();
+}
+
 /**
- * Strictly protects administrative & provider-configuration endpoints.
- * Always fails closed: rejects unauthenticated callers (401) and non-owners (403),
- * and logs every unauthorized attempt to SecurityAuditService.
+ * Strictly protects administrative & provider-configuration endpoints when auth is configured/enforced.
+ * In local development mode (when Supabase Auth is not configured and ENFORCE_OWNER_AUTH !== 'true'),
+ * allows direct developer access without requiring login or OWNER_USER_ID.
  */
 export function requireOwner(req: Request, res: Response, next: NextFunction): void {
+  if (!isOwnerAuthEnforced()) {
+    req.auth = {
+      authenticated: true,
+      role: 'owner',
+      isOwner: true,
+    };
+    next();
+    return;
+  }
+
   const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
   const reqPath = req.originalUrl || req.path;
 

@@ -4,6 +4,7 @@ import { JEXA_IDENTITY } from '../../../ai/brain/identity';
 import { BrainProfile } from '../../../shared/types/brain';
 import { isTtsModel, scrubSecretsAndUrls } from '../../../shared/types/provider';
 import { SecurityAuditService } from '../services/security-audit.service';
+import { isOwnerAuthEnforced } from '../middleware/auth.middleware';
 
 let inMemoryBrainProfile: BrainProfile | null = null;
 
@@ -69,7 +70,7 @@ export class BrainController {
       const profile = getInMemoryBrainProfile();
       const registry = AIProviderRegistry.getInstance();
       const activeTextType = registry.getDefaultTextType();
-      const isOwner = Boolean(req.auth?.isOwner);
+      const isOwner = Boolean(req.auth?.isOwner) || !isOwnerAuthEnforced();
       const rawStatus = registry.getStatus(
         false,
         activeTextType,

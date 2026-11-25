@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import { ApiClient, setAccessTokenProvider } from '../services/api.client';
+import { ApiClient, hasConfiguredBackend, setAccessTokenProvider } from '../services/api.client';
 
 export interface AuthUser {
   id: string;
@@ -115,10 +115,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [clearMemorySession, scheduleProactiveRefresh]);
 
-  // Restore session cleanly via HttpOnly cookie on startup (never reads localStorage)
+  // Restore session cleanly via HttpOnly cookie on startup (only when backend is configured)
   useEffect(() => {
     let active = true;
     const initSession = async () => {
+      if (!hasConfiguredBackend()) {
+        setSetup(DEFAULT_SETUP);
+        setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
       try {
         const sessionStatus = await ApiClient.getAuthSession();

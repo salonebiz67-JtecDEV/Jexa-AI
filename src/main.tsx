@@ -9,6 +9,7 @@ import {
   isNative,
   unregisterServiceWorkersAndClearCaches,
 } from './utils/platform.ts';
+import { initVariablesStorage } from './services/variablesStorage.ts';
 
 if (typeof window !== 'undefined') {
   if (isNative()) {
@@ -54,8 +55,10 @@ if (typeof window !== 'undefined') {
   }
 }
 
-createRoot(document.getElementById('root')!).render(
-  <ErrorBoundary>
-    <App />
-  </ErrorBoundary>
-);
+void initVariablesStorage().finally(() => {
+  createRoot(document.getElementById('root')!).render(
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  );
+});

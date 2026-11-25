@@ -37,7 +37,7 @@ export const ServerUnreachableBanner: React.FC<ServerUnreachableBannerProps> = (
           <div className="min-w-0">
             <div className="font-semibold text-white truncate">Cannot reach server</div>
             <div className="text-[11px] text-rose-200/80 truncate">
-              Check your connection or wait for the backend to wake up.
+              Check your internet connection or configured backend URL.
             </div>
           </div>
         </div>

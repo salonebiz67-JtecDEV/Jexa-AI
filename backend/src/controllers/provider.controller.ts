@@ -3,6 +3,7 @@ import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { isTtsModel, scrubSecretsAndUrls } from '../../../shared/types/provider';
 import { getInMemoryBrainProfile, updateInMemoryBrainProfile } from './brain.controller';
 import { SecurityAuditService } from '../services/security-audit.service';
+import { isOwnerAuthEnforced } from '../middleware/auth.middleware';
 
 export class ProviderController {
   public static async getStatus(req: Request, res: Response): Promise<void> {
@@ -10,7 +11,7 @@ export class ProviderController {
       const profile = getInMemoryBrainProfile();
       const registry = AIProviderRegistry.getInstance();
       const defaultTextType = registry.getDefaultTextType();
-      const isOwner = Boolean(req.auth?.isOwner);
+      const isOwner = Boolean(req.auth?.isOwner) || !isOwnerAuthEnforced();
       const status = registry.getStatus(
         false,
         defaultTextType,

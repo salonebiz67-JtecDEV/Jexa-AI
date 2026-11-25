@@ -14,29 +14,73 @@ import {
   StreamChatEvent,
   WebSearchResultItem,
 } from '../../shared/types';
-
+import { LocalConfigManager } from '../../shared/config/local-config';
+import { LocalGeminiError, LocalGeminiService } from './localGemini.service';
 import { isNative } from '../utils/platform';
 
 // =========================================================================
-// Centralized API Configuration for Native Android, GitHub Pages & Render
+// Dynamic Backend Origin Resolution (Render Disconnected by Default)
 // =========================================================================
-const DEFAULT_PROD_RENDER_URL = 'https://jexa-ai.onrender.com';
 const isGitHubPages =
   typeof window !== 'undefined' && window.location.hostname.includes('github.io');
 
-const configuredBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
-const resolvedBackendOrigin =
-  configuredBase || (isNative() || isGitHubPages ? DEFAULT_PROD_RENDER_URL : '');
+const BUILD_TIME_API_BASE = (import.meta.env.VITE_API_BASE_URL || '').trim();
 
-export const API_BASE = resolvedBackendOrigin
-  ? `${resolvedBackendOrigin.replace(/\/+$/, '')}/api`
-  : '/api';
+function normalizeOrigin(raw: string | undefined): string {
+  const trimmed = (raw || '').trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, '');
+    }
+  } catch {
+    // Ignore invalid backend URL strings
+  }
+  return '';
+}
+
+export function getBackendOrigin(): string {
+  const variableBackend =
+    LocalConfigManager.get('BACKEND_URL') || LocalConfigManager.get('API_BASE_URL');
+  return normalizeOrigin(variableBackend) || normalizeOrigin(BUILD_TIME_API_BASE);
+}
+
+export function hasConfiguredBackend(): boolean {
+  if (getBackendOrigin()) {
+    return true;
+  }
+  // Same-origin /api is only valid when served directly from a local/hosted Express server,
+  // never inside Capacitor native WebView or static GitHub Pages.
+  if (isNative() || isGitHubPages) {
+    return false;
+  }
+  if (typeof window !== 'undefined' && /^https?:$/.test(window.location.protocol)) {
+    return true;
+  }
+  return false;
+}
+
+export function getApiBase(): string {
+  const origin = getBackendOrigin();
+  return origin ? `${origin}/api` : '/api';
+}
+
+// Preserved static export for legacy callers; prefer getApiBase() for live variable updates
+export const API_BASE = getApiBase();
 
 type ReachabilityListener = (unreachable: boolean) => void;
 const reachabilityListeners = new Set<ReachabilityListener>();
 let isServerUnreachable = false;
 
 export function reportServerUnreachable(): void {
+  if (!hasConfiguredBackend()) {
+    if (isServerUnreachable) {
+      isServerUnreachable = false;
+      reachabilityListeners.forEach((fn) => fn(false));
+    }
+    return;
+  }
   if (!isServerUnreachable) {
     isServerUnreachable = true;
     reachabilityListeners.forEach((fn) => fn(true));
@@ -52,7 +96,7 @@ export function reportServerReachable(): void {
 
 export function subscribeServerReachability(listener: ReachabilityListener): () => void {
   reachabilityListeners.add(listener);
-  listener(isServerUnreachable);
+  listener(hasConfiguredBackend() ? isServerUnreachable : false);
   return () => {
     reachabilityListeners.delete(listener);
   };
@@ -140,6 +184,51 @@ export class ApiError extends Error {
   }
 }
 
+function toApiError(err: unknown): ApiError {
+  if (err instanceof ApiError) return err;
+  if (err instanceof LocalGeminiError) {
+    const apiErr = new ApiError(err.message, err.status, err.code, err.provider);
+    (apiErr as any).model = err.model;
+    (apiErr as any).fallbackUsed = err.fallbackUsed;
+    return apiErr;
+  }
+  const anyErr = err as any;
+  const apiErr = new ApiError(
+    anyErr?.message || 'Request failed.',
+    typeof anyErr?.status === 'number' ? anyErr.status : 500,
+    anyErr?.code,
+    anyErr?.provider
+  );
+  if (anyErr?.model) (apiErr as any).model = anyErr.model;
+  if (anyErr?.fallbackUsed !== undefined) (apiErr as any).fallbackUsed = anyErr.fallbackUsed;
+  return apiErr;
+}
+
+function hasLocalGeminiKey(): boolean {
+  return Boolean(LocalConfigManager.getGeminiConfig().apiKey);
+}
+
+function shouldFallbackToLocalGemini(err: any): boolean {
+  if (!hasLocalGeminiKey()) return false;
+  return (
+    err?.code === 'MISSING_CREDENTIALS' ||
+    err?.code === 'NOT_CONFIGURED' ||
+    err?.code === 'NETWORK_FAILURE' ||
+    err?.code === 'REQUEST_TIMEOUT'
+  );
+}
+
+function requireBackendConfigured(featureLabel: string): string {
+  if (!hasConfiguredBackend()) {
+    throw new ApiError(
+      `${featureLabel} requires a connected backend server. Configure BACKEND_URL in Variables or VITE_API_BASE_URL.`,
+      503,
+      'BACKEND_REQUIRED'
+    );
+  }
+  return getApiBase();
+}
+
 type AccessTokenProvider = () => Promise<string | null> | string | null;
 let accessTokenProvider: AccessTokenProvider | null = null;
 
@@ -207,7 +296,7 @@ async function fetchJson<T>(url: string, options?: RequestInit, allowRetry = tru
       }
     }
 
-    console.warn(`[ApiClient] Network failure requesting ${url}:`, netErr);
+    console.warn(`[ApiClient] Network failure requesting ${url}:`, netErr?.message || 'network error');
     reportServerUnreachable();
     throw new ApiError(
       'Cannot reach server. Please check your connection and try again.',
@@ -269,63 +358,94 @@ export interface SendMessageStreamOptions {
   onError?: (error: Error) => void;
 }
 
+function buildCleanMessagePayload(payload: SendMessagePayload, stream: boolean): SendMessagePayload {
+  return {
+    message: typeof payload?.message === 'string' ? payload.message : '',
+    conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
+    personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
+    textProvider: payload?.textProvider,
+    textModel: typeof payload?.textModel === 'string' ? payload.textModel : undefined,
+    backupModel: typeof payload?.backupModel === 'string' ? payload.backupModel : undefined,
+    history: Array.isArray(payload?.history) ? payload.history.slice(-8) : undefined,
+    aboutMe: typeof payload?.aboutMe === 'string' ? payload.aboutMe.slice(0, 1500) : undefined,
+    behaviorInstructions:
+      typeof payload?.behaviorInstructions === 'string'
+        ? payload.behaviorInstructions.slice(0, 1500)
+        : undefined,
+    stream,
+    isVoiceMode: Boolean(payload?.isVoiceMode),
+    userContext: payload?.userContext,
+  };
+}
+
 export const ApiClient = {
   // Chat
   async sendMessage(payload: SendMessagePayload): Promise<ChatResponsePayload> {
-    const cleanPayload: SendMessagePayload = {
-      message: typeof payload?.message === 'string' ? payload.message : '',
-      conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
-      personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
-      textProvider: payload?.textProvider,
-      textModel: typeof payload?.textModel === 'string' ? payload.textModel : undefined,
-      backupModel: typeof payload?.backupModel === 'string' ? payload.backupModel : undefined,
-      history: Array.isArray(payload?.history) ? payload.history.slice(-8) : undefined,
-      aboutMe: typeof payload?.aboutMe === 'string' ? payload.aboutMe.slice(0, 1500) : undefined,
-      behaviorInstructions:
-        typeof payload?.behaviorInstructions === 'string'
-          ? payload.behaviorInstructions.slice(0, 1500)
-          : undefined,
-      stream: false,
-      isVoiceMode: Boolean(payload?.isVoiceMode),
-      userContext: payload?.userContext,
-    };
-    return fetchJson<ChatResponsePayload>(`${API_BASE}/chat`, {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload),
-    });
+    const cleanPayload = buildCleanMessagePayload(payload, false);
+
+    if (!hasConfiguredBackend()) {
+      try {
+        return await LocalGeminiService.sendMessage(cleanPayload);
+      } catch (err) {
+        throw toApiError(err);
+      }
+    }
+
+    try {
+      return await fetchJson<ChatResponsePayload>(`${getApiBase()}/chat`, {
+        method: 'POST',
+        body: JSON.stringify(cleanPayload),
+      });
+    } catch (err: any) {
+      if (shouldFallbackToLocalGemini(err)) {
+        try {
+          reportServerReachable();
+          return await LocalGeminiService.sendMessage(cleanPayload);
+        } catch (localErr) {
+          throw toApiError(localErr);
+        }
+      }
+      throw err;
+    }
   },
 
-  // Streaming Chat with Server-Sent Events (SSE) and Real-Time Dynamic Status
+  // Streaming Chat with Server-Sent Events (SSE) or Direct On-Device Gemini Stream
   async sendMessageStream(
     payload: SendMessagePayload,
     options?: SendMessageStreamOptions
   ): Promise<ChatResponsePayload> {
-    const cleanPayload: SendMessagePayload = {
-      message: typeof payload?.message === 'string' ? payload.message : '',
-      conversationId: typeof payload?.conversationId === 'string' ? payload.conversationId : undefined,
-      personaId: typeof payload?.personaId === 'string' ? payload.personaId : undefined,
-      textProvider: payload?.textProvider,
-      textModel: typeof payload?.textModel === 'string' ? payload.textModel : undefined,
-      backupModel: typeof payload?.backupModel === 'string' ? payload.backupModel : undefined,
-      history: Array.isArray(payload?.history) ? payload.history.slice(-8) : undefined,
-      aboutMe: typeof payload?.aboutMe === 'string' ? payload.aboutMe.slice(0, 1500) : undefined,
-      behaviorInstructions:
-        typeof payload?.behaviorInstructions === 'string'
-          ? payload.behaviorInstructions.slice(0, 1500)
-          : undefined,
-      stream: true,
-      isVoiceMode: Boolean(payload?.isVoiceMode),
-      userContext: payload?.userContext,
+    const cleanPayload = buildCleanMessagePayload(payload, true);
+
+    const runLocalStream = async (): Promise<ChatResponsePayload> => {
+      try {
+        return await LocalGeminiService.sendMessageStream(cleanPayload, {
+          onStatusUpdate: (status, details) => {
+            options?.onStatusUpdate?.(status as AIActivityStatus, details);
+          },
+          onChunk: options?.onChunk,
+          onComplete: options?.onComplete,
+        });
+      } catch (err) {
+        const apiErr = toApiError(err);
+        options?.onError?.(apiErr);
+        throw apiErr;
+      }
     };
+
+    if (!hasConfiguredBackend()) {
+      return runLocalStream();
+    }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream, application/json',
     };
 
+    let emittedChunks = false;
+
     try {
       const response = await fetchWithTimeout(
-        `${API_BASE}/chat`,
+        `${getApiBase()}/chat`,
         {
           method: 'POST',
           headers,
@@ -352,6 +472,9 @@ export const ApiClient = {
         }
         const err = new ApiError(errorMsg, response.status, errorCode, errorProvider);
         (err as any).model = errorModel;
+        if (shouldFallbackToLocalGemini(err)) {
+          return await runLocalStream();
+        }
         options?.onError?.(err);
         throw err;
       }
@@ -363,46 +486,43 @@ export const ApiClient = {
         let buffer = '';
         let finalResult: ChatResponsePayload | null = null;
 
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n\n');
-            buffer = lines.pop() || '';
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || '';
 
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed.startsWith('data:')) continue;
-              const dataStr = trimmed.slice(5).trim();
-              if (!dataStr) continue;
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const dataStr = trimmed.slice(5).trim();
+            if (!dataStr) continue;
 
-              let event: StreamChatEvent;
-              try {
-                event = JSON.parse(dataStr);
-              } catch (parseErr) {
-                console.warn('[ApiClient] Failed to parse SSE event chunk:', dataStr, parseErr);
-                continue;
-              }
+            let event: StreamChatEvent;
+            try {
+              event = JSON.parse(dataStr);
+            } catch (parseErr) {
+              console.warn('[ApiClient] Failed to parse SSE event chunk:', dataStr, parseErr);
+              continue;
+            }
 
-              if (event.type === 'status') {
-                options?.onStatusUpdate?.(event.status, event.details);
-              } else if (event.type === 'chunk') {
-                options?.onChunk?.(event.chunk);
-              } else if (event.type === 'complete') {
-                finalResult = event.data;
-                options?.onComplete?.(event.data);
-              } else if (event.type === 'error') {
-                const err = new ApiError(event.error || 'Server error during chat stream.', 500, event.code, event.provider);
-                (err as any).model = event.model;
-                (err as any).fallbackUsed = event.fallbackUsed;
-                throw err;
-              }
+            if (event.type === 'status') {
+              options?.onStatusUpdate?.(event.status, event.details);
+            } else if (event.type === 'chunk') {
+              emittedChunks = true;
+              options?.onChunk?.(event.chunk);
+            } else if (event.type === 'complete') {
+              finalResult = event.data;
+              options?.onComplete?.(event.data);
+            } else if (event.type === 'error') {
+              const err = new ApiError(event.error || 'Server error during chat stream.', 500, event.code, event.provider);
+              (err as any).model = event.model;
+              (err as any).fallbackUsed = event.fallbackUsed;
+              throw err;
             }
           }
-        } catch (streamErr: any) {
-          throw streamErr;
         }
 
         if (finalResult) {
@@ -411,7 +531,6 @@ export const ApiClient = {
         throw new Error('Stream ended without receiving final payload.');
       }
 
-      // Fallback: If server responded with application/json
       const body = await response.json();
       if (body.success === false) {
         const errorMsg = body?.error || body?.message || 'Chat request failed';
@@ -441,17 +560,34 @@ export const ApiClient = {
       } else if (err.status === 0 || err.code === 'NETWORK_FAILURE') {
         reportServerUnreachable();
       }
+
+      if (!emittedChunks && shouldFallbackToLocalGemini(normalizedErr)) {
+        reportServerReachable();
+        return await runLocalStream();
+      }
+
       options?.onError?.(normalizedErr);
       throw normalizedErr;
     }
   },
 
   async generateConversationTitle(userMessage: string, assistantMessage?: string): Promise<string> {
-    const res = await fetchJson<{ title: string }>(`${API_BASE}/chat/title`, {
-      method: 'POST',
-      body: JSON.stringify({ userMessage, assistantMessage }),
-    });
-    return (res?.title || '').trim();
+    if (!hasConfiguredBackend()) {
+      return LocalGeminiService.generateConversationTitle(userMessage, assistantMessage);
+    }
+
+    try {
+      const res = await fetchJson<{ title: string }>(`${getApiBase()}/chat/title`, {
+        method: 'POST',
+        body: JSON.stringify({ userMessage, assistantMessage }),
+      });
+      return (res?.title || '').trim();
+    } catch (err) {
+      if (shouldFallbackToLocalGemini(err)) {
+        return LocalGeminiService.generateConversationTitle(userMessage, assistantMessage);
+      }
+      return '';
+    }
   },
 
   async synthesizeVoiceBlob(payload: VoiceSynthesisRequest): Promise<{
@@ -469,10 +605,18 @@ export const ApiClient = {
       pitch: payload?.pitch,
     };
 
+    if (!hasConfiguredBackend()) {
+      try {
+        return await LocalGeminiService.synthesizeSpeechBlob(cleanPayload);
+      } catch (err) {
+        throw toApiError(err);
+      }
+    }
+
     let res: Response;
     try {
       res = await fetchWithTimeout(
-        `${API_BASE}/voice`,
+        `${getApiBase()}/voice`,
         {
           method: 'POST',
           headers: {
@@ -484,6 +628,10 @@ export const ApiClient = {
         25000
       );
     } catch (err: any) {
+      if (hasLocalGeminiKey()) {
+        reportServerReachable();
+        return await LocalGeminiService.synthesizeSpeechBlob(cleanPayload);
+      }
       if (err.name === 'AbortError') {
         throw new ApiError('Voice synthesis timed out after 25 seconds.', 504, 'VOICE_TIMEOUT');
       }
@@ -513,7 +661,11 @@ export const ApiClient = {
     const body: any = await res.json();
     if (!res.ok || body.success === false) {
       const errorMsg = body?.message || body?.error || `Voice synthesis failed (${res.status})`;
-      throw new ApiError(errorMsg, res.status, body?.code, body?.provider);
+      const apiErr = new ApiError(errorMsg, res.status, body?.code, body?.provider);
+      if (shouldFallbackToLocalGemini(apiErr) || (body?.code === 'NOT_CONFIGURED' && hasLocalGeminiKey())) {
+        return await LocalGeminiService.synthesizeSpeechBlob(cleanPayload);
+      }
+      throw apiErr;
     }
 
     const data = (body.data !== undefined ? body.data : body) as VoiceSynthesisResponse;
@@ -531,7 +683,7 @@ export const ApiClient = {
     };
   },
 
-  // Voice Synthesis (Gemini TTS — handles binary audio Blob and JSON data URLs safely)
+  // Voice Synthesis (Gemini TTS — handles binary audio Blob, JSON data URLs, and direct on-device mode)
   async requestVoiceSynthesis(payload: VoiceSynthesisRequest): Promise<VoiceSynthesisResponse> {
     const cleanPayload: VoiceSynthesisRequest = {
       text: typeof payload?.text === 'string' ? payload.text : '',
@@ -542,10 +694,27 @@ export const ApiClient = {
       pitch: payload?.pitch,
     };
 
+    if (!hasConfiguredBackend()) {
+      try {
+        const synth = await LocalGeminiService.synthesizeSpeechBlob(cleanPayload);
+        const objectUrl = URL.createObjectURL(synth.blob);
+        return {
+          audioUrl: objectUrl,
+          format: 'audio/wav',
+          isSimulated: false,
+          message: 'Voice synthesized on device.',
+          provider: 'gemini',
+          model: synth.model,
+        };
+      } catch (err) {
+        throw toApiError(err);
+      }
+    }
+
     let res: Response;
     try {
       res = await fetchWithTimeout(
-        `${API_BASE}/voice`,
+        `${getApiBase()}/voice`,
         {
           method: 'POST',
           headers: {
@@ -557,6 +726,17 @@ export const ApiClient = {
         25000
       );
     } catch (err: any) {
+      if (hasLocalGeminiKey()) {
+        const synth = await LocalGeminiService.synthesizeSpeechBlob(cleanPayload);
+        return {
+          audioUrl: URL.createObjectURL(synth.blob),
+          format: 'audio/wav',
+          isSimulated: false,
+          message: 'Voice synthesized on device.',
+          provider: 'gemini',
+          model: synth.model,
+        };
+      }
       if (err.name === 'AbortError') {
         throw new ApiError('Voice synthesis timed out after 25 seconds.', 504, 'VOICE_TIMEOUT');
       }
@@ -584,70 +764,153 @@ export const ApiClient = {
     const body: any = await res.json();
     if (!res.ok || body.success === false) {
       const errorMsg = body?.message || body?.error || `Voice synthesis failed (${res.status})`;
-      throw new ApiError(errorMsg, res.status, body?.code, body?.provider);
+      const apiErr = new ApiError(errorMsg, res.status, body?.code, body?.provider);
+      if (shouldFallbackToLocalGemini(apiErr) || (body?.code === 'NOT_CONFIGURED' && hasLocalGeminiKey())) {
+        const synth = await LocalGeminiService.synthesizeSpeechBlob(cleanPayload);
+        return {
+          audioUrl: URL.createObjectURL(synth.blob),
+          format: 'audio/wav',
+          isSimulated: false,
+          message: 'Voice synthesized on device.',
+          provider: 'gemini',
+          model: synth.model,
+        };
+      }
+      throw apiErr;
     }
     return (body.data !== undefined ? body.data : body) as VoiceSynthesisResponse;
   },
 
   async synthesizeBinaryAudio(payload: VoiceSynthesisRequest): Promise<Blob> {
-    const cleanPayload: VoiceSynthesisRequest = {
-      text: typeof payload?.text === 'string' ? payload.text : '',
-      voiceId: payload?.voiceId,
-      provider: 'gemini',
-      model: typeof payload?.model === 'string' ? payload.model : undefined,
-      speed: payload?.speed,
-      pitch: payload?.pitch,
-    };
-
-    const res = await fetchWithTimeout(`${API_BASE}/voice/synthesize`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'audio/wav, audio/*',
-      },
-      body: JSON.stringify(cleanPayload),
-    });
-
-    const contentType = res.headers.get('content-type') || '';
-    if (!res.ok || contentType.includes('application/json')) {
-      try {
-        const errJson = await res.json();
-        throw new ApiError(errJson.message || errJson.error || 'Voice synthesis failed', res.status, errJson.code, errJson.provider);
-      } catch (e: any) {
-        if (e instanceof ApiError) throw e;
-        throw new ApiError(`Voice provider returned error HTTP ${res.status}`, res.status);
-      }
-    }
-
-    return await res.blob();
+    const synth = await this.synthesizeVoiceBlob(payload);
+    return synth.blob;
   },
 
   async getVoiceHealth(): Promise<VoiceHealthResponse> {
-    return fetchJson<VoiceHealthResponse>(`${API_BASE}/voice/health`);
+    if (!hasConfiguredBackend()) {
+      const status = LocalGeminiService.getLocalProviderStatus();
+      return {
+        gemini: {
+          configured: status.voiceProvider.isConfigured,
+          provider: 'gemini',
+          model: status.voiceProvider.model,
+        },
+      };
+    }
+    return fetchJson<VoiceHealthResponse>(`${getApiBase()}/voice/health`);
   },
 
   // Brain Profile & Providers
   async getBrainProfile(): Promise<{ profile: BrainProfile; providerStatus: ProviderStatus }> {
-    return fetchJson<{ profile: BrainProfile; providerStatus: ProviderStatus }>(`${API_BASE}/ai/brain-profile`);
+    if (!hasConfiguredBackend()) {
+      return LocalGeminiService.getLocalBrainProfile();
+    }
+    try {
+      const data = await fetchJson<{ profile: BrainProfile; providerStatus: ProviderStatus }>(
+        `${getApiBase()}/ai/brain-profile`
+      );
+      // If server has no Gemini key configured but device has one in Variables, show configured locally
+      if (!data.providerStatus?.textProvider?.isConfigured && hasLocalGeminiKey()) {
+        const local = LocalGeminiService.getLocalProviderStatus();
+        return {
+          profile: data.profile,
+          providerStatus: {
+            ...data.providerStatus,
+            textProvider: local.textProvider,
+            voiceProvider: local.voiceProvider,
+            availableTextProviders: local.availableTextProviders,
+            availableVoiceProviders: local.availableVoiceProviders,
+            isProductionReady: local.isProductionReady,
+          },
+        };
+      }
+      return data;
+    } catch (err) {
+      if (shouldFallbackToLocalGemini(err) || !hasConfiguredBackend()) {
+        return LocalGeminiService.getLocalBrainProfile();
+      }
+      return LocalGeminiService.getLocalBrainProfile();
+    }
   },
 
   async updateBrainProfile(updates: Partial<BrainProfile>): Promise<BrainProfile> {
-    return fetchJson<BrainProfile>(`${API_BASE}/ai/brain-profile`, {
-      method: 'POST',
-      body: JSON.stringify(updates),
-    });
+    if (!hasConfiguredBackend()) {
+      const { profile } = LocalGeminiService.getLocalBrainProfile();
+      return { ...profile, ...updates };
+    }
+    try {
+      return await fetchJson<BrainProfile>(`${getApiBase()}/ai/brain-profile`, {
+        method: 'POST',
+        body: JSON.stringify(updates),
+      });
+    } catch (err) {
+      if (shouldFallbackToLocalGemini(err) || hasLocalGeminiKey()) {
+        const { profile } = LocalGeminiService.getLocalBrainProfile();
+        return { ...profile, ...updates };
+      }
+      throw err;
+    }
   },
 
   // Provider Status & Testing (Gemini Only)
   async getProviderStatus(): Promise<ProviderStatusSummary> {
-    return fetchJson<ProviderStatusSummary>(`${API_BASE}/providers/status`);
+    const buildLocalSummary = (): ProviderStatusSummary => {
+      const st = LocalGeminiService.getLocalProviderStatus();
+      return {
+        text: {
+          provider: st.textProvider.type,
+          model: st.textProvider.model,
+          backupModel: st.textProvider.backupModel,
+          configured: st.textProvider.isConfigured,
+          status: st.textProvider.status,
+          error: st.textProvider.lastError,
+        },
+        voice: {
+          provider: st.voiceProvider.type,
+          model: st.voiceProvider.model,
+          configured: st.voiceProvider.isConfigured,
+          voiceId: st.voiceProvider.voiceId,
+          status: st.voiceProvider.status,
+          error: st.voiceProvider.lastError,
+        },
+        availableText: st.availableTextProviders,
+        availableVoice: st.availableVoiceProviders,
+      };
+    };
+
+    if (!hasConfiguredBackend()) {
+      return buildLocalSummary();
+    }
+
+    try {
+      const data = await fetchJson<ProviderStatusSummary>(`${getApiBase()}/providers/status`);
+      if (!data?.text?.configured && hasLocalGeminiKey()) {
+        return buildLocalSummary();
+      }
+      return data;
+    } catch (err) {
+      if (shouldFallbackToLocalGemini(err) || hasLocalGeminiKey()) {
+        return buildLocalSummary();
+      }
+      throw err;
+    }
   },
 
   async testTextProvider(provider: TextProviderType = 'gemini', model?: string): Promise<ProviderTestResult> {
-    return fetchJson<ProviderTestResult>(`${API_BASE}/providers/test-text`, {
-      method: 'POST',
-      body: JSON.stringify({ provider, model }),
-    });
+    if (!hasConfiguredBackend()) {
+      return LocalGeminiService.testTextConnection(model);
+    }
+    try {
+      return await fetchJson<ProviderTestResult>(`${getApiBase()}/providers/test-text`, {
+        method: 'POST',
+        body: JSON.stringify({ provider, model }),
+      });
+    } catch (err) {
+      if (shouldFallbackToLocalGemini(err)) {
+        return LocalGeminiService.testTextConnection(model);
+      }
+      throw err;
+    }
   },
 
   async selectProviders(selection: {
@@ -658,34 +921,62 @@ export const ApiClient = {
     voiceModel?: string;
     theme?: string;
   }): Promise<{ success: boolean; data: any }> {
-    return fetchJson<{ success: boolean; data: any }>(`${API_BASE}/providers/select`, {
-      method: 'POST',
-      body: JSON.stringify(selection),
-    });
-  },
-
-  async testVoiceProvider(provider: VoiceProviderType = 'gemini', text?: string, model?: string): Promise<ProviderTestResult> {
+    if (!hasConfiguredBackend()) {
+      return { success: true, data: selection };
+    }
     try {
-      return await fetchJson<ProviderTestResult>(`${API_BASE}/voice/test`, {
+      return await fetchJson<{ success: boolean; data: any }>(`${getApiBase()}/providers/select`, {
         method: 'POST',
-        body: JSON.stringify({ provider, text, model }),
+        body: JSON.stringify(selection),
       });
-    } catch {
-      return await fetchJson<ProviderTestResult>(`${API_BASE}/providers/test-voice`, {
-        method: 'POST',
-        body: JSON.stringify({ provider, model }),
-      });
+    } catch (err) {
+      if (shouldFallbackToLocalGemini(err)) {
+        return { success: true, data: selection };
+      }
+      throw err;
     }
   },
 
-  // Health
+  async testVoiceProvider(provider: VoiceProviderType = 'gemini', text?: string, model?: string): Promise<ProviderTestResult> {
+    if (!hasConfiguredBackend()) {
+      return LocalGeminiService.testVoiceConnection(model);
+    }
+    try {
+      return await fetchJson<ProviderTestResult>(`${getApiBase()}/voice/test`, {
+        method: 'POST',
+        body: JSON.stringify({ provider, text, model }),
+      });
+    } catch (err) {
+      if (shouldFallbackToLocalGemini(err)) {
+        return LocalGeminiService.testVoiceConnection(model);
+      }
+      try {
+        return await fetchJson<ProviderTestResult>(`${getApiBase()}/providers/test-voice`, {
+          method: 'POST',
+          body: JSON.stringify({ provider, model }),
+        });
+      } catch (err2) {
+        if (shouldFallbackToLocalGemini(err2)) {
+          return LocalGeminiService.testVoiceConnection(model);
+        }
+        throw err2;
+      }
+    }
+  },
+
+  // Health (no automatic ping when backend is disconnected)
   async getHealth(): Promise<HealthCheckResponse> {
-    return fetchJson<HealthCheckResponse>(`${API_BASE}/health`, undefined, false);
+    const base = requireBackendConfigured('Backend health check');
+    return fetchJson<HealthCheckResponse>(`${base}/health`, undefined, false);
   },
 
   async checkServerReachability(): Promise<boolean> {
+    if (!hasConfiguredBackend()) {
+      reportServerReachable();
+      return false;
+    }
     try {
-      await fetchJson<HealthCheckResponse>(`${API_BASE}/health`, undefined, false);
+      await fetchJson<HealthCheckResponse>(`${getApiBase()}/health`, undefined, false);
       reportServerReachable();
       return true;
     } catch {
@@ -694,26 +985,30 @@ export const ApiClient = {
     }
   },
 
-  // Usage Tracker & Tools
+  // Backend-only Usage Tracker, Tools & Security Admin Endpoints
   async getUsageSummary(): Promise<any> {
-    return fetchJson<any>(`${API_BASE}/usage/summary`);
+    const base = requireBackendConfigured('Usage telemetry');
+    return fetchJson<any>(`${base}/usage/summary`);
   },
 
   async getToolsStatus(): Promise<{ tools: any[] }> {
-    return fetchJson<{ tools: any[] }>(`${API_BASE}/tools/status`);
+    const base = requireBackendConfigured('Backend tools status');
+    return fetchJson<{ tools: any[] }>(`${base}/tools/status`);
   },
 
   async toggleTool(toolName: string, enabled?: boolean): Promise<{ success: boolean; toolName: string; enabled: boolean }> {
-    return fetchJson<{ success: boolean; toolName: string; enabled: boolean }>(`${API_BASE}/tools/toggle`, {
+    const base = requireBackendConfigured('Tool toggling');
+    return fetchJson<{ success: boolean; toolName: string; enabled: boolean }>(`${base}/tools/toggle`, {
       method: 'POST',
       body: JSON.stringify({ toolName, enabled }),
     });
   },
 
   async testTool(toolName: string): Promise<ToolTestResult> {
+    const base = requireBackendConfigured('Tool testing');
     let response: Response;
     try {
-      response = await fetchWithTimeout(`${API_BASE}/tools/test`, {
+      response = await fetchWithTimeout(`${base}/tools/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ toolName }),
@@ -758,7 +1053,7 @@ export const ApiClient = {
     };
   },
 
-  // Authentication & Owner Session Management
+  // Authentication & Owner Session Management (Backend-dependent)
   async loginWithEmail(email: string, password: string): Promise<{
     authenticated: boolean;
     accessToken: string;
@@ -774,7 +1069,8 @@ export const ApiClient = {
       requireAuthForChat: boolean;
     };
   }> {
-    return fetchJson(`${API_BASE}/auth/login`, {
+    const base = requireBackendConfigured('Owner authentication');
+    return fetchJson(`${base}/auth/login`, {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }, false);
@@ -795,13 +1091,17 @@ export const ApiClient = {
       requireAuthForChat: boolean;
     };
   }> {
-    return fetchJson(`${API_BASE}/auth/refresh`, {
+    const base = requireBackendConfigured('Session refresh');
+    return fetchJson(`${base}/auth/refresh`, {
       method: 'POST',
     }, false);
   },
 
   async logoutSession(): Promise<{ loggedOut: boolean }> {
-    return fetchJson(`${API_BASE}/auth/logout`, {
+    if (!hasConfiguredBackend()) {
+      return { loggedOut: true };
+    }
+    return fetchJson(`${getApiBase()}/auth/logout`, {
       method: 'POST',
     }, false);
   },
@@ -819,7 +1119,21 @@ export const ApiClient = {
       requireAuthForChat: boolean;
     };
   }> {
-    return fetchJson(`${API_BASE}/auth/session`, undefined, false);
+    if (!hasConfiguredBackend()) {
+      return {
+        authenticated: false,
+        user: null,
+        setup: {
+          authConfigured: false,
+          hasOwnerConfigured: false,
+          ownerUserIdConfigured: false,
+          ownerEmailConfigured: false,
+          serviceRoleConfigured: false,
+          requireAuthForChat: false,
+        },
+      };
+    }
+    return fetchJson(`${getApiBase()}/auth/session`, undefined, false);
   },
 
   async getSecurityAuditLogs(limit = 100, eventType?: string): Promise<{
@@ -858,10 +1172,11 @@ export const ApiClient = {
       details?: Record<string, any>;
     }>;
   }> {
+    const base = requireBackendConfigured('Security audit logs');
     const params = new URLSearchParams();
     params.set('limit', String(limit));
     if (eventType) params.set('eventType', eventType);
-    return fetchJson(`${API_BASE}/security/audit-logs?${params.toString()}`, undefined, false);
+    return fetchJson(`${base}/security/audit-logs?${params.toString()}`, undefined, false);
   },
 
   async getSecurityStatus(): Promise<{
@@ -951,6 +1266,7 @@ export const ApiClient = {
       message: string;
     }>;
   }> {
-    return fetchJson(`${API_BASE}/security/status`, undefined, false);
+    const base = requireBackendConfigured('Security status');
+    return fetchJson(`${base}/security/status`, undefined, false);
   },
 };

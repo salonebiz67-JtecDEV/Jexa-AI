@@ -16,6 +16,7 @@ import { resolveLiteLLMModelAlias } from './model-aliases';
 import { normalizeGatewayBaseUrl } from './config';
 import { ErrorLogService } from '../../backend/src/services/error-log.service';
 import { UsageTracker } from '../../backend/src/services/usage-tracker.service';
+import { LocalConfigManager } from '../../shared/config/local-config';
 
 const LITELLM_TIMEOUT_MS = 30000;
 
@@ -140,14 +141,18 @@ export class LiteLLMTextAIProvider implements ITextAIProvider {
 
   constructor(customModel?: string) {
     const rawAlias = resolveLiteLLMModelAlias(
-      customModel || process.env.TEXT_AI_MODEL || DEFAULT_CHAT_ALIAS,
+      customModel || LocalConfigManager.get('TEXT_AI_MODEL') || DEFAULT_CHAT_ALIAS,
       DEFAULT_CHAT_ALIAS
     );
     this.modelName = rawAlias;
 
-    const rawBaseUrl = (process.env.LITELLM_BASE_URL || '').trim().replace(/\/+$/, '');
+    const rawBaseUrl = (LocalConfigManager.get('LITELLM_BASE_URL') || '').trim().replace(/\/+$/, '');
     const normalizedBaseUrl = normalizeGatewayBaseUrl(rawBaseUrl);
-    const rawApiKey = (process.env.LITELLM_API_KEY || process.env.LITELLM_MASTER_KEY || '').trim();
+    const rawApiKey = (
+      LocalConfigManager.get('LITELLM_API_KEY') ||
+      LocalConfigManager.get('LITELLM_MASTER_KEY') ||
+      ''
+    ).trim();
 
     if (normalizedBaseUrl && rawApiKey) {
       this.baseUrl = normalizedBaseUrl;
@@ -191,10 +196,11 @@ export class LiteLLMTextAIProvider implements ITextAIProvider {
   }
 
   private buildChatBody(request: TextGenerationRequest, targetModel: string, stream: boolean): Record<string, any> {
+    const isG4 = /^gemini-4(?:-|$)/i.test(targetModel) || targetModel === 'jexa-chat-fast';
     const body: Record<string, any> = {
       model: targetModel,
       messages: toOpenAIMessages(request.systemPrompt, request.messages),
-      temperature: request.temperature ?? 0.7,
+      ...(isG4 ? {} : { temperature: request.temperature ?? 0.7 }),
       max_tokens: request.maxTokens ?? 4096,
       stream,
       // Explicitly disable gateway response caching for private user conversations

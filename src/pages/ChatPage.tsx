@@ -10,6 +10,7 @@ import { ImageLibrary } from '../components/panels/ImageLibrary';
 import { RemotePanel } from '../components/panels/RemotePanel';
 import { SchedulePanel } from '../components/panels/SchedulePanel';
 import { PluginPanel } from '../components/panels/PluginPanel';
+import { VariablesPanel } from '../components/panels/VariablesPanel';
 import { ToolsPanel } from '../components/panels/ToolsPanel';
 import { ArtifactWorkspace, ArtifactData } from '../components/panels/ArtifactWorkspace';
 import { LiveVoiceModal } from '../components/voice/LiveVoiceModal';
@@ -54,6 +55,7 @@ const getInitialTab = (): ActiveNavTab => {
   if (path.endsWith('/remote') || path.endsWith('/remote/')) return 'remote';
   if (path.endsWith('/schedule') || path.endsWith('/schedule/')) return 'schedule';
   if (path.endsWith('/plugins') || path.endsWith('/plugins/')) return 'plugins';
+  if (path.endsWith('/variables') || path.endsWith('/variables/')) return 'variables';
   if (path.endsWith('/tools') || path.endsWith('/tools/')) return 'tools';
   return 'chat';
 };
@@ -147,6 +149,7 @@ export const ChatPage: React.FC = () => {
         else if (path.endsWith('/remote')) setActiveTab('remote');
         else if (path.endsWith('/schedule')) setActiveTab('schedule');
         else if (path.endsWith('/plugins')) setActiveTab('plugins');
+        else if (path.endsWith('/variables')) setActiveTab('variables');
         else if (path.endsWith('/tools')) setActiveTab('tools');
         else setActiveTab('chat');
         setCurrentArtifact(null);
@@ -186,22 +189,11 @@ export const ChatPage: React.FC = () => {
     }
   }, [activeTab, currentArtifact]);
 
-  // Monitor backend reachability on startup, resume, and request failures
+  // Subscribe to reachability status only when a backend request actually fails (no automatic health/wake-up pings)
   useEffect(() => {
     const unsub = subscribeServerReachability(setServerUnreachable);
-    void ApiClient.checkServerReachability();
-
-    const handleResumeCheck = (e: Event) => {
-      const detail = (e as CustomEvent<{ isActive?: boolean }>).detail;
-      if (detail?.isActive) {
-        void ApiClient.checkServerReachability();
-      }
-    };
-    window.addEventListener('jexa:app-state-change', handleResumeCheck);
-
     return () => {
       unsub();
-      window.removeEventListener('jexa:app-state-change', handleResumeCheck);
     };
   }, []);
 
@@ -916,6 +908,9 @@ export const ChatPage: React.FC = () => {
             plugins={plugins}
             onTogglePlugin={handleTogglePlugin}
           />
+        ) : activeTab === 'variables' ? (
+          /* Local Device Variables Dashboard */
+          <VariablesPanel onBack={handleBackToChat} />
         ) : activeTab === 'tools' ? (
           /* Tools & AI Token Tracker Screen with Clear Back Button */
           <ToolsPanel onBack={handleBackToChat} />
@@ -952,6 +947,14 @@ export const ChatPage: React.FC = () => {
         onClose={() => setSettingsOpen(false)}
         onClearHistory={handleClearHistory}
         liveDebugStats={liveVoice.debugStats}
+        onOpenTools={() => {
+          setSettingsOpen(false);
+          setActiveTab('tools');
+        }}
+        onOpenVariables={() => {
+          setSettingsOpen(false);
+          setActiveTab('variables');
+        }}
       />
 
       {/* Live Voice Experience */}

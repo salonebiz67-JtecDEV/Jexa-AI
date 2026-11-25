@@ -13,6 +13,7 @@ import {
   DEFAULT_CHAT_MODEL,
   DEFAULT_BACKUP_MODEL,
   DEFAULT_VOICE_MODEL,
+  RESILIENT_GEMINI_FALLBACK_MODELS,
   isTtsModel,
 } from '../../shared/types/provider';
 import { AIProvidersConfig, loadAIProvidersConfig, sanitizeTextModel, sanitizeVoiceModel } from './config';
@@ -237,6 +238,53 @@ export class AIProviderRegistry {
 
   public getBackgroundTextProvider(): ITextAIProvider {
     return this.backgroundTextProvider || this.getTextProvider(this.defaultTextType);
+  }
+
+  public clearTextProviderError(type?: TextProviderType): void {
+    const target = type ? this.textProviders.get(type) : this.textProviders.get(this.defaultTextType);
+    if (target && 'lastError' in target) {
+      (target as any).lastError = undefined;
+    }
+    if (!type || type === 'gemini') {
+      const gemini = this.textProviders.get('gemini');
+      if (gemini && 'lastError' in gemini) {
+        (gemini as any).lastError = undefined;
+      }
+    }
+  }
+
+  public getFallbackCandidateProviders(
+    excludeModels: Set<string>,
+    preferredType?: TextProviderType
+  ): ITextAIProvider[] {
+    const useGateway = this.isGatewayActive() || this.isGatewayEnforced();
+    if (useGateway || preferredType === 'litellm') {
+      if (!this.isGatewayActive()) {
+        // Enforced gateway with missing credentials must fail closed rather than cascading
+        return [];
+      }
+      const litellmFallbacks = ['jexa-chat-backup', 'jexa-chat-background'];
+      const out: ITextAIProvider[] = [];
+      for (const alias of litellmFallbacks) {
+        if (!excludeModels.has(alias)) {
+          out.push(new LiteLLMTextAIProvider(alias));
+        }
+      }
+      return out;
+    }
+
+    const geminiClient = this.textProviders.get('gemini');
+    if (!geminiClient?.isConfigured) {
+      return [];
+    }
+
+    const candidates: ITextAIProvider[] = [];
+    for (const modelId of RESILIENT_GEMINI_FALLBACK_MODELS) {
+      if (!excludeModels.has(modelId)) {
+        candidates.push(new GeminiTextAIProvider(modelId));
+      }
+    }
+    return candidates;
   }
 
   public getVoiceProvider(_type?: VoiceProviderType, customModel?: string): IVoiceAIProvider {

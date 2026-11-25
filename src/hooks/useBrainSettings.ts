@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ApiClient } from '../services/api.client';
+import { initVariablesStorage } from '../services/variablesStorage';
 import { BrainProfile, ProviderStatus, PersonalityStyle } from '../../shared/types';
 import { PERSONALITY_PRESETS } from '../../ai/brain/personality';
 
@@ -11,6 +12,7 @@ export function useBrainSettings() {
   const fetchProfile = useCallback(async () => {
     try {
       setIsLoading(true);
+      await initVariablesStorage();
       const data = await ApiClient.getBrainProfile();
       setProfile(data.profile);
       setProviderStatus(data.providerStatus);
