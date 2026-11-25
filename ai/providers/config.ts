@@ -29,6 +29,25 @@ export function sanitizeVoiceModel(modelName: string | undefined, fallback: stri
   return trimmed;
 }
 
+export function normalizeGatewayBaseUrl(rawUrl: string): string {
+  const trimmed = (rawUrl || '').trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  // Support Render fromService hostport (e.g. "jexa-litellm-gateway:4000") by prepending http://
+  const candidate =
+    !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) && /^[a-zA-Z0-9._-]+(?::\d{1,5})?$/.test(trimmed)
+      ? `http://${trimmed}`
+      : trimmed;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return candidate;
+    }
+  } catch {
+    // Invalid URL
+  }
+  return '';
+}
+
 export interface AIProvidersConfig {
   text: {
     provider: TextProviderType;
@@ -42,6 +61,7 @@ export interface AIProvidersConfig {
   };
   gateway: {
     enabled: boolean;
+    enforced: boolean;
     baseUrlConfigured: boolean;
     hasGatewayKey: boolean;
   };
@@ -55,13 +75,15 @@ export interface AIProvidersConfig {
 }
 
 export function loadAIProvidersConfig(): AIProvidersConfig {
-  const litellmBaseUrl = (process.env.LITELLM_BASE_URL || '').trim();
+  const rawBaseUrl = (process.env.LITELLM_BASE_URL || '').trim();
+  const litellmBaseUrl = normalizeGatewayBaseUrl(rawBaseUrl);
   const litellmKey = (process.env.LITELLM_API_KEY || process.env.LITELLM_MASTER_KEY || '').trim();
   const gatewayEnabled = Boolean(litellmBaseUrl && litellmKey);
+  const gatewayEnforced = process.env.ENFORCE_LITELLM_GATEWAY === 'true';
 
   const requestedProvider = (process.env.TEXT_AI_PROVIDER || '').trim().toLowerCase();
   const textProvider: TextProviderType =
-    gatewayEnabled || requestedProvider === 'litellm' ? 'litellm' : 'gemini';
+    gatewayEnabled || gatewayEnforced || requestedProvider === 'litellm' ? 'litellm' : 'gemini';
 
   const textApiKey =
     textProvider === 'litellm'
@@ -116,6 +138,7 @@ export function loadAIProvidersConfig(): AIProvidersConfig {
     },
     gateway: {
       enabled: gatewayEnabled,
+      enforced: gatewayEnforced,
       baseUrlConfigured: Boolean(litellmBaseUrl),
       hasGatewayKey: Boolean(litellmKey),
     },

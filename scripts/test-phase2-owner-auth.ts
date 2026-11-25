@@ -66,8 +66,10 @@ async function runPhase2Verification(): Promise<void> {
 
   const expiredToken = makeFakeJwt('owner-user-1', -300);
 
+  const SUPABASE_SERVICE_ROLE = 'sb-service-role-phase2-secret-key-889900';
   const revokedUpstreamTokens = new Set<string>();
   const lastGatewayPayloads: any[] = [];
+  const persistedAuditRows: any[] = [];
 
   // 1. Local LiteLLM Gateway simulator
   const litellmServer = http.createServer(async (req, res) => {
@@ -288,6 +290,38 @@ async function runPhase2Verification(): Promise<void> {
       return;
     }
 
+    if (reqUrl.pathname === '/rest/v1/jexa_security_audit_logs') {
+      const authHeader = req.headers.authorization || '';
+      const apiKeyHeader = req.headers.apikey || '';
+      if (authHeader !== `Bearer ${SUPABASE_SERVICE_ROLE}` || apiKeyHeader !== SUPABASE_SERVICE_ROLE) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: 'Service role required by RLS policy' }));
+        return;
+      }
+
+      if (req.method === 'POST') {
+        const row = await readJsonBody(req);
+        if (row && row.id) {
+          persistedAuditRows.push(row);
+        }
+        res.writeHead(201);
+        res.end();
+        return;
+      }
+
+      if (req.method === 'GET') {
+        const eventTypeFilter = reqUrl.searchParams.get('event_type')?.replace(/^eq\./, '');
+        const limitVal = Number(reqUrl.searchParams.get('limit')) || 100;
+        const rows = persistedAuditRows
+          .filter((r) => !eventTypeFilter || r.event_type === eventTypeFilter)
+          .sort((a, b) => Number(b.timestamp_ms) - Number(a.timestamp_ms))
+          .slice(0, limitVal);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(rows));
+        return;
+      }
+    }
+
     res.writeHead(404);
     res.end();
   });
@@ -306,6 +340,7 @@ async function runPhase2Verification(): Promise<void> {
   process.env.LITELLM_MASTER_KEY = LITELLM_TEST_KEY;
   process.env.SUPABASE_URL = `http://127.0.0.1:${supabasePort}`;
   process.env.SUPABASE_ANON_KEY = SUPABASE_TEST_ANON;
+  process.env.SUPABASE_SERVICE_ROLE_KEY = SUPABASE_SERVICE_ROLE;
   process.env.OWNER_USER_ID = 'owner-user-1';
   delete process.env.OWNER_EMAIL;
   process.env.REQUIRE_AUTH_FOR_CHAT = 'false';
@@ -611,11 +646,18 @@ async function runPhase2Verification(): Promise<void> {
     });
     assert.equal(badCredRes.status, 401);
 
+    await SecurityAuditService.flushPendingWrites();
+    assert.ok(persistedAuditRows.length > 0, 'Expected security audit events to persist to Supabase PostgREST');
+
+    // Wipe in-memory audit buffer to prove durable recovery from Supabase PostgREST
+    SecurityAuditService.clear();
     const auditRes = await fetch(`${baseUrl}/api/security/audit-logs?limit=200`, {
       headers: { Authorization: `Bearer ${freshOwnerToken}` },
     });
     assert.equal(auditRes.status, 200);
     const auditJson: any = await auditRes.json();
+    assert.equal(auditJson.data.durability.mode, 'supabase_durable');
+    assert.equal(auditJson.data.durability.durableConfigured, true);
     const eventTypes = new Set((auditJson.data.events || []).map((e: any) => e.eventType));
     assert.ok(eventTypes.has('owner_login_success'));
     assert.ok(eventTypes.has('user_login_success'));
@@ -636,7 +678,40 @@ async function runPhase2Verification(): Promise<void> {
     assert.ok(!auditSerialized.includes(ownerRotatedRefreshToken));
     assert.ok(!auditSerialized.includes(freshOwnerToken));
     assert.ok(!auditSerialized.includes(LITELLM_TEST_KEY));
-    console.log('✓ Scenario 9: Refresh cookie restoration, immediate logout token revocation, and sanitized security audit logs verified.');
+    assert.ok(!auditSerialized.includes(SUPABASE_SERVICE_ROLE));
+
+    // Verify /api/security/status returns live gateway health, Upstash status, durability, and zero leaked URLs/keys
+    const secStatusRes = await fetch(`${baseUrl}/api/security/status`, {
+      headers: { Authorization: `Bearer ${freshOwnerToken}` },
+    });
+    assert.equal(secStatusRes.status, 200);
+    const secStatusJson: any = await secStatusRes.json();
+    assert.equal(secStatusJson.data.gateway.reachable, true);
+    assert.equal(secStatusJson.data.auditPersistence.mode, 'supabase_durable');
+    assert.ok(typeof secStatusJson.data.auth.cacheTtlMs === 'number');
+    assert.ok(!JSON.stringify(secStatusJson).includes(LITELLM_TEST_KEY));
+    assert.ok(!JSON.stringify(secStatusJson).includes(SUPABASE_SERVICE_ROLE));
+    assert.ok(!JSON.stringify(secStatusJson).includes(`127.0.0.1:${litellmPort}`));
+    assert.ok(!JSON.stringify(secStatusJson).includes(`127.0.0.1:${supabasePort}`));
+
+    // Verify cached token verification dynamically re-evaluates OWNER_USER_ID if config changes
+    const preChangeCheck = await SupabaseAuthService.verifyAccessToken(freshOwnerToken);
+    assert.equal(preChangeCheck.valid, true);
+    assert.equal(preChangeCheck.user?.isOwner, true);
+    process.env.OWNER_USER_ID = 'different-owner-uuid';
+    const postChangeCheck = await SupabaseAuthService.verifyAccessToken(freshOwnerToken);
+    assert.equal(postChangeCheck.valid, true);
+    assert.equal(postChangeCheck.user?.isOwner, false, 'Cached verification must re-evaluate owner config dynamically');
+    process.env.OWNER_USER_ID = 'owner-user-1';
+
+    // Verify SQL migration enforces RLS and revokes anon/authenticated access
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const sqlText = fs.readFileSync(path.resolve(process.cwd(), 'supabase/security_audit_logs.sql'), 'utf8');
+    assert.ok(sqlText.includes('ENABLE ROW LEVEL SECURITY'));
+    assert.ok(sqlText.includes('REVOKE ALL ON TABLE public.jexa_security_audit_logs FROM anon, authenticated'));
+
+    console.log('✓ Scenario 9: Refresh cookie restoration, logout revocation, durable Supabase audit logs (RLS), security status, and dynamic cache re-eval verified.');
 
     // -----------------------------------------------------------------------
     // Scenario 10: Auth endpoint rate limiting (429)

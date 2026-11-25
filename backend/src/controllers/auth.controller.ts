@@ -3,6 +3,9 @@ import { SupabaseAuthService } from '../services/supabase-auth.service';
 import { SecurityAuditService } from '../services/security-audit.service';
 import { extractBearerToken } from '../middleware/auth.middleware';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
+import { RateLimitStore } from '../middleware/rate-limit.middleware';
+import { UsageTracker } from '../services/usage-tracker.service';
+import { scrubSecretsAndUrls } from '../../../shared/types/provider';
 
 const REFRESH_COOKIE_NAME = 'jexa_refresh_token';
 const REFRESH_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 14; // 14 days
@@ -279,7 +282,7 @@ export class AuthController {
         ? req.query.eventType.trim()
         : undefined;
 
-    const summary = SecurityAuditService.getSummary(limit, eventType);
+    const summary = await SecurityAuditService.getDurableSummary(limit, eventType);
     res.status(200).json({
       success: true,
       data: summary,
@@ -290,21 +293,70 @@ export class AuthController {
   public static async getSecurityStatus(_req: Request, res: Response): Promise<void> {
     res.setHeader('Cache-Control', 'no-store');
     const setup = SupabaseAuthService.getSetupStatus();
+    const authDiagnostics = SupabaseAuthService.getAuthDiagnostics();
     const registry = AIProviderRegistry.getInstance();
-    const auditSummary = SecurityAuditService.getSummary(10);
+    const providerStatus = registry.getStatus(false);
+
+    const [gatewayHealth, upstashHealth, auditSummary] = await Promise.all([
+      registry.checkGatewayHealth(),
+      RateLimitStore.checkUpstashHealth(),
+      SecurityAuditService.getDurableSummary(10),
+    ]);
+
+    const rlStatus = RateLimitStore.getStatus();
+    const usageSummary = UsageTracker.getSummary();
+    const recentGatewayErrors = (usageSummary.failedCalls || [])
+      .filter((c) => c.provider === 'litellm' || c.provider.startsWith('litellm:'))
+      .slice(0, 8)
+      .map((c) => ({
+        id: c.id,
+        timestamp: c.createdAt,
+        timestampMs: c.timestampMs,
+        model: c.model,
+        statusCode: c.errorStatusCode,
+        code: c.errorCode,
+        message: scrubSecretsAndUrls(c.errorMessage || 'Gateway call failed'),
+      }));
 
     res.status(200).json({
       success: true,
       data: {
         setup,
-        gatewayActive: registry.isGatewayActive(),
-        rateLimiting: {
-          mode:
-            process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
-              ? 'upstash_redis'
-              : 'in_memory',
+        gatewayActive: gatewayHealth.active,
+        gatewayEnforced: gatewayHealth.enforced,
+        gateway: {
+          ...gatewayHealth,
+          error: gatewayHealth.error ? scrubSecretsAndUrls(gatewayHealth.error) : undefined,
+          textProvider: providerStatus.textProvider.type,
+          model: registry.getActiveTextModel(),
+          backupModel: registry.getActiveBackupModel(),
         },
+        providers: {
+          text: {
+            type: providerStatus.textProvider.type,
+            status: providerStatus.textProvider.status,
+            configured: providerStatus.textProvider.isConfigured,
+            model: providerStatus.textProvider.model,
+            backupModel: providerStatus.textProvider.backupModel,
+          },
+          voice: {
+            type: providerStatus.voiceProvider.type,
+            status: providerStatus.voiceProvider.status,
+            configured: providerStatus.voiceProvider.isConfigured,
+            model: providerStatus.voiceProvider.model,
+          },
+        },
+        rateLimiting: {
+          ...rlStatus,
+          upstashHealth: {
+            ...upstashHealth,
+            error: upstashHealth.error ? scrubSecretsAndUrls(upstashHealth.error) : undefined,
+          },
+        },
+        auditPersistence: auditSummary.durability,
+        auth: authDiagnostics,
         countsLast24h: auditSummary.countsLast24h,
+        recentGatewayErrors,
       },
       timestamp: new Date().toISOString(),
     });

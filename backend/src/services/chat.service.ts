@@ -361,12 +361,10 @@ export class ChatService {
     const activeBackupModel = !isTtsModel(candidateBackup) ? candidateBackup : DEFAULT_BACKUP_MODEL;
 
     const primaryProviderType: TextProviderType =
-      payload.textProvider === 'litellm' || payload.textProvider === 'gemini' || payload.textProvider === 'groq'
-        ? registry.isGatewayActive()
-          ? 'litellm'
-          : payload.textProvider === 'gemini'
-          ? 'gemini'
-          : registry.getDefaultTextType()
+      registry.isGatewayActive() || registry.isGatewayEnforced()
+        ? 'litellm'
+        : payload.textProvider === 'gemini' || payload.textProvider === 'litellm' || payload.textProvider === 'groq'
+        ? payload.textProvider
         : registry.getDefaultTextType();
     const primaryProvider = registry.getTextProvider(primaryProviderType, activeTextModel);
     const backupProvider = registry.getBackupTextProvider(activeBackupModel);

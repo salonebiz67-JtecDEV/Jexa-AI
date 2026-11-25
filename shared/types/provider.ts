@@ -283,6 +283,17 @@ export function formatCleanProviderError(error: any): {
     });
   }
 
+  // 0. Missing server credentials / unconfigured gateway (503)
+  if (error?.code === 'MISSING_CREDENTIALS') {
+    return {
+      cleanMessage: `${providerName}${modelDisplay} is not configured: ${realReason}. ${statusDisplay}`,
+      code: 'MISSING_CREDENTIALS',
+      statusCode: 503,
+      provider: resolvedProviderKey,
+      model: rawModel,
+    };
+  }
+
   // 1. Quota / Rate limit / 429
   if (
     statusNum === 429 ||

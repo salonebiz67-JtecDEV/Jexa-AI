@@ -824,6 +824,17 @@ export const ApiClient = {
 
   async getSecurityAuditLogs(limit = 100, eventType?: string): Promise<{
     totalRecorded: number;
+    durability?: {
+      mode: 'supabase_durable' | 'in_memory_only';
+      durableConfigured: boolean;
+      tableName: string;
+      persistedCount: number;
+      persistenceErrorCount: number;
+      lastPersistenceError?: string;
+      lastPersistenceSuccessAt?: string;
+      bufferedInMemory: number;
+      maxMemoryEntries: number;
+    };
     countsLast24h: {
       ownerLogins: number;
       failedAuthAttempts: number;
@@ -863,13 +874,82 @@ export const ApiClient = {
       requireAuthForChat: boolean;
     };
     gatewayActive: boolean;
-    rateLimiting: { mode: string };
+    gatewayEnforced?: boolean;
+    gateway?: {
+      configured: boolean;
+      active: boolean;
+      enforced: boolean;
+      reachable: boolean;
+      latencyMs: number;
+      error?: string;
+      textProvider: string;
+      model: string;
+      backupModel: string;
+    };
+    providers?: {
+      text: {
+        type: string;
+        status: string;
+        configured: boolean;
+        model: string;
+        backupModel?: string;
+      };
+      voice: {
+        type: string;
+        status: string;
+        configured: boolean;
+        model: string;
+      };
+    };
+    rateLimiting: {
+      mode: string;
+      upstashConfigured?: boolean;
+      failClosedPolicy?: string;
+      failClosedActiveForCritical?: boolean;
+      activeMemoryBuckets?: number;
+      maxMemoryKeys?: number;
+      upstashErrorsCount?: number;
+      fallbackCount?: number;
+      failClosedRejectionsCount?: number;
+      lastUpstashError?: string;
+      upstashHealth?: {
+        configured: boolean;
+        reachable: boolean;
+        latencyMs: number;
+        error?: string;
+      };
+    };
+    auditPersistence?: {
+      mode: 'supabase_durable' | 'in_memory_only';
+      durableConfigured: boolean;
+      tableName: string;
+      persistedCount: number;
+      persistenceErrorCount: number;
+      lastPersistenceError?: string;
+      lastPersistenceSuccessAt?: string;
+      bufferedInMemory: number;
+      maxMemoryEntries: number;
+    };
+    auth?: {
+      cacheTtlMs: number;
+      cachedTokensCount: number;
+      revokedTokensCount: number;
+    };
     countsLast24h: {
       ownerLogins: number;
       failedAuthAttempts: number;
       unauthorizedAdminAttempts: number;
       configChanges: number;
     };
+    recentGatewayErrors?: Array<{
+      id: string;
+      timestamp: string;
+      timestampMs: number;
+      model: string;
+      statusCode?: number;
+      code?: string;
+      message: string;
+    }>;
   }> {
     return fetchJson(`${API_BASE}/security/status`, undefined, false);
   },

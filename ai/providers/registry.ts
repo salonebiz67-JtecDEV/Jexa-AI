@@ -59,9 +59,16 @@ export class AIProviderRegistry {
     this.textProviders.set('litellm', litellmText);
     this.voiceProviders.set('gemini', geminiVoice);
 
-    if (this.defaultTextType === 'litellm' && litellmText.isConfigured) {
-      this.backupTextProvider = litellmBackup.isConfigured ? litellmBackup : litellmText;
-      this.backgroundTextProvider = litellmBackground.isConfigured ? litellmBackground : litellmText;
+    if (this.defaultTextType === 'litellm' && (litellmText.isConfigured || this.config.gateway.enforced)) {
+      this.defaultTextType = 'litellm';
+      this.backupTextProvider = litellmBackup.isConfigured || this.config.gateway.enforced ? litellmBackup : litellmText;
+      this.backgroundTextProvider =
+        litellmBackground.isConfigured || this.config.gateway.enforced ? litellmBackground : litellmText;
+      if (!litellmText.isConfigured) {
+        console.error(
+          '[AIProviderRegistry] CRITICAL: ENFORCE_LITELLM_GATEWAY=true but LiteLLM is not configured. Chat will fail closed until LITELLM_BASE_URL and LITELLM_API_KEY are set.'
+        );
+      }
     } else {
       this.defaultTextType = 'gemini';
       this.backupTextProvider = geminiBackup.isConfigured ? geminiBackup : geminiText;
@@ -70,7 +77,7 @@ export class AIProviderRegistry {
 
     const activePrimary = this.textProviders.get(this.defaultTextType) || geminiText;
     console.log(
-      `[AIProviderRegistry] Active text route: ${this.defaultTextType} (${activePrimary.modelName}, configured=${activePrimary.isConfigured}) | Backup: ${this.backupTextProvider.modelName} | Background: ${this.backgroundTextProvider.modelName} | Voice: gemini (${geminiVoice.modelName}, configured=${geminiVoice.isConfigured})`
+      `[AIProviderRegistry] Active text route: ${this.defaultTextType} (${activePrimary.modelName}, configured=${activePrimary.isConfigured}, enforced=${this.config.gateway.enforced}) | Backup: ${this.backupTextProvider.modelName} | Background: ${this.backgroundTextProvider.modelName} | Voice: gemini (${geminiVoice.modelName}, configured=${geminiVoice.isConfigured})`
     );
   }
 
@@ -95,6 +102,44 @@ export class AIProviderRegistry {
     return this.defaultTextType === 'litellm' && Boolean(litellm?.isConfigured);
   }
 
+  public isGatewayEnforced(): boolean {
+    return Boolean(this.config.gateway.enforced);
+  }
+
+  public async checkGatewayHealth(): Promise<{
+    configured: boolean;
+    active: boolean;
+    enforced: boolean;
+    reachable: boolean;
+    latencyMs: number;
+    error?: string;
+  }> {
+    const litellm = this.textProviders.get('litellm') as LiteLLMTextAIProvider | undefined;
+    const active = this.isGatewayActive();
+    const enforced = this.isGatewayEnforced();
+
+    if (!litellm || !litellm.isConfigured) {
+      return {
+        configured: false,
+        active,
+        enforced,
+        reachable: false,
+        latencyMs: 0,
+        error: litellm?.lastError || 'LiteLLM gateway is not configured.',
+      };
+    }
+
+    const health = await litellm.checkGatewayHealth();
+    return {
+      configured: true,
+      active,
+      enforced,
+      reachable: health.reachable,
+      latencyMs: health.latencyMs,
+      error: health.error,
+    };
+  }
+
   public getActiveTextModel(): string {
     return this.activeTextModel;
   }
@@ -108,7 +153,7 @@ export class AIProviderRegistry {
   }
 
   public setSelectedModels(models: { textModel?: string; backupModel?: string; voiceModel?: string }): void {
-    const useGateway = this.isGatewayActive();
+    const useGateway = this.isGatewayActive() || this.isGatewayEnforced();
 
     if (models.textModel !== undefined) {
       const clean = sanitizeTextModel(models.textModel, DEFAULT_CHAT_MODEL, 'selectedTextModel');
@@ -133,11 +178,11 @@ export class AIProviderRegistry {
   }
 
   public getTextProvider(type?: TextProviderType, customModel?: string): ITextAIProvider {
-    const useGateway = this.isGatewayActive();
+    const useGateway = this.isGatewayActive() || this.isGatewayEnforced();
     const effectiveType: TextProviderType =
       useGateway && (!type || type === 'gemini' || type === 'litellm' || type === 'groq')
         ? 'litellm'
-        : type === 'litellm' && this.textProviders.get('litellm')?.isConfigured
+        : type === 'litellm' && (this.textProviders.get('litellm')?.isConfigured || this.isGatewayEnforced())
         ? 'litellm'
         : 'gemini';
 
@@ -168,7 +213,7 @@ export class AIProviderRegistry {
   }
 
   public getBackupTextProvider(customBackupModel?: string): ITextAIProvider {
-    const useGateway = this.isGatewayActive();
+    const useGateway = this.isGatewayActive() || this.isGatewayEnforced();
     if (customBackupModel && customBackupModel.trim()) {
       const trimmed = customBackupModel.trim();
       if (isTtsModel(trimmed)) {
@@ -360,7 +405,8 @@ export class AIProviderRegistry {
     const geminiVoice = this.voiceProviders.get('gemini') as any;
 
     const gatewayActive = this.isGatewayActive();
-    const activeTextProvider = gatewayActive ? litellmText : geminiText;
+    const routeViaGateway = gatewayActive || this.isGatewayEnforced();
+    const activeTextProvider = routeViaGateway ? litellmText : geminiText;
 
     const currentTextModel = selectedTextModel
       ? sanitizeTextModel(selectedTextModel, this.activeTextModel, 'statusTextModel')
@@ -391,14 +437,16 @@ export class AIProviderRegistry {
       : 'UNAVAILABLE';
 
     const availableTextProviders: ProviderDetail[] = [
-      ...(litellmText?.isConfigured
+      ...(litellmText?.isConfigured || routeViaGateway
         ? [
             {
               type: 'litellm',
               name: 'LiteLLM AI Gateway',
-              isConfigured: true,
+              isConfigured: Boolean(litellmText?.isConfigured),
               model: resolveLiteLLMModelAlias(currentTextModel),
-              description: 'Private LiteLLM gateway routing Gemini & Groq with fallback',
+              description: routeViaGateway && !gatewayActive
+                ? 'LiteLLM gateway enforced (missing LITELLM_BASE_URL or LITELLM_API_KEY)'
+                : 'Private LiteLLM gateway routing Gemini & Groq with fallback',
               status: textStatus,
               error: (litellmText as any)?.lastError,
             },
@@ -409,11 +457,11 @@ export class AIProviderRegistry {
         name: 'Google Gemini',
         isConfigured: Boolean(geminiText?.isConfigured),
         model: currentTextModel,
-        description: gatewayActive
+        description: routeViaGateway
           ? 'Google Gemini (routed via LiteLLM Gateway)'
           : 'Google Gemini chat, reasoning & native tool execution',
-        status: gatewayActive ? textStatus : geminiTextStatus,
-        error: gatewayActive ? (litellmText as any)?.lastError : (geminiText as any)?.lastError,
+        status: routeViaGateway ? textStatus : geminiTextStatus,
+        error: routeViaGateway ? (litellmText as any)?.lastError : (geminiText as any)?.lastError,
       },
     ];
 
@@ -433,13 +481,17 @@ export class AIProviderRegistry {
 
     return {
       textProvider: {
-        type: gatewayActive ? 'litellm' : 'gemini',
+        type: routeViaGateway ? 'litellm' : 'gemini',
         isConfigured: Boolean(activeTextProvider?.isConfigured),
         hasApiKey: Boolean(activeTextProvider?.isConfigured),
         model: currentTextModel,
         backupModel: currentBackupModel,
         status: textStatus,
-        description: gatewayActive ? 'Private LiteLLM AI Gateway active' : 'Google Gemini active',
+        description: gatewayActive
+          ? 'Private LiteLLM AI Gateway active'
+          : routeViaGateway
+          ? 'LiteLLM AI Gateway enforced (unconfigured)'
+          : 'Google Gemini active',
         lastError: (activeTextProvider as any)?.lastError,
       },
       voiceProvider: {

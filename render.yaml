@@ -1,15 +1,40 @@
 services:
+  # -------------------------------------------------------------------------
+  # 1. Private LiteLLM AI Gateway (Internal Render Network Only — No Public URL)
+  # -------------------------------------------------------------------------
+  - type: pserv
+    name: jexa-litellm-gateway
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./litellm/Dockerfile
+    dockerContext: ./litellm
+    envVars:
+      - key: PORT
+        value: "4000"
+      - key: LITELLM_MASTER_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+
+  # -------------------------------------------------------------------------
+  # 2. JEXA Public Express Backend (API-first for GitHub Pages & Android)
+  # -------------------------------------------------------------------------
   - type: web
     name: jexa-ai-companion
     env: node
     plan: starter
     buildCommand: npm install && npm run build
     startCommand: npm run start
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
       - key: TEXT_AI_PROVIDER
-        value: gemini
+        value: litellm
+      - key: ENFORCE_LITELLM_GATEWAY
+        value: "true"
       - key: TEXT_AI_MODEL
         value: gemini-3.8-flash
       - key: TEXT_AI_BACKUP_MODEL
@@ -20,7 +45,40 @@ services:
         value: gemini
       - key: VOICE_AI_MODEL
         value: gemini-3.8-flash-lite-tts
+      - key: LITELLM_BASE_URL
+        fromService:
+          type: pserv
+          name: jexa-litellm-gateway
+          property: hostport
+      - key: LITELLM_API_KEY
+        sync: false
+      - key: LITELLM_MASTER_KEY
+        sync: false
       - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
         sync: false
       - key: TAVILY_API_KEY
         sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: RATE_LIMIT_FAIL_CLOSED
+        value: "true"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OWNER_USER_ID
+        sync: false
+      - key: OWNER_EMAIL
+        sync: false
+      - key: REQUIRE_AUTH_FOR_CHAT
+        value: "false"

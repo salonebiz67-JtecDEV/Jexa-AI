@@ -274,15 +274,18 @@ async function runPhase1Verification(): Promise<void> {
   process.env.GROQ_API_KEY = 'gsk_dummyPhase1VerificationKey1234567890';
 
   const { AIProviderRegistry } = await import('../ai/providers/registry');
+  const { normalizeGatewayBaseUrl } = await import('../ai/providers/config');
   const { LiteLLMTextAIProvider } = await import('../ai/providers/litellm.provider');
   const { createRateLimiter, RateLimitStore } = await import('../backend/src/middleware/rate-limit.middleware');
   const { ErrorLogService } = await import('../backend/src/services/error-log.service');
+  const { SecurityAuditService } = await import('../backend/src/services/security-audit.service');
   const { scrubSecretsAndUrls } = await import('../shared/types/provider');
   const { UsageTracker } = await import('../backend/src/services/usage-tracker.service');
-  const { createApp } = await import('../server');
+  const { createApp, isOriginAllowed } = await import('../server');
 
   AIProviderRegistry.reload();
-  RateLimitStore.clearMemory();
+  RateLimitStore.resetTelemetryForTesting();
+  SecurityAuditService.clear();
 
   const app = createApp({ includeErrorHandler: true });
   const appServer = http.createServer(app);
@@ -497,6 +500,122 @@ async function runPhase1Verification(): Promise<void> {
     const usageSummary = UsageTracker.getSummary();
     assert.ok(usageSummary.totalEntriesRecorded > 0);
     console.log('✓ Test H: Secret scrubbing and UsageTracker telemetry recording passed.');
+
+    // Test I: Render hostport URL normalization & ENFORCE_LITELLM_GATEWAY fail-closed behavior
+    assert.equal(normalizeGatewayBaseUrl('jexa-litellm-gateway:4000'), 'http://jexa-litellm-gateway:4000');
+    assert.equal(normalizeGatewayBaseUrl('https://gw.internal:8443/'), 'https://gw.internal:8443');
+    assert.equal(normalizeGatewayBaseUrl('ftp://bad-scheme:4000'), '');
+
+    const savedBaseUrl = process.env.LITELLM_BASE_URL;
+    const savedApiKey = process.env.LITELLM_API_KEY;
+    const savedMasterKey = process.env.LITELLM_MASTER_KEY;
+    process.env.ENFORCE_LITELLM_GATEWAY = 'true';
+    process.env.LITELLM_BASE_URL = '';
+    process.env.LITELLM_API_KEY = '';
+    process.env.LITELLM_MASTER_KEY = '';
+    AIProviderRegistry.reload();
+
+    const enforcedRegistry = AIProviderRegistry.getInstance();
+    assert.equal(enforcedRegistry.isGatewayEnforced(), true);
+    assert.equal(enforcedRegistry.isGatewayActive(), false);
+    // Even if client passes textProvider='gemini', enforced gateway MUST NOT fall back to direct Gemini
+    assert.equal(enforcedRegistry.getTextProvider('gemini').providerType, 'litellm');
+    // Voice provider MUST remain direct Gemini
+    assert.equal(enforcedRegistry.getVoiceProvider('gemini').providerType, 'gemini');
+    assert.equal(enforcedRegistry.getVoiceProvider('gemini').isConfigured, true);
+
+    const failClosedChat = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${USER_TOKEN}` },
+      body: JSON.stringify({ message: 'Should fail closed without gateway', textProvider: 'gemini', stream: false }),
+    });
+    assert.equal(failClosedChat.status, 503);
+    const failClosedJson: any = await failClosedChat.json();
+    assert.equal(failClosedJson.code, 'MISSING_CREDENTIALS');
+
+    // Restore valid gateway env
+    process.env.LITELLM_BASE_URL = savedBaseUrl;
+    process.env.LITELLM_API_KEY = savedApiKey;
+    process.env.LITELLM_MASTER_KEY = savedMasterKey;
+    AIProviderRegistry.reload();
+    console.log('✓ Test I: Render hostport normalization and ENFORCE_LITELLM_GATEWAY fail-closed (503) passed.');
+
+    // Test J: Upstash fail-closed (503) on critical endpoints + pre-auth admin rate limiting
+    const unreachableUpstashLimiter = createRateLimiter({
+      prefix: 'phase1-failclosed-test',
+      windowMs: 60000,
+      max: 5,
+      criticalEndpoint: true,
+      failClosed: true,
+      redisUrlOverride: 'http://127.0.0.1:1',
+      redisTokenOverride: 'bad-token',
+    });
+    const fcRes = makeMockRes();
+    let fcNext = 0;
+    await unreachableUpstashLimiter({ ip: '198.51.100.1' } as any, fcRes, () => {
+      fcNext++;
+    });
+    assert.equal(fcNext, 0);
+    assert.equal(fcRes.statusCode, 503);
+    assert.equal(fcRes.body.code, 'RATE_LIMIT_BACKEND_UNAVAILABLE');
+    assert.equal(fcRes.headers['Retry-After'], '15');
+
+    const fallbackLimiter = createRateLimiter({
+      prefix: 'phase1-fallback-test',
+      windowMs: 60000,
+      max: 2,
+      criticalEndpoint: true,
+      failClosed: false,
+      redisUrlOverride: 'http://127.0.0.1:1',
+      redisTokenOverride: 'bad-token',
+    });
+    const fbRes = makeMockRes();
+    let fbNext = 0;
+    await fallbackLimiter({ ip: '198.51.100.2' } as any, fbRes, () => {
+      fbNext++;
+    });
+    assert.equal(fbNext, 1);
+    assert.equal(fbRes.headers['X-RateLimit-Mode'], 'memory-fallback');
+
+    const rlStatus = RateLimitStore.getStatus();
+    assert.ok(rlStatus.upstashErrorsCount >= 2);
+    assert.ok(rlStatus.failClosedRejectionsCount >= 1);
+    assert.ok(rlStatus.fallbackCount >= 1);
+
+    // Pre-auth admin rate limiting (returns 429 before 401 when flooding admin endpoints unauthenticated)
+    const savedAdminMax = process.env.RATE_LIMIT_ADMIN_MAX;
+    process.env.RATE_LIMIT_ADMIN_MAX = '2';
+    // Re-create app with tight admin limit via dedicated limiter check
+    const adminBurstLimiter = createRateLimiter({
+      prefix: 'admin-preauth-burst',
+      windowMs: 60000,
+      max: 2,
+      criticalEndpoint: true,
+    });
+    const burstReq: any = { ip: '203.0.113.55', auth: { authenticated: false, isOwner: false } };
+    let adminBurstAllowed = 0;
+    await adminBurstLimiter(burstReq, makeMockRes(), () => adminBurstAllowed++);
+    await adminBurstLimiter(burstReq, makeMockRes(), () => adminBurstAllowed++);
+    const adminBurstBlocked = makeMockRes();
+    await adminBurstLimiter(burstReq, adminBurstBlocked, () => adminBurstAllowed++);
+    assert.equal(adminBurstAllowed, 2);
+    assert.equal(adminBurstBlocked.statusCode, 429);
+    if (savedAdminMax !== undefined) process.env.RATE_LIMIT_ADMIN_MAX = savedAdminMax;
+    else delete process.env.RATE_LIMIT_ADMIN_MAX;
+    console.log('✓ Test J: Upstash fail-closed (503), memory fallback mode, and pre-auth admin rate limiting passed.');
+
+    // Test K: Hardened CORS origin validation
+    const pinnedProdOrigins = new Set(['https://jexa.app']);
+    assert.equal(isOriginAllowed('https://jexa.app', true, pinnedProdOrigins), true);
+    assert.equal(isOriginAllowed('https://localhost', true, pinnedProdOrigins), true);
+    assert.equal(isOriginAllowed('http://localhost', true, pinnedProdOrigins), true);
+    assert.equal(isOriginAllowed('capacitor://localhost', true, pinnedProdOrigins), true);
+    assert.equal(isOriginAllowed('https://jexa.app.evil.com', true, pinnedProdOrigins), false);
+    assert.equal(isOriginAllowed('https://localhost.evil.com', true, pinnedProdOrigins), false);
+    assert.equal(isOriginAllowed('https://evil.github.io', true, pinnedProdOrigins), false);
+    assert.equal(isOriginAllowed('https://salonebiz67-jtecdev.github.io', true, new Set()), true);
+    assert.equal(isOriginAllowed('http://localhost:5173', false, new Set()), true);
+    console.log('✓ Test K: Strict CORS origin allowlist (prefix/substring bypass rejection & Capacitor preservation) passed.');
 
     console.log('\n==========================================================');
     console.log('ALL PHASE 1 SECURITY & LITELLM GATEWAY TESTS PASSED!');

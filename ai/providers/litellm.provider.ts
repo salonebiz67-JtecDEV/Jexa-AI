@@ -13,19 +13,11 @@ import {
   isTtsModel,
 } from '../../shared/types/provider';
 import { resolveLiteLLMModelAlias } from './model-aliases';
+import { normalizeGatewayBaseUrl } from './config';
 import { ErrorLogService } from '../../backend/src/services/error-log.service';
 import { UsageTracker } from '../../backend/src/services/usage-tracker.service';
 
 const LITELLM_TIMEOUT_MS = 30000;
-
-function isValidHttpUrl(rawUrl: string): boolean {
-  try {
-    const parsed = new URL(rawUrl);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
 
 function estimatePromptTokens(request: TextGenerationRequest): number {
   const sysLen = request.systemPrompt?.length || 0;
@@ -154,10 +146,11 @@ export class LiteLLMTextAIProvider implements ITextAIProvider {
     this.modelName = rawAlias;
 
     const rawBaseUrl = (process.env.LITELLM_BASE_URL || '').trim().replace(/\/+$/, '');
+    const normalizedBaseUrl = normalizeGatewayBaseUrl(rawBaseUrl);
     const rawApiKey = (process.env.LITELLM_API_KEY || process.env.LITELLM_MASTER_KEY || '').trim();
 
-    if (rawBaseUrl && isValidHttpUrl(rawBaseUrl) && rawApiKey) {
-      this.baseUrl = rawBaseUrl;
+    if (normalizedBaseUrl && rawApiKey) {
+      this.baseUrl = normalizedBaseUrl;
       this.apiKey = rawApiKey;
       this.isConfigured = true;
       console.log(`[LiteLLMTextAIProvider] Initialized gateway route with alias: ${this.modelName}`);
@@ -165,9 +158,11 @@ export class LiteLLMTextAIProvider implements ITextAIProvider {
       this.baseUrl = '';
       this.apiKey = '';
       this.isConfigured = false;
-      if (rawBaseUrl && !isValidHttpUrl(rawBaseUrl)) {
-        this.lastError = 'LITELLM_BASE_URL must be a valid http:// or https:// URL.';
-        console.warn('[LiteLLMTextAIProvider] Invalid LITELLM_BASE_URL scheme.');
+      if (rawBaseUrl && !normalizedBaseUrl) {
+        this.lastError = 'LITELLM_BASE_URL must be a valid http://, https://, or host:port address.';
+        console.warn('[LiteLLMTextAIProvider] Invalid LITELLM_BASE_URL format.');
+      } else {
+        this.lastError = 'LITELLM_BASE_URL or LITELLM_API_KEY is not configured.';
       }
     }
   }

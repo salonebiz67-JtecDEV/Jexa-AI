@@ -38,12 +38,28 @@ export interface OwnerSetupStatus {
 
 interface CachedVerification {
   expiresAtMs: number;
-  result: TokenVerificationResult;
+  tokenExpMs?: number;
+  claims: {
+    id: string;
+    email?: string;
+    email_confirmed_at?: string | null;
+    confirmed_at?: string | null;
+    app_metadata?: Record<string, any>;
+  };
 }
 
-const TOKEN_CACHE_TTL_MS = 15_000;
+const DEFAULT_TOKEN_CACHE_TTL_MS = 5_000;
+const MAX_TOKEN_CACHE_TTL_MS = 30_000;
 const TOKEN_CACHE_MAX = 200;
 const REVOKED_TOKEN_MAX = 1000;
+
+function getTokenCacheTtlMs(): number {
+  const raw = process.env.AUTH_CACHE_TTL_MS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_TOKEN_CACHE_TTL_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_TOKEN_CACHE_TTL_MS;
+  return Math.min(Math.max(0, Math.floor(parsed)), MAX_TOKEN_CACHE_TTL_MS);
+}
 
 function isValidHttpUrl(rawUrl: string): boolean {
   try {
@@ -54,18 +70,18 @@ function isValidHttpUrl(rawUrl: string): boolean {
   }
 }
 
-function decodeJwtExpiryMs(token: string): number | null {
+function decodeJwtClaims(token: string): { expMs: number | null; sub?: string } {
   try {
     const parts = token.split('.');
-    if (parts.length !== 3) return null;
+    if (parts.length !== 3) return { expMs: null };
     const payloadJson = Buffer.from(parts[1], 'base64url').toString('utf8');
     const payload = JSON.parse(payloadJson);
-    if (typeof payload?.exp === 'number') {
-      return payload.exp * 1000;
-    }
-    return null;
+    return {
+      expMs: typeof payload?.exp === 'number' ? payload.exp * 1000 : null,
+      sub: typeof payload?.sub === 'string' && payload.sub.trim() ? payload.sub.trim() : undefined,
+    };
   } catch {
-    return null;
+    return { expMs: null };
   }
 }
 
@@ -194,14 +210,42 @@ export class SupabaseAuthService {
     }
   }
 
+  public static invalidateUserCache(userId?: string): void {
+    if (!userId || typeof userId !== 'string') return;
+    const targetId = userId.trim();
+    if (!targetId) return;
+    for (const [tokenHash, entry] of this.cache.entries()) {
+      if (entry.claims.id === targetId) {
+        this.cache.delete(tokenHash);
+      }
+    }
+  }
+
+  public static getAuthDiagnostics(): {
+    cacheTtlMs: number;
+    cachedTokensCount: number;
+    revokedTokensCount: number;
+  } {
+    return {
+      cacheTtlMs: getTokenCacheTtlMs(),
+      cachedTokensCount: this.cache.size,
+      revokedTokensCount: this.revokedTokens.size,
+    };
+  }
+
   public static invalidateToken(token: string): void {
     if (!token || typeof token !== 'string') return;
     const trimmed = token.trim();
     if (!trimmed) return;
     const tokenHash = hashToken(trimmed);
+    const cached = this.cache.get(tokenHash);
     this.cache.delete(tokenHash);
+    const { expMs, sub } = decodeJwtClaims(trimmed);
+    const userIdToEvict = cached?.claims.id || sub;
+    if (userIdToEvict) {
+      this.invalidateUserCache(userIdToEvict);
+    }
     this.pruneRevokedTokens();
-    const expMs = decodeJwtExpiryMs(trimmed);
     const revokeUntil = expMs && expMs > Date.now() ? expMs : Date.now() + 3600_000;
     this.revokedTokens.set(tokenHash, revokeUntil);
   }
@@ -258,8 +302,9 @@ export class SupabaseAuthService {
       return { valid: false, reason: 'Session has been logged out. Please sign in again.' };
     }
 
-    const expMs = decodeJwtExpiryMs(trimmed);
+    const { expMs } = decodeJwtClaims(trimmed);
     if (expMs !== null && Date.now() >= expMs) {
+      this.cache.delete(tokenHash);
       return { valid: false, reason: 'Access token has expired.' };
     }
 
@@ -268,9 +313,19 @@ export class SupabaseAuthService {
       return { valid: false, reason: 'Supabase Auth is not configured on the server.' };
     }
 
-    const cached = this.cache.get(tokenHash);
+    const cacheTtlMs = getTokenCacheTtlMs();
+    const cached = cacheTtlMs > 0 ? this.cache.get(tokenHash) : undefined;
     if (cached && Date.now() < cached.expiresAtMs) {
-      return cached.result;
+      if (cached.tokenExpMs && Date.now() >= cached.tokenExpMs) {
+        this.cache.delete(tokenHash);
+      } else {
+        // Dynamically re-evaluate owner status against current server configuration
+        return {
+          valid: true,
+          user: this.buildVerifiedUser(cached.claims),
+          expiresAtMs: cached.tokenExpMs ?? expMs ?? undefined,
+        };
+      }
     }
 
     const controller = new AbortController();
@@ -287,6 +342,7 @@ export class SupabaseAuthService {
       });
 
       if (!response.ok) {
+        this.cache.delete(tokenHash);
         return {
           valid: false,
           reason:
@@ -301,7 +357,17 @@ export class SupabaseAuthService {
         return { valid: false, reason: 'Invalid user payload from auth provider.' };
       }
 
-      const verifiedUser = this.buildVerifiedUser(userData);
+      const claims = {
+        id: userData.id,
+        email: typeof userData.email === 'string' ? userData.email : undefined,
+        email_confirmed_at: userData.email_confirmed_at,
+        confirmed_at: userData.confirmed_at,
+        app_metadata:
+          userData.app_metadata && typeof userData.app_metadata === 'object'
+            ? userData.app_metadata
+            : undefined,
+      };
+      const verifiedUser = this.buildVerifiedUser(claims);
 
       const result: TokenVerificationResult = {
         valid: true,
@@ -309,15 +375,21 @@ export class SupabaseAuthService {
         expiresAtMs: expMs ?? undefined,
       };
 
-      const maxCacheExpiry =
-        expMs !== null
-          ? Math.min(Date.now() + TOKEN_CACHE_TTL_MS, expMs)
-          : Date.now() + TOKEN_CACHE_TTL_MS;
-      if (this.cache.size >= TOKEN_CACHE_MAX) {
-        const oldest = this.cache.keys().next().value;
-        if (oldest) this.cache.delete(oldest);
+      if (cacheTtlMs > 0) {
+        const maxCacheExpiry =
+          expMs !== null
+            ? Math.min(Date.now() + cacheTtlMs, expMs)
+            : Date.now() + cacheTtlMs;
+        if (this.cache.size >= TOKEN_CACHE_MAX) {
+          const oldest = this.cache.keys().next().value;
+          if (oldest) this.cache.delete(oldest);
+        }
+        this.cache.set(tokenHash, {
+          expiresAtMs: maxCacheExpiry,
+          tokenExpMs: expMs ?? undefined,
+          claims,
+        });
       }
-      this.cache.set(tokenHash, { expiresAtMs: maxCacheExpiry, result });
 
       return result;
     } catch {
@@ -380,7 +452,7 @@ export class SupabaseAuthService {
       }
 
       const verifiedUser = this.buildVerifiedUser(body.user);
-      const jwtExpMs = decodeJwtExpiryMs(body.access_token);
+      const { expMs: jwtExpMs } = decodeJwtClaims(body.access_token);
       const expiresIn = typeof body.expires_in === 'number' ? body.expires_in : 3600;
       const expiresAtMs = jwtExpMs ?? Date.now() + expiresIn * 1000;
 
@@ -453,7 +525,8 @@ export class SupabaseAuthService {
       }
 
       const verifiedUser = this.buildVerifiedUser(body.user);
-      const jwtExpMs = decodeJwtExpiryMs(body.access_token);
+      this.invalidateUserCache(verifiedUser.id);
+      const { expMs: jwtExpMs } = decodeJwtClaims(body.access_token);
       const expiresIn = typeof body.expires_in === 'number' ? body.expires_in : 3600;
       const expiresAtMs = jwtExpMs ?? Date.now() + expiresIn * 1000;
 

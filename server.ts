@@ -24,45 +24,106 @@ const CAPACITOR_NATIVE_ORIGINS = new Set([
   'capacitor://localhost',
 ]);
 
+export function parseAllowedCorsOrigins(): Set<string> {
+  const allowed = new Set<string>();
+  const rawSources = [
+    process.env.FRONTEND_URL,
+    process.env.CORS_ORIGIN,
+    process.env.CORS_ALLOWED_ORIGINS,
+  ];
+  for (const raw of rawSources) {
+    if (!raw || typeof raw !== 'string') continue;
+    for (const part of raw.split(',')) {
+      const candidate = part.trim().replace(/\/+$/, '');
+      if (!candidate) continue;
+      try {
+        const parsed = new URL(candidate);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          allowed.add(parsed.origin);
+        }
+      } catch {
+        console.warn(`[CORS] Ignoring malformed configured origin entry: "${candidate}"`);
+      }
+    }
+  }
+  return allowed;
+}
+
+export function isOriginAllowed(origin: string | undefined, isProd: boolean, configuredOrigins: Set<string>): boolean {
+  // Allow non-browser requests (health checks, server-to-server, curl, tools)
+  if (!origin) {
+    return true;
+  }
+
+  // Explicitly accept Capacitor native Android/iOS WebView origins
+  if (CAPACITOR_NATIVE_ORIGINS.has(origin)) {
+    return true;
+  }
+
+  let parsedOrigin: URL;
+  try {
+    parsedOrigin = new URL(origin);
+  } catch {
+    return false;
+  }
+
+  if (parsedOrigin.protocol !== 'http:' && parsedOrigin.protocol !== 'https:') {
+    return false;
+  }
+
+  // Exact match against explicitly configured frontend origins
+  if (configuredOrigins.has(parsedOrigin.origin)) {
+    return true;
+  }
+
+  // In non-production environments, allow local development loopback hosts and Cloud Run preview hosts
+  if (!isProd) {
+    const hostname = parsedOrigin.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return true;
+    }
+    if (parsedOrigin.protocol === 'https:' && hostname.endsWith('.run.app')) {
+      return true;
+    }
+  }
+
+  // In production, if no explicit FRONTEND_URL/CORS_ORIGIN is configured yet, allow strict https://<org>.github.io
+  // so unconfigured GitHub Pages deployments continue operating until FRONTEND_URL is pinned.
+  if (
+    (configuredOrigins.size === 0 || process.env.ALLOW_WILDCARD_GITHUB_PAGES === 'true') &&
+    parsedOrigin.protocol === 'https:' &&
+    !parsedOrigin.port &&
+    /^[a-zA-Z0-9-]+\.github\.io$/.test(parsedOrigin.hostname)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function createApp(options: { includeErrorHandler?: boolean } = {}) {
   const { includeErrorHandler = true } = options;
   const app = express();
   const isProd = process.env.NODE_ENV === 'production';
-  const customFrontendUrl = (process.env.FRONTEND_URL || process.env.CORS_ORIGIN || '').replace(/\/+$/, '');
+  const configuredOrigins = parseAllowedCorsOrigins();
+
+  if (isProd && configuredOrigins.size === 0) {
+    console.warn(
+      '[CORS] Warning: FRONTEND_URL / CORS_ORIGIN is not configured in production; allowing strict *.github.io HTTPS origins until pinned.'
+    );
+  }
 
   // Security basics: hide Express signature and trust single reverse-proxy hop (Render)
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use(securityHeadersMiddleware);
 
-  // Production CORS Configuration: Allows Capacitor WebView origins, GitHub Pages (*.github.io), custom FRONTEND_URL, and local dev
+  // Strict CORS Configuration: Exact allowlist matching + Capacitor native WebView origins
   app.use(cors({
     origin: (origin, callback) => {
-      // Allow non-browser requests (health checks, server-to-server, curl, tools)
-      if (!origin) {
+      if (isOriginAllowed(origin, isProd, configuredOrigins)) {
         return callback(null, true);
       }
-
-      // Explicitly accept Capacitor native Android/iOS WebView origins in all environments
-      if (CAPACITOR_NATIVE_ORIGINS.has(origin)) {
-        return callback(null, true);
-      }
-
-      // In development or preview environments, allow local development and cloud run previews
-      if (!isProd || origin.includes('localhost') || origin.includes('127.0.0.1') || origin.endsWith('.run.app')) {
-        return callback(null, true);
-      }
-
-      // Allow any GitHub Pages domain (e.g., https://username.github.io or https://org.github.io)
-      if (/^https:\/\/[a-zA-Z0-9-]+\.github\.io(?::\d+)?$/.test(origin)) {
-        return callback(null, true);
-      }
-
-      // Allow explicitly configured frontend domain
-      if (customFrontendUrl && (origin === customFrontendUrl || origin.startsWith(customFrontendUrl))) {
-        return callback(null, true);
-      }
-
       const corsErr: any = new Error(`Origin '${origin}' not allowed by CORS.`);
       corsErr.statusCode = 403;
       return callback(corsErr);

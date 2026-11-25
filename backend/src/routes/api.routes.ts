@@ -41,9 +41,9 @@ router.post('/auth/refresh', authRateLimiter, AuthController.refresh);
 router.post('/auth/logout', generalApiRateLimiter, AuthController.logout);
 router.get('/auth/session', generalApiRateLimiter, AuthController.getSession);
 
-// Owner Security Audit & Setup Status (Owner-only)
-router.get('/security/audit-logs', requireOwner, expensiveAdminRateLimiter, AuthController.getAuditLogs);
-router.get('/security/status', requireOwner, expensiveAdminRateLimiter, AuthController.getSecurityStatus);
+// Owner Security Audit & Setup Status (Owner-only, rate-limited before auth checks)
+router.get('/security/audit-logs', expensiveAdminRateLimiter, requireOwner, AuthController.getAuditLogs);
+router.get('/security/status', expensiveAdminRateLimiter, requireOwner, AuthController.getSecurityStatus);
 
 // Chat & Voice
 router.post(
@@ -77,8 +77,8 @@ router.post(
 router.get('/voice/health', generalApiRateLimiter, VoiceController.getHealth);
 router.post(
   '/voice/test',
-  requireOwner,
   expensiveAdminRateLimiter,
+  requireOwner,
   validateProviderTestRequest,
   VoiceController.testVoice
 );
@@ -87,40 +87,40 @@ router.post(
 router.get('/providers/status', generalApiRateLimiter, ProviderController.getStatus);
 router.post(
   '/providers/select',
-  requireOwner,
   expensiveAdminRateLimiter,
+  requireOwner,
   validateProviderSelectRequest,
   ProviderController.selectProviders
 );
 router.post(
   '/providers/test-text',
-  requireOwner,
   expensiveAdminRateLimiter,
+  requireOwner,
   validateProviderTestRequest,
   ProviderController.testText
 );
 router.post(
   '/providers/test-voice',
-  requireOwner,
   expensiveAdminRateLimiter,
+  requireOwner,
   validateProviderTestRequest,
   ProviderController.testVoice
 );
 
 // Usage Tracking & Tool Administration (Owner-only)
-router.get('/usage/summary', requireOwner, expensiveAdminRateLimiter, UsageController.getSummary);
-router.get('/tools/status', requireOwner, expensiveAdminRateLimiter, UsageController.getToolsStatus);
+router.get('/usage/summary', expensiveAdminRateLimiter, requireOwner, UsageController.getSummary);
+router.get('/tools/status', expensiveAdminRateLimiter, requireOwner, UsageController.getToolsStatus);
 router.post(
   '/tools/toggle',
-  requireOwner,
   expensiveAdminRateLimiter,
+  requireOwner,
   validateToolToggleRequest,
   UsageController.toggleTool
 );
 router.post(
   '/tools/test',
-  requireOwner,
   expensiveAdminRateLimiter,
+  requireOwner,
   validateToolTestRequest,
   UsageController.testTool
 );
@@ -129,8 +129,8 @@ router.post(
 router.get('/ai/brain-profile', generalApiRateLimiter, BrainController.getProfile);
 router.post(
   '/ai/brain-profile',
-  requireOwner,
   expensiveAdminRateLimiter,
+  requireOwner,
   validateBrainProfileUpdateRequest,
   BrainController.updateProfile
 );
