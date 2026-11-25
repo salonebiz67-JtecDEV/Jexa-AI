@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { SupabaseAuthService } from '../services/supabase-auth.service';
+import { SecurityAuditService } from '../services/security-audit.service';
 
 export interface AuthContext {
   authenticated: boolean;
@@ -7,6 +8,7 @@ export interface AuthContext {
   email?: string;
   role: 'owner' | 'user' | 'anonymous' | string;
   isOwner: boolean;
+  expiresAtMs?: number;
   invalidToken?: boolean;
   authError?: string;
 }
@@ -29,7 +31,7 @@ export function extractBearerToken(req: Request): string | null {
 
 /**
  * Attaches verified auth context from Authorization: Bearer <jwt> if supplied.
- * Never treats CORS, Origin, or client-supplied identity headers as authentication.
+ * Never treats CORS, Origin, or client-supplied identity headers/fields as authentication.
  */
 export async function attachAuthContext(
   req: Request,
@@ -80,6 +82,7 @@ export async function attachAuthContext(
     email: verification.user.email,
     role: verification.user.role,
     isOwner: verification.user.isOwner,
+    expiresAtMs: verification.expiresAtMs,
   };
   next();
 }
@@ -101,8 +104,9 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 }
 
 /**
- * Enforces authentication whenever Supabase Auth is configured or REQUIRE_AUTH_FOR_CHAT=true,
- * and ALWAYS rejects malformed/invalid Bearer tokens when an Authorization header is sent.
+ * Protects normal chat/voice routes when REQUIRE_AUTH_FOR_CHAT=true,
+ * and ALWAYS rejects malformed/invalid/expired Bearer tokens when an Authorization header is sent,
+ * while preserving normal chat/voice access for unauthenticated and normal USER sessions by default.
  */
 export function requireAuthIfConfigured(req: Request, res: Response, next: NextFunction): void {
   if (req.auth?.invalidToken) {
@@ -115,8 +119,7 @@ export function requireAuthIfConfigured(req: Request, res: Response, next: NextF
     return;
   }
 
-  const requireChatAuth =
-    process.env.REQUIRE_AUTH_FOR_CHAT === 'true' || SupabaseAuthService.isConfigured();
+  const requireChatAuth = process.env.REQUIRE_AUTH_FOR_CHAT === 'true';
 
   if (requireChatAuth && !req.auth?.authenticated) {
     res.status(401).json({
@@ -133,11 +136,30 @@ export function requireAuthIfConfigured(req: Request, res: Response, next: NextF
 
 /**
  * Strictly protects administrative & provider-configuration endpoints.
- * Always fails closed: rejects unauthenticated callers (401) and non-owners (403).
+ * Always fails closed: rejects unauthenticated callers (401) and non-owners (403),
+ * and logs every unauthorized attempt to SecurityAuditService.
  */
 export function requireOwner(req: Request, res: Response, next: NextFunction): void {
+  const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
+  const reqPath = req.originalUrl || req.path;
+
   if (!req.auth?.authenticated) {
     const authConfigured = SupabaseAuthService.isConfigured();
+    SecurityAuditService.record({
+      eventType: 'unauthorized_admin_access',
+      severity: 'warning',
+      actorRole: 'anonymous',
+      ip: clientIp,
+      method: req.method,
+      path: reqPath,
+      statusCode: 401,
+      summary: `Blocked unauthenticated admin access attempt (${req.method} ${reqPath}).`,
+      details: {
+        invalidToken: Boolean(req.auth?.invalidToken),
+        reason: req.auth?.authError || 'missing_credentials',
+      },
+    });
+
     res.status(401).json({
       success: false,
       code: authConfigured ? 'OWNER_AUTH_REQUIRED' : 'OWNER_AUTH_UNCONFIGURED',
@@ -150,6 +172,22 @@ export function requireOwner(req: Request, res: Response, next: NextFunction): v
   }
 
   if (!req.auth.isOwner) {
+    SecurityAuditService.record({
+      eventType: 'unauthorized_admin_access',
+      severity: 'critical',
+      actorUserId: req.auth.userId,
+      actorEmail: req.auth.email,
+      actorRole: req.auth.role,
+      ip: clientIp,
+      method: req.method,
+      path: reqPath,
+      statusCode: 403,
+      summary: `Blocked non-owner user admin access attempt (${req.method} ${reqPath}).`,
+      details: {
+        reason: 'insufficient_privileges',
+      },
+    });
+
     res.status(403).json({
       success: false,
       code: 'FORBIDDEN',

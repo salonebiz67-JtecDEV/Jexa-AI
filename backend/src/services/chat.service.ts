@@ -285,7 +285,8 @@ export class ChatService {
   public static async processMessage(
     payload: SendMessagePayload,
     onStatusUpdate?: StatusUpdateCallback,
-    onChunk?: ChunkCallback
+    onChunk?: ChunkCallback,
+    authContext?: { userId?: string; isOwner?: boolean; restrictSensitiveTools?: boolean }
   ): Promise<ChatResponsePayload> {
     // 60-second message deadline and 3 AI calls cap
     const messageStartTime = Date.now();
@@ -380,6 +381,9 @@ export class ChatService {
     // 4b. Inspect currently enabled & available tools before building system prompt
     const toolRegistry = ToolRegistry.getInstance();
     const toolContext = {
+      userId: authContext?.userId,
+      isOwner: authContext?.isOwner,
+      restrictSensitiveTools: authContext?.restrictSensitiveTools,
       conversationId: convId,
       messageId: userMessage.id,
       onStatusUpdate,
@@ -653,6 +657,18 @@ export class ChatService {
                   toolCallId: tc.id,
                   name: tc.name,
                   content: JSON.stringify({ error: `Tool "${tc.name}" is not registered.` }),
+                });
+                continue;
+              }
+
+              if (toolContext.restrictSensitiveTools && !toolContext.isOwner && tool.permissionLevel === 'sensitive') {
+                activeMessages.push({
+                  role: 'tool',
+                  toolCallId: tc.id,
+                  name: tc.name,
+                  content: JSON.stringify({
+                    error: `Tool "${tc.name}" requires verified owner authentication.`,
+                  }),
                 });
                 continue;
               }

@@ -5,6 +5,7 @@ import { BrainController } from '../controllers/brain.controller';
 import { HealthController } from '../controllers/health.controller';
 import { ProviderController } from '../controllers/provider.controller';
 import { UsageController } from '../controllers/usage.controller';
+import { AuthController } from '../controllers/auth.controller';
 import {
   attachAuthContext,
   requireAuthIfConfigured,
@@ -15,6 +16,7 @@ import {
   voiceRateLimiter,
   expensiveAdminRateLimiter,
   generalApiRateLimiter,
+  authRateLimiter,
 } from '../middleware/rate-limit.middleware';
 import {
   validateChatRequest,
@@ -25,12 +27,23 @@ import {
   validateToolToggleRequest,
   validateToolTestRequest,
   validateBrainProfileUpdateRequest,
+  validateLoginRequest,
 } from '../middleware/validation.middleware';
 
 const router = Router();
 
 // Attach verified Bearer auth context (never trusts spoofable identity headers)
 router.use(attachAuthContext);
+
+// Authentication & Session Management
+router.post('/auth/login', authRateLimiter, validateLoginRequest, AuthController.login);
+router.post('/auth/refresh', authRateLimiter, AuthController.refresh);
+router.post('/auth/logout', generalApiRateLimiter, AuthController.logout);
+router.get('/auth/session', generalApiRateLimiter, AuthController.getSession);
+
+// Owner Security Audit & Setup Status (Owner-only)
+router.get('/security/audit-logs', requireOwner, expensiveAdminRateLimiter, AuthController.getAuditLogs);
+router.get('/security/status', requireOwner, expensiveAdminRateLimiter, AuthController.getSecurityStatus);
 
 // Chat & Voice
 router.post(

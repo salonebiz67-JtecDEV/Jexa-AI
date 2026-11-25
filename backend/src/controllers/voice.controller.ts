@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { VoiceService } from '../services/voice.service';
 import { VoiceSynthesisRequest, isTtsModel } from '../../../shared/types/provider';
+import { SecurityAuditService } from '../services/security-audit.service';
 
 export class VoiceController {
   /**
@@ -80,7 +81,12 @@ export class VoiceController {
         message = 'Gemini Voice is not configured. Check GEMINI_API_KEY on the server.';
       }
 
-      res.status(statusCode).json({
+      const httpStatus =
+        statusCode === 401 || statusCode === 403 || error.code === 'AUTHENTICATION_ERROR'
+          ? 502
+          : statusCode;
+
+      res.status(httpStatus).json({
         success: false,
         provider: 'gemini',
         code: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : 'VOICE_SYNTHESIS_FAILED'),
@@ -136,6 +142,19 @@ export class VoiceController {
 
       const result = await VoiceService.testProvider('gemini', text, model);
 
+      SecurityAuditService.record({
+        eventType: 'provider_tested',
+        severity: 'info',
+        actorUserId: req.auth?.userId,
+        actorEmail: req.auth?.email,
+        actorRole: req.auth?.role,
+        ip: req.ip || req.socket?.remoteAddress || 'unknown',
+        method: req.method,
+        path: req.originalUrl || req.path,
+        statusCode: 200,
+        summary: `Owner tested voice synthesis (gemini:${result.model || 'default'}).`,
+      });
+
       res.status(200).json({
         success: true,
         data: result,
@@ -162,7 +181,12 @@ export class VoiceController {
         message = 'Gemini Voice is not configured. Check GEMINI_API_KEY on the server.';
       }
 
-      res.status(statusCode).json({
+      const httpStatus =
+        statusCode === 401 || statusCode === 403 || error.code === 'AUTHENTICATION_ERROR'
+          ? 502
+          : statusCode;
+
+      res.status(httpStatus).json({
         success: false,
         provider: 'gemini',
         code: error.code || (statusCode === 429 ? 'QUOTA_EXHAUSTED' : 'TEST_FAILED'),

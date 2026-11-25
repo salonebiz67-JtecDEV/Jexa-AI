@@ -168,6 +168,7 @@ async function fetchWithTimeout(url: string, options?: RequestInit, timeoutMs = 
   try {
     const res = await fetch(url, {
       ...options,
+      credentials: options?.credentials || 'include',
       headers: {
         ...authHeaders,
         ...(options?.headers || {}),
@@ -229,6 +230,18 @@ async function fetchJson<T>(url: string, options?: RequestInit, allowRetry = tru
   reportServerReachable();
 
   if (!response.ok || body.success === false) {
+    if (
+      response.status === 401 &&
+      typeof window !== 'undefined' &&
+      !url.includes('/auth/login') &&
+      !url.includes('/auth/refresh') &&
+      (body?.code === 'AUTH_REQUIRED' ||
+        body?.code === 'INVALID_TOKEN' ||
+        body?.code === 'SESSION_EXPIRED' ||
+        !body?.code)
+    ) {
+      window.dispatchEvent(new CustomEvent('jexa:auth-expired'));
+    }
     const errorMsg = body?.error || body?.message || `HTTP ${response.status}: ${response.statusText}`;
     throw new ApiError(errorMsg, response.status, body?.code, body?.provider);
   }
@@ -743,5 +756,121 @@ export const ApiClient = {
       error: body?.error,
       preview: body?.preview,
     };
+  },
+
+  // Authentication & Owner Session Management
+  async loginWithEmail(email: string, password: string): Promise<{
+    authenticated: boolean;
+    accessToken: string;
+    expiresAtMs: number;
+    expiresIn: number;
+    user: { id: string; email?: string; role: string; isOwner: boolean; emailConfirmed?: boolean };
+    setup: {
+      authConfigured: boolean;
+      hasOwnerConfigured: boolean;
+      ownerUserIdConfigured: boolean;
+      ownerEmailConfigured: boolean;
+      serviceRoleConfigured: boolean;
+      requireAuthForChat: boolean;
+    };
+  }> {
+    return fetchJson(`${API_BASE}/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }, false);
+  },
+
+  async refreshAuthSession(): Promise<{
+    authenticated: boolean;
+    accessToken: string;
+    expiresAtMs: number;
+    expiresIn: number;
+    user: { id: string; email?: string; role: string; isOwner: boolean; emailConfirmed?: boolean };
+    setup: {
+      authConfigured: boolean;
+      hasOwnerConfigured: boolean;
+      ownerUserIdConfigured: boolean;
+      ownerEmailConfigured: boolean;
+      serviceRoleConfigured: boolean;
+      requireAuthForChat: boolean;
+    };
+  }> {
+    return fetchJson(`${API_BASE}/auth/refresh`, {
+      method: 'POST',
+    }, false);
+  },
+
+  async logoutSession(): Promise<{ loggedOut: boolean }> {
+    return fetchJson(`${API_BASE}/auth/logout`, {
+      method: 'POST',
+    }, false);
+  },
+
+  async getAuthSession(): Promise<{
+    authenticated: boolean;
+    expiresAtMs?: number;
+    user: { id: string; email?: string; role: string; isOwner: boolean } | null;
+    setup: {
+      authConfigured: boolean;
+      hasOwnerConfigured: boolean;
+      ownerUserIdConfigured: boolean;
+      ownerEmailConfigured: boolean;
+      serviceRoleConfigured: boolean;
+      requireAuthForChat: boolean;
+    };
+  }> {
+    return fetchJson(`${API_BASE}/auth/session`, undefined, false);
+  },
+
+  async getSecurityAuditLogs(limit = 100, eventType?: string): Promise<{
+    totalRecorded: number;
+    countsLast24h: {
+      ownerLogins: number;
+      failedAuthAttempts: number;
+      unauthorizedAdminAttempts: number;
+      configChanges: number;
+    };
+    events: Array<{
+      id: string;
+      timestamp: string;
+      timestampMs: number;
+      eventType: string;
+      severity: 'info' | 'warning' | 'critical';
+      actorUserId?: string;
+      actorEmail?: string;
+      actorRole?: string;
+      ip?: string;
+      method?: string;
+      path?: string;
+      statusCode?: number;
+      summary: string;
+      details?: Record<string, any>;
+    }>;
+  }> {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (eventType) params.set('eventType', eventType);
+    return fetchJson(`${API_BASE}/security/audit-logs?${params.toString()}`, undefined, false);
+  },
+
+  async getSecurityStatus(): Promise<{
+    setup: {
+      authConfigured: boolean;
+      hasOwnerConfigured: boolean;
+      ownerUserIdConfigured: boolean;
+      ownerEmailConfigured: boolean;
+      serviceRoleConfigured: boolean;
+      requireAuthForChat: boolean;
+    };
+    gatewayActive: boolean;
+    rateLimiting: { mode: string };
+    countsLast24h: {
+      ownerLogins: number;
+      failedAuthAttempts: number;
+      unauthorizedAdminAttempts: number;
+      configChanges: number;
+    };
+  }> {
+    return fetchJson(`${API_BASE}/security/status`, undefined, false);
   },
 };

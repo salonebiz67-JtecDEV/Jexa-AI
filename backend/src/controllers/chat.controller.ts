@@ -3,10 +3,16 @@ import { ChatService } from '../services/chat.service';
 import { SendMessagePayload, StreamChatEvent } from '../../../shared/types/chat';
 import { formatCleanProviderError } from '../../../shared/types/provider';
 import { ErrorLogService } from '../services/error-log.service';
+import { SupabaseAuthService } from '../services/supabase-auth.service';
 
 export class ChatController {
   public static async sendMessage(req: Request, res: Response): Promise<void> {
     const payload: SendMessagePayload = req.body || {};
+    const authExecutionContext = {
+      userId: req.auth?.userId,
+      isOwner: Boolean(req.auth?.isOwner),
+      restrictSensitiveTools: SupabaseAuthService.isConfigured() && !req.auth?.isOwner,
+    };
 
     if (!payload.message || typeof payload.message !== 'string' || !payload.message.trim()) {
       res.status(400).json({ success: false, error: 'A non-empty message string is required.' });
@@ -66,7 +72,8 @@ export class ChatController {
               type: 'chunk',
               chunk,
             });
-          }
+          },
+          authExecutionContext
         );
 
         sendEvent({
@@ -99,7 +106,7 @@ export class ChatController {
 
     // 2. Standard REST JSON flow (backward-compatible)
     try {
-      const result = await ChatService.processMessage(payload);
+      const result = await ChatService.processMessage(payload, undefined, undefined, authExecutionContext);
       res.status(200).json({
         success: true,
         data: result,

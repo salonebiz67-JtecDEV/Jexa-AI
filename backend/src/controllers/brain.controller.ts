@@ -3,6 +3,7 @@ import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { JEXA_IDENTITY } from '../../../ai/brain/identity';
 import { BrainProfile } from '../../../shared/types/brain';
 import { isTtsModel, scrubSecretsAndUrls } from '../../../shared/types/provider';
+import { SecurityAuditService } from '../services/security-audit.service';
 
 let inMemoryBrainProfile: BrainProfile | null = null;
 
@@ -63,12 +64,13 @@ export function updateInMemoryBrainProfile(updates: Partial<BrainProfile>): Brai
 }
 
 export class BrainController {
-  public static async getProfile(_req: Request, res: Response): Promise<void> {
+  public static async getProfile(req: Request, res: Response): Promise<void> {
     try {
       const profile = getInMemoryBrainProfile();
       const registry = AIProviderRegistry.getInstance();
       const activeTextType = registry.getDefaultTextType();
-      const providerStatus = registry.getStatus(
+      const isOwner = Boolean(req.auth?.isOwner);
+      const rawStatus = registry.getStatus(
         false,
         activeTextType,
         'gemini',
@@ -76,6 +78,27 @@ export class BrainController {
         profile.selectedBackupModel,
         profile.selectedVoiceModel
       );
+
+      const providerStatus = isOwner
+        ? rawStatus
+        : {
+            ...rawStatus,
+            textProvider: { ...rawStatus.textProvider, lastError: undefined },
+            voiceProvider: {
+              ...rawStatus.voiceProvider,
+              lastError: undefined,
+              lastSuccessfulTest: undefined,
+            },
+            availableTextProviders: rawStatus.availableTextProviders?.map((p) => ({
+              ...p,
+              error: undefined,
+            })),
+            availableVoiceProviders: rawStatus.availableVoiceProviders?.map((p) => ({
+              ...p,
+              error: undefined,
+              lastSuccessfulTest: undefined,
+            })),
+          };
 
       res.status(200).json({
         success: true,
@@ -135,6 +158,19 @@ export class BrainController {
         textModel: updated.selectedTextModel,
         backupModel: updated.selectedBackupModel,
         voiceModel: updated.selectedVoiceModel,
+      });
+
+      SecurityAuditService.record({
+        eventType: 'brain_profile_changed',
+        severity: 'info',
+        actorUserId: req.auth?.userId,
+        actorEmail: req.auth?.email,
+        actorRole: req.auth?.role,
+        ip: req.ip || req.socket?.remoteAddress || 'unknown',
+        method: req.method,
+        path: req.originalUrl || req.path,
+        statusCode: 200,
+        summary: `Owner updated brain profile (${Object.keys(req.body || {}).join(', ') || 'settings'}).`,
       });
 
       res.status(200).json({

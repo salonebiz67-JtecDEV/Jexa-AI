@@ -18,9 +18,11 @@ import {
   Share2,
   AlertTriangle,
   Wrench,
+  ShieldCheck,
 } from 'lucide-react';
 import { Conversation } from '../../../shared/types';
 import { showToast as emitToast } from '../../services/toast';
+import { useAuth } from '../../context/AuthContext';
 
 export type ActiveNavTab = 'chat' | 'projects' | 'images' | 'remote' | 'schedule' | 'plugins' | 'tools';
 
@@ -59,6 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSearch,
   onOpenSettings,
 }) => {
+  const { isOwner } = useAuth();
   // Context Menu State (Long-press on mobile or 3-dots on desktop)
   const [menuConversation, setMenuConversation] = useState<Conversation | null>(null);
 
@@ -227,7 +230,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'remote', label: 'Remote', icon: Radio },
     { id: 'schedule', label: 'Schedule', icon: CalendarClock },
     { id: 'plugins', label: 'Plugins', icon: Puzzle },
-    { id: 'tools', label: 'Tools', icon: Wrench },
+    ...(isOwner ? [{ id: 'tools', label: 'Tools', icon: Wrench }] : []),
   ];
 
   return (
@@ -433,10 +436,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Bottom JEXA & Settings Area */}
         <div className="p-3 border-t border-white/[0.06] bg-[#07090e] flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 px-2">
+          <div className="flex items-center gap-2 px-2 min-w-0">
             <span className="font-display font-bold text-xs tracking-wider text-slate-300 select-none">
               JEXA
             </span>
+            {isOwner && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-[9px] font-semibold text-emerald-300 shrink-0">
+                <ShieldCheck className="w-2.5 h-2.5" />
+                Owner
+              </span>
+            )}
           </div>
 
           <button

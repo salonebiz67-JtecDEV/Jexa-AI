@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { UsageTracker } from '../services/usage-tracker.service';
 import { ToolRegistry } from '../tools/tool-registry';
 import { ToolExecutor } from '../tools/tool-executor';
+import { SecurityAuditService } from '../services/security-audit.service';
 
 const SAFE_TOOL_EXAMPLES: Record<string, Record<string, any>> = {
   web_search: {
@@ -117,6 +118,21 @@ export class UsageController {
     }
 
     const newEnabledState = ToolRegistry.getInstance().toggleTool(toolName, enabled);
+
+    SecurityAuditService.record({
+      eventType: 'tool_toggled',
+      severity: 'info',
+      actorUserId: req.auth?.userId,
+      actorEmail: req.auth?.email,
+      actorRole: req.auth?.role,
+      ip: req.ip || req.socket?.remoteAddress || 'unknown',
+      method: req.method,
+      path: req.originalUrl || req.path,
+      statusCode: 200,
+      summary: `Owner ${newEnabledState ? 'enabled' : 'disabled'} tool "${toolName}".`,
+      details: { toolName, enabled: newEnabledState },
+    });
+
     res.json({ success: true, toolName, enabled: newEnabledState });
   }
 
@@ -138,6 +154,22 @@ export class UsageController {
       const result = await ToolExecutor.executeTool(tool, safeArgs, {
         conversationId: 'tool-test',
         messageId: `tool-test-${Date.now()}`,
+        isOwner: Boolean(req.auth?.isOwner),
+        userId: req.auth?.userId,
+      });
+
+      SecurityAuditService.record({
+        eventType: 'tool_tested',
+        severity: 'info',
+        actorUserId: req.auth?.userId,
+        actorEmail: req.auth?.email,
+        actorRole: req.auth?.role,
+        ip: req.ip || req.socket?.remoteAddress || 'unknown',
+        method: req.method,
+        path: req.originalUrl || req.path,
+        statusCode: 200,
+        summary: `Owner tested tool "${toolName}": ${result.success ? 'passed' : 'failed'}.`,
+        details: { toolName, success: result.success, durationMs: result.executionTimeMs },
       });
 
       if (result.success) {

@@ -18,9 +18,14 @@ import {
   ChevronUp,
   ShieldAlert,
   User,
+  Lock,
+  LogOut,
+  ShieldCheck,
+  KeyRound,
 } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { useBrainSettings } from '../../hooks/useBrainSettings';
+import { useAuth } from '../../context/AuthContext';
 import {
   FREE_GEMINI_CHAT_MODELS,
   FREE_GEMINI_VOICE_MODELS,
@@ -68,6 +73,22 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   liveDebugStats,
 }) => {
   const { profile, providerStatus, updateSettings, refresh } = useBrainSettings();
+  const {
+    authenticated,
+    isOwner,
+    user: authUser,
+    expiresAtMs,
+    setup: authSetup,
+    isSubmitting: authSubmitting,
+    authError,
+    login,
+    logout,
+    clearAuthError,
+  } = useAuth();
+
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginFeedback, setLoginFeedback] = useState<string | null>(null);
 
   const [theme, setTheme] = useState<'dark' | 'midnight' | 'obsidian'>('dark');
   const [voiceName, setVoiceName] = useState('aura');
@@ -317,6 +338,17 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     setAboutMe(aboutMe);
     setBehaviorInstructions(behaviorInstructions);
 
+    if (!isOwner) {
+      setSavedSuccess(true);
+      setSaveNotice('Saved on this device.');
+      setTimeout(() => {
+        setSavedSuccess(false);
+        setSaveNotice(null);
+        onClose();
+      }, 700);
+      return;
+    }
+
     const activeServerProvider =
       providerStatus?.textProvider?.type === 'litellm' ? 'litellm' : 'gemini';
 
@@ -473,6 +505,148 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
           {/* Settings Body */}
           <div className="p-4 sm:p-5 overflow-y-auto space-y-6 flex-1">
+            {/* ============================================================== */}
+            {/* SECTION 0: OWNER & ACCOUNT ACCESS                              */}
+            {/* ============================================================== */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Owner &amp; Account Access</span>
+                </label>
+                {isOwner ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                    <ShieldCheck className="w-3 h-3" />
+                    OWNER VERIFIED
+                  </span>
+                ) : authenticated ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    USER SESSION
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-500/15 text-slate-400 border border-white/10">
+                    SIGNED OUT
+                  </span>
+                )}
+              </div>
+
+              <div className="p-3.5 rounded-xl border border-white/[0.08] bg-white/[0.02] space-y-3">
+                {authenticated && authUser ? (
+                  <div className="space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="text-xs font-medium text-white truncate">
+                          {authUser.email || 'Authenticated Account'}
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-400 truncate">
+                          Role: {isOwner ? 'OWNER (Admin)' : 'USER (Standard)'}
+                          {expiresAtMs
+                            ? ` · Expires ${new Date(expiresAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                            : ''}
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-500 truncate" title={authUser.id}>
+                          User ID: {authUser.id}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setLoginFeedback(null);
+                          await logout();
+                        }}
+                        disabled={authSubmitting}
+                        className="px-3 py-1.5 rounded-lg bg-white/[0.06] hover:bg-rose-500/15 border border-white/[0.1] hover:border-rose-500/30 text-xs font-medium text-slate-200 hover:text-rose-300 flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>Sign Out</span>
+                      </button>
+                    </div>
+
+                    {!isOwner && (
+                      <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-200/90 leading-snug">
+                        Signed in as a standard user. Administrative controls, gateway config, and usage telemetry are restricted to the verified owner account.
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      setLoginFeedback(null);
+                      clearAuthError();
+                      if (!loginEmail.trim() || !loginPassword) {
+                        setLoginFeedback('Enter both email and password.');
+                        return;
+                      }
+                      const res = await login(loginEmail.trim(), loginPassword);
+                      if (res.ok) {
+                        setLoginPassword('');
+                        setLoginFeedback(
+                          res.isOwner
+                            ? 'Signed in with verified owner privileges.'
+                            : 'Signed in as standard user.'
+                        );
+                        await refresh();
+                      }
+                    }}
+                    className="space-y-2.5"
+                  >
+                    {!authSetup.authConfigured && (
+                      <div className="p-2 rounded-lg bg-slate-800/60 border border-white/[0.07] text-[11px] text-slate-300 leading-snug">
+                        Server authentication is not configured yet. Configure <span className="font-mono text-emerald-300">SUPABASE_URL</span>, <span className="font-mono text-emerald-300">SUPABASE_ANON_KEY</span>, and <span className="font-mono text-emerald-300">OWNER_USER_ID</span> on the backend.
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <input
+                        type="email"
+                        autoComplete="username"
+                        value={loginEmail}
+                        onChange={(e) => setLoginEmail(e.target.value)}
+                        placeholder="Owner email"
+                        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/[0.1] text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500/60"
+                      />
+                      <input
+                        type="password"
+                        autoComplete="current-password"
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        placeholder="Password"
+                        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/[0.1] text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500/60"
+                      />
+                    </div>
+
+                    {(authError || loginFeedback) && (
+                      <div
+                        className={`p-2 rounded-lg text-[11px] flex items-center gap-1.5 ${
+                          authError
+                            ? 'bg-rose-500/15 border border-rose-500/30 text-rose-300'
+                            : 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-300'
+                        }`}
+                      >
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{authError || loginFeedback}</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-slate-500">
+                        Sessions stay in memory only (never stored in localStorage).
+                      </span>
+                      <button
+                        type="submit"
+                        disabled={authSubmitting || !authSetup.authConfigured}
+                        className="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+                      >
+                        <KeyRound className="w-3.5 h-3.5" />
+                        <span>{authSubmitting ? 'Signing In…' : 'Sign In'}</span>
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            </div>
+
             {/* ============================================================== */}
             {/* PERSONALIZATION: ABOUT ME & HOW JEXA SHOULD BEHAVE             */}
             {/* ============================================================== */}
@@ -660,7 +834,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   </p>
                 </div>
 
-                {/* Test Chat Model Action */}
+                {/* Test Chat Model Action (Owner Only) */}
+                {isOwner && (
                 <div className="pt-2 border-t border-white/[0.06] space-y-1.5">
                   <button
                     type="button"
@@ -696,6 +871,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                     </div>
                   )}
                 </div>
+                )}
               </div>
             </div>
 
@@ -761,6 +937,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   </div>
                 )}
 
+                {isOwner && (
                 <div className="pt-2 border-t border-white/[0.06] space-y-1.5">
                   <button
                     type="button"
@@ -796,6 +973,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                     </div>
                   )}
                 </div>
+                )}
               </div>
             </div>
 
@@ -833,8 +1011,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
             </div>
 
             {/* ============================================================== */}
-            {/* SECTION 4: DEVELOPER & DIAGNOSTICS (COLLAPSIBLE)               */}
+            {/* SECTION 4: DEVELOPER & DIAGNOSTICS (OWNER ONLY)                */}
             {/* ============================================================== */}
+            {isOwner && (
             <div className="pt-3 border-t border-white/[0.06]">
               <button
                 type="button"
@@ -948,6 +1127,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 </div>
               )}
             </div>
+            )}
 
 
             {/* ============================================================== */}

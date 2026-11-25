@@ -312,12 +312,15 @@ async function runPhase1Verification(): Promise<void> {
     console.log('✓ Test B: LiteLLM Gateway liveliness check passed.');
 
     // Test C: Authentication enforcement & user_metadata anti-escalation
+    // Verify normal chat stays accessible when REQUIRE_AUTH_FOR_CHAT is false, and enforces 401 when REQUIRE_AUTH_FOR_CHAT=true
+    process.env.REQUIRE_AUTH_FOR_CHAT = 'true';
     const unauthChat = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: 'Hello' }),
     });
     assert.equal(unauthChat.status, 401);
+    delete process.env.REQUIRE_AUTH_FOR_CHAT;
 
     const expiredChat = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',

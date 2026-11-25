@@ -244,6 +244,10 @@ export class ToolRegistry {
       if (this.disabledTools.has(tool.name)) {
         continue;
       }
+      // Sensitive diagnostic/code tools require owner privileges when auth enforcement is active
+      if (context?.restrictSensitiveTools && !context?.isOwner && tool.permissionLevel === 'sensitive') {
+        continue;
+      }
       try {
         const isAvail = await tool.isAvailable(context);
         if (isAvail) {

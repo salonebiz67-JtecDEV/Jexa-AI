@@ -2,13 +2,15 @@ import { Request, Response } from 'express';
 import { AIProviderRegistry } from '../../../ai/providers/registry';
 import { isTtsModel, scrubSecretsAndUrls } from '../../../shared/types/provider';
 import { getInMemoryBrainProfile, updateInMemoryBrainProfile } from './brain.controller';
+import { SecurityAuditService } from '../services/security-audit.service';
 
 export class ProviderController {
-  public static async getStatus(_req: Request, res: Response): Promise<void> {
+  public static async getStatus(req: Request, res: Response): Promise<void> {
     try {
       const profile = getInMemoryBrainProfile();
       const registry = AIProviderRegistry.getInstance();
       const defaultTextType = registry.getDefaultTextType();
+      const isOwner = Boolean(req.auth?.isOwner);
       const status = registry.getStatus(
         false,
         defaultTextType,
@@ -28,7 +30,7 @@ export class ProviderController {
             backupModel: status.textProvider.backupModel,
             configured: status.textProvider.isConfigured,
             status: status.textProvider.status,
-            error: status.textProvider.lastError,
+            error: isOwner ? status.textProvider.lastError : undefined,
           },
           voice: {
             provider: status.voiceProvider.type,
@@ -36,11 +38,18 @@ export class ProviderController {
             configured: status.voiceProvider.isConfigured,
             status: status.voiceProvider.status,
             voiceId: profile.voiceSettings?.voiceId || status.voiceProvider.voiceId,
-            error: status.voiceProvider.lastError,
-            lastSuccessfulTest: status.voiceProvider.lastSuccessfulTest,
+            error: isOwner ? status.voiceProvider.lastError : undefined,
+            lastSuccessfulTest: isOwner ? status.voiceProvider.lastSuccessfulTest : undefined,
           },
-          availableText: status.availableTextProviders,
-          availableVoice: status.availableVoiceProviders,
+          availableText: status.availableTextProviders?.map((p) => ({
+            ...p,
+            error: isOwner ? p.error : undefined,
+          })),
+          availableVoice: status.availableVoiceProviders?.map((p) => ({
+            ...p,
+            error: isOwner ? p.error : undefined,
+            lastSuccessfulTest: isOwner ? p.lastSuccessfulTest : undefined,
+          })),
         },
         timestamp: new Date().toISOString(),
       });
@@ -111,6 +120,25 @@ export class ProviderController {
         ...(theme ? { theme } : {}),
       });
 
+      SecurityAuditService.record({
+        eventType: registry.isGatewayActive() ? 'gateway_config_changed' : 'provider_config_changed',
+        severity: 'info',
+        actorUserId: req.auth?.userId,
+        actorEmail: req.auth?.email,
+        actorRole: req.auth?.role,
+        ip: req.ip || req.socket?.remoteAddress || 'unknown',
+        method: req.method,
+        path: req.originalUrl || req.path,
+        statusCode: 200,
+        summary: `Owner updated active provider models (${updated.selectedTextModel} / ${updated.selectedBackupModel} / ${updated.selectedVoiceModel}).`,
+        details: {
+          textProvider: activeTextType,
+          textModel: updated.selectedTextModel,
+          backupModel: updated.selectedBackupModel,
+          voiceModel: updated.selectedVoiceModel,
+        },
+      });
+
       res.status(200).json({
         success: true,
         message: 'Active AI models and preferences updated successfully.',
@@ -152,6 +180,19 @@ export class ProviderController {
       const activeTextType = registry.getDefaultTextType();
       const result = await registry.testTextProvider(activeTextType, requestedModel);
 
+      SecurityAuditService.record({
+        eventType: 'provider_tested',
+        severity: 'info',
+        actorUserId: req.auth?.userId,
+        actorEmail: req.auth?.email,
+        actorRole: req.auth?.role,
+        ip: req.ip || req.socket?.remoteAddress || 'unknown',
+        method: req.method,
+        path: req.originalUrl || req.path,
+        statusCode: 200,
+        summary: `Owner tested text provider (${activeTextType}:${result.model}): ${result.success ? 'connected' : 'failed'}.`,
+      });
+
       res.status(200).json({
         success: result.success,
         data: {
@@ -192,6 +233,19 @@ export class ProviderController {
 
       const registry = AIProviderRegistry.getInstance();
       const result = await registry.testVoiceProvider('gemini', requestedModel);
+
+      SecurityAuditService.record({
+        eventType: 'provider_tested',
+        severity: 'info',
+        actorUserId: req.auth?.userId,
+        actorEmail: req.auth?.email,
+        actorRole: req.auth?.role,
+        ip: req.ip || req.socket?.remoteAddress || 'unknown',
+        method: req.method,
+        path: req.originalUrl || req.path,
+        statusCode: 200,
+        summary: `Owner tested voice provider (gemini:${result.model}): ${result.success ? 'connected' : 'failed'}.`,
+      });
 
       res.status(200).json({
         success: result.success,

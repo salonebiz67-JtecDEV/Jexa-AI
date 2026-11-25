@@ -27,6 +27,7 @@ export interface InternalToolContext {
   conversationId?: string;
   messageId?: string;
   isOwner?: boolean;
+  restrictSensitiveTools?: boolean;
   onStatusUpdate?: (status: any, details?: any) => void;
   userContext?: {
     location?: string;

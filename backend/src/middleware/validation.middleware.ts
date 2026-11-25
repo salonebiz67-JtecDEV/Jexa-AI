@@ -396,3 +396,35 @@ export function validateBrainProfileUpdateRequest(req: Request, res: Response, n
   req.body = sanitized;
   next();
 }
+
+export function validateLoginRequest(req: Request, res: Response, next: NextFunction): void {
+  if (!isPlainObject(req.body) || hasUnsafeKeys(req.body)) {
+    sendValidationError(res, 'Request body must be a valid JSON object.');
+    return;
+  }
+
+  const allowedKeys = new Set(['email', 'password']);
+  for (const key of Object.keys(req.body)) {
+    if (!allowedKeys.has(key)) {
+      sendValidationError(res, `Unsupported login field: "${key}".`);
+      return;
+    }
+  }
+
+  const { email, password } = req.body;
+  if (typeof email !== 'string' || !email.trim() || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    sendValidationError(res, 'A valid email address is required.');
+    return;
+  }
+
+  if (typeof password !== 'string' || !password || password.length > 256) {
+    sendValidationError(res, 'A valid password is required.');
+    return;
+  }
+
+  req.body = {
+    email: email.trim(),
+    password,
+  };
+  next();
+}

@@ -228,3 +228,11 @@ export const generalApiRateLimiter = createRateLimiter({
   max: Number(process.env.RATE_LIMIT_GENERAL_MAX) || 60,
   message: 'Too many API requests. Please slow down.',
 });
+
+// Authentication login & refresh endpoints: 10 requests per 60s to resist brute-force attempts
+export const authRateLimiter = createRateLimiter({
+  prefix: 'auth',
+  windowMs: 60_000,
+  max: Number(process.env.RATE_LIMIT_AUTH_MAX) || 10,
+  message: 'Too many authentication attempts. Please wait a minute and try again.',
+});
